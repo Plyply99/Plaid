@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.tiling-wm"
+          path="/org/gnome/shell/extensions/tiling-wm/">
+
+    <key name="enabled" type="b">
+      <default>true</default>
+      <summary>Enable tiling</summary>
+      <description>Enable or disable the tiling window manager</description>
+    </key>
+
+    <key name="gap" type="i">
+      <default>4</default>
+      <summary>Gap between windows in pixels</summary>
+    </key>
+
+    <key name="single-gap" type="i">
+      <default>0</default>
+      <summary>Gap around a single window in pixels</summary>
+      <description>Gap between a single tiled window and the screen edge (0 = no gap)</description>
+    </key>
+
+    <key name="layout" type="s">
+      <default>'master-stack'</default>
+      <summary>Tiling layout</summary>
+      <description>Layout algorithm to use: 'master-stack' or 'dwindle'</description>
+    </key>
+
+    <key name="dwindle-ratio" type="d">
+      <default>0.618</default>
+      <summary>Dwindle split ratio</summary>
+      <description>Ratio for dwindle splits (0.3 to 0.7). Default 0.618 is the golden ratio (1/φ)</description>
+    </key>
+
+    <key name="active-border-width" type="i">
+      <default>2</default>
+      <summary>Active window border thickness</summary>
+      <description>Thickness of the active window border in pixels</description>
+    </key>
+
+    <key name="active-border-color" type="as">
+      <default>['#3584e4']</default>
+      <summary>Active window border color</summary>
+      <description>Color of the active window border as hex string</description>
+    </key>
+
+    <key name="inactive-border-width" type="i">
+      <default>1</default>
+      <summary>Inactive window border thickness</summary>
+      <description>Thickness of inactive window borders in pixels</description>
+    </key>
+
+    <key name="inactive-border-color" type="as">
+      <default>['#555555']</default>
+      <summary>Inactive window border color</summary>
+      <description>Color of inactive window borders as hex string</description>
+    </key>
+
+    <key name="border-radius" type="i">
+      <default>0</default>
+      <summary>Border corner radius</summary>
+      <description>Radius of border corners in pixels (0 for square corners)</description>
+    </key>
+
+    <!-- Float window patterns (WM_CLASS instance names) -->
+    <key name="float-windows" type="as">
+      <default><![CDATA[['gimp', 'steam', 'vlc']]]></default>
+      <summary>Window class instances that should float</summary>
+      <description>Lowercase WM_CLASS instance names that should not be tiled</description>
+    </key>
+
+    <!-- Float by window title (exact, case-sensitive match) -->
+    <key name="float-titles" type="as">
+      <default><![CDATA[['Picture-in-Picture']]]></default>
+      <summary>Window titles that should float</summary>
+      <description>Exact window titles that should not be tiled (case-sensitive)</description>
+    </key>
+
+    <!-- Keybindings: Window Movement -->
+    <key name="move-focus-left" type="as">
+      <default><![CDATA[['<Super>h']]]></default>
+      <summary>Move focus to left window</summary>
+    </key>
+
+    <key name="move-focus-right" type="as">
+      <default><![CDATA[['<Super>l']]]></default>
+      <summary>Move focus to right window</summary>
+    </key>
+
+    <key name="move-focus-up" type="as">
+      <default><![CDATA[['<Super>k']]]></default>
+      <summary>Move focus to upper window</summary>
+    </key>
+
+    <key name="move-focus-down" type="as">
+      <default><![CDATA[['<Super>j']]]></default>
+      <summary>Move focus to lower window</summary>
+    </key>
+
+    <!-- Keybindings: Window Swapping -->
+    <key name="swap-left" type="as">
+      <default><![CDATA[['<Super><Shift>h']]]></default>
+      <summary>Swap window with left</summary>
+    </key>
+
+    <key name="swap-right" type="as">
+      <default><![CDATA[['<Super><Shift>l']]]></default>
+      <summary>Swap window with right</summary>
+    </key>
+
+    <key name="swap-up" type="as">
+      <default><![CDATA[['<Super><Shift>k']]]></default>
+      <summary>Swap window with above</summary>
+    </key>
+
+    <key name="swap-down" type="as">
+      <default><![CDATA[['<Super><Shift>j']]]></default>
+      <summary>Swap window with below</summary>
+    </key>
+
+    <!-- Resize amount in pixels -->
+    <key name="resize-amount" type="i">
+      <default>40</default>
+      <summary>Resize step in pixels</summary>
+      <description>Number of pixels to resize per keypress</description>
+    </key>
+
+    <!-- Keybindings: Window Resizing -->
+    <key name="resize-shrink-width" type="as">
+      <default><![CDATA[['<Super><Control>h']]]></default>
+      <summary>Shrink window width</summary>
+    </key>
+
+    <key name="resize-grow-width" type="as">
+      <default><![CDATA[['<Super><Control>l']]]></default>
+      <summary>Grow window width</summary>
+    </key>
+
+    <key name="resize-shrink-height" type="as">
+      <default><![CDATA[['<Super><Control>j']]]></default>
+      <summary>Shrink window height</summary>
+    </key>
+
+    <key name="resize-grow-height" type="as">
+      <default><![CDATA[['<Super><Control>k']]]></default>
+      <summary>Grow window height</summary>
+    </key>
+
+    <!-- Keybinding: Toggle Float -->
+    <key name="toggle-float" type="as">
+      <default><![CDATA[['<Super><Shift>space']]]></default>
+      <summary>Toggle floating for focused window</summary>
+    </key>
+
+    <!-- Keybinding: Toggle Tiling -->
+    <key name="toggle-tiling" type="as">
+      <default><![CDATA[['<Super>t']]]></default>
+      <summary>Toggle tiling mode on/off</summary>
+    </key>
+
+  </schema>
+</schemalist>

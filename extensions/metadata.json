@@ -1,0 +1,8 @@
+{
+  "uuid": "tiling-wm@gnome",
+  "name": "Tiling Window Manager",
+  "description": "Turns GNOME into a tiling window manager with configurable borders, keybinds, and float windows",
+  "shell-version": ["50"],
+  "url": "",
+  "settings-schema": "org.gnome.shell.extensions.tiling-wm"
+}
