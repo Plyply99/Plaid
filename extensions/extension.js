@@ -15,7 +15,7 @@ export default class TilingWMExtension extends Extension {
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
         this._masterRatios = new Map();
-        this._dwindleSplits = new Map();
+        this._bspTrees = new Map();
         this._stackRatios = new Map();
         this._signals = [];
         this._disableMutterDefaults();
@@ -54,7 +54,7 @@ export default class TilingWMExtension extends Extension {
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
         this._masterRatios = null;
-        this._dwindleSplits = null;
+        this._bspTrees = null;
         this._stackRatios = null;
         this._signals = null;
     }
@@ -129,7 +129,7 @@ export default class TilingWMExtension extends Extension {
                 if (!valid) {
                     this._workspaceOrders.delete(workspace);
                     this._masterRatios.delete(workspace);
-                    this._dwindleSplits.delete(workspace);
+                    this._bspTrees.delete(workspace);
                     this._stackRatios.delete(workspace);
                 }
             }
@@ -208,6 +208,10 @@ export default class TilingWMExtension extends Extension {
             if (!order.includes(win)) {
                 order.push(win);
             }
+            const layout = this._settings.get_string('layout');
+            if (layout === 'dwindle' && !this._isFloating(win)) {
+                this._bspInsertForWorkspace(ws, win);
+            }
         }
     }
 
@@ -221,6 +225,11 @@ export default class TilingWMExtension extends Extension {
         this._windowWorkspaces.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
+        const layout = this._settings.get_string('layout');
+        if (layout === 'dwindle') {
+            const tree = this._bspGetTree(ws);
+            if (tree) this._bspTrees.set(ws, this._bspRemove(tree, win));
+        }
         this._retileWorkspace(ws);
     }
 
@@ -369,27 +378,200 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _getDwindleSplits(workspace) {
-        if (!this._dwindleSplits.has(workspace))
-            this._dwindleSplits.set(workspace, new Map());
-        return this._dwindleSplits.get(workspace);
+    // --- BSP Tree ---
+
+    _bspGetTree(workspace) {
+        if (!this._bspTrees.has(workspace))
+            this._bspTrees.set(workspace, null);
+        return this._bspTrees.get(workspace);
     }
 
-    _getDwindleRatio(workspace, depth) {
-        const splits = this._getDwindleSplits(workspace);
-        if (splits.has(depth)) return splits.get(depth);
-        return this._settings.get_double('dwindle-ratio');
+    _bspMakeLeaf(win) {
+        return { type: 'leaf', window: win };
+    }
+
+    _bspMakeSplit(dir, ratio, first, second) {
+        return { type: 'split', direction: dir, ratio, first, second };
+    }
+
+    _bspInsert(node, win, x, y, w, h, gap) {
+        if (!node) return this._bspMakeLeaf(win);
+        if (node.type === 'leaf') {
+            const dir = w >= h ? 'h' : 'v';
+            const ratio = this._settings.get_double('dwindle-ratio');
+            return this._bspMakeSplit(dir, ratio, node, this._bspMakeLeaf(win));
+        }
+        const isH = node.direction === 'h';
+        const axisSize = isH ? w : h;
+        const split = Math.floor((axisSize - gap) * node.ratio);
+        const secondSize = axisSize - split - gap;
+        if (isH)
+            node.second = this._bspInsert(node.second, win, x + split + gap, y, secondSize, h, gap);
+        else
+            node.second = this._bspInsert(node.second, win, x, y + split + gap, w, secondSize, gap);
+        return node;
+    }
+
+    _bspRemove(node, win) {
+        if (!node) return null;
+        if (node.type === 'leaf') {
+            return node.window === win ? null : node;
+        }
+        node.first = this._bspRemove(node.first, win);
+        node.second = this._bspRemove(node.second, win);
+        if (!node.first && !node.second) return null;
+        if (!node.first) return node.second;
+        if (!node.second) return node.first;
+        return node;
+    }
+
+    _bspCollectWindows(node) {
+        if (!node) return [];
+        if (node.type === 'leaf') return [node.window];
+        return [...this._bspCollectWindows(node.first), ...this._bspCollectWindows(node.second)];
+    }
+
+    _bspLayout(node, x, y, w, h, gap) {
+        if (!node) return;
+        if (node.type === 'leaf') {
+            this._moveWindow(node.window, x, y, w, h);
+            return;
+        }
+        const isH = node.direction === 'h';
+        const axisSize = isH ? w : h;
+        const split = Math.floor((axisSize - gap) * node.ratio);
+        const secondSize = axisSize - split - gap;
+        if (isH) {
+            this._bspLayout(node.first, x, y, split, h, gap);
+            this._bspLayout(node.second, x + split + gap, y, secondSize, h, gap);
+        } else {
+            this._bspLayout(node.first, x, y, w, split, gap);
+            this._bspLayout(node.second, x, y + split + gap, w, secondSize, gap);
+        }
+    }
+
+    _bspFindPath(node, win, path) {
+        if (!node) return false;
+        if (node.type === 'leaf') return node.window === win;
+        path.push(node);
+        if (this._bspFindPath(node.first, win, path)) return true;
+        if (this._bspFindPath(node.second, win, path)) return true;
+        path.pop();
+        return false;
+    }
+
+    _bspSwapWindows(node, winA, winB) {
+        if (!node) return;
+        if (node.type === 'leaf') {
+            if (node.window === winA) node.window = winB;
+            else if (node.window === winB) node.window = winA;
+            return;
+        }
+        this._bspSwapWindows(node.first, winA, winB);
+        this._bspSwapWindows(node.second, winA, winB);
+    }
+
+    _bspFindLeafAtPoint(node, x, y, w, h, px, py, gap) {
+        if (!node) return null;
+        if (node.type === 'leaf') return node;
+        const isH = node.direction === 'h';
+        const axisSize = isH ? w : h;
+        const split = Math.floor((axisSize - gap) * node.ratio);
+        const secondSize = axisSize - split - gap;
+        if (isH) {
+            if (px < x + split + gap)
+                return this._bspFindLeafAtPoint(node.first, x, y, split, h, px, py, gap);
+            else
+                return this._bspFindLeafAtPoint(node.second, x + split + gap, y, secondSize, h, px, py, gap);
+        } else {
+            if (py < y + split + gap)
+                return this._bspFindLeafAtPoint(node.first, x, y, w, split, px, py, gap);
+            else
+                return this._bspFindLeafAtPoint(node.second, x, y + split + gap, w, secondSize, px, py, gap);
+        }
+    }
+
+    _bspReplaceLeaf(node, targetLeaf, newWin, gap) {
+        if (!node) return null;
+        if (node.type === 'leaf') {
+            if (node === targetLeaf) {
+                const dir = (node._w >= node._h) ? 'h' : 'v';
+                const ratio = this._settings.get_double('dwindle-ratio');
+                return this._bspMakeSplit(dir, ratio, node, this._bspMakeLeaf(newWin));
+            }
+            return node;
+        }
+        node.first = this._bspReplaceLeaf(node.first, targetLeaf, newWin, gap);
+        node.second = this._bspReplaceLeaf(node.second, targetLeaf, newWin, gap);
+        return node;
+    }
+
+    _bspTagGeometry(node, x, y, w, h, gap) {
+        if (!node) return;
+        if (node.type === 'leaf') {
+            node._x = x;
+            node._y = y;
+            node._w = w;
+            node._h = h;
+            return;
+        }
+        const isH = node.direction === 'h';
+        const axisSize = isH ? w : h;
+        const split = Math.floor((axisSize - gap) * node.ratio);
+        const secondSize = axisSize - split - gap;
+        if (isH) {
+            this._bspTagGeometry(node.first, x, y, split, h, gap);
+            this._bspTagGeometry(node.second, x + split + gap, y, secondSize, h, gap);
+        } else {
+            this._bspTagGeometry(node.first, x, y, w, split, gap);
+            this._bspTagGeometry(node.second, x, y + split + gap, w, secondSize, gap);
+        }
+    }
+
+    _bspInsertForWorkspace(ws, win) {
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+        let tree = this._bspGetTree(ws);
+        const areaX = workArea.x + gap;
+        const areaY = workArea.y + gap;
+        const areaW = workArea.width - gap * 2;
+        const areaH = workArea.height - gap * 2;
+
+        if (tree) {
+            const [px, py] = global.get_pointer();
+            this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
+            const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
+            if (target) {
+                tree = this._bspReplaceLeaf(tree, target, win, gap);
+            } else {
+                tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
+            }
+        } else {
+            tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
+        }
+        this._bspTrees.set(ws, tree);
+    }
+
+    _bspBuildTree(windows, workArea, gap) {
+        let tree = null;
+        const x = workArea.x + gap;
+        const y = workArea.y + gap;
+        const w = workArea.width - gap * 2;
+        const h = workArea.height - gap * 2;
+        for (const win of windows)
+            tree = this._bspInsert(tree, win, x, y, w, h, gap);
+        return tree;
     }
 
     _retileDwindle(workspace, tiledWindows) {
         const gap = this._settings.get_int('gap');
-        const numWindows = tiledWindows.length;
-
         const monitor = global.display.get_primary_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
         if (!workArea) return;
 
-        if (numWindows === 1) {
+        if (tiledWindows.length === 1) {
             const singleGap = this._settings.get_int('single-gap');
             this._moveWindow(
                 tiledWindows[0],
@@ -401,36 +583,16 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
-
-        this._applyDwindle(tiledWindows, 0, areaX, areaY, areaW, areaH, gap, workspace, 0);
-    }
-
-    _applyDwindle(windows, winIdx, x, y, w, h, gap, workspace, depth) {
-        if (winIdx >= windows.length) return;
-
-        const remaining = windows.length - winIdx;
-        if (remaining === 1) {
-            this._moveWindow(windows[winIdx], x, y, w, h);
-            return;
+        let tree = this._bspGetTree(workspace);
+        const treeWins = this._bspCollectWindows(tree);
+        const needsRebuild = !tree || treeWins.length !== tiledWindows.length ||
+            !tiledWindows.every(w => treeWins.includes(w));
+        if (needsRebuild) {
+            tree = this._bspBuildTree(tiledWindows, workArea, gap);
+            this._bspTrees.set(workspace, tree);
         }
 
-        const ratio = this._getDwindleRatio(workspace, depth);
-        const isHorizontal = depth % 2 === 0;
-        const axisSize = isHorizontal ? w : h;
-        const split = Math.floor((axisSize - gap) * ratio);
-        const secondSize = axisSize - split - gap;
-
-        if (isHorizontal) {
-            this._moveWindow(windows[winIdx], x, y, split, h);
-            this._applyDwindle(windows, winIdx + 1, x + split + gap, y, secondSize, h, gap, workspace, depth + 1);
-        } else {
-            this._moveWindow(windows[winIdx], x, y, w, split);
-            this._applyDwindle(windows, winIdx + 1, x, y + split + gap, w, secondSize, gap, workspace, depth + 1);
-        }
+        this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap);
     }
 
     _moveWindow(win, x, y, w, h) {
@@ -647,24 +809,32 @@ export default class TilingWMExtension extends Extension {
 
         if (!bestWindow) return;
 
-        const frameA = focused.get_frame_rect();
-        const frameB = bestWindow.get_frame_rect();
-        focused.move_resize_frame(
-            false, frameB.x, frameB.y, frameB.width, frameB.height
-        );
-        bestWindow.move_resize_frame(
-            false, frameA.x, frameA.y, frameA.width, frameA.height
-        );
+        const layout = this._settings.get_string('layout');
+        if (layout === 'dwindle') {
+            const tree = this._bspGetTree(ws);
+            if (tree) {
+                this._bspSwapWindows(tree, focused, bestWindow);
+            }
+            this._retileWorkspace(ws);
+        } else {
+            const frameA = focused.get_frame_rect();
+            const frameB = bestWindow.get_frame_rect();
+            focused.move_resize_frame(
+                false, frameB.x, frameB.y, frameB.width, frameB.height
+            );
+            bestWindow.move_resize_frame(
+                false, frameA.x, frameA.y, frameA.width, frameA.height
+            );
 
-        const order = this._getWorkspaceOrder(ws);
-        const idxA = order.indexOf(focused);
-        const idxB = order.indexOf(bestWindow);
-        if (idxA !== -1 && idxB !== -1) {
-            order[idxA] = bestWindow;
-            order[idxB] = focused;
+            const order = this._getWorkspaceOrder(ws);
+            const idxA = order.indexOf(focused);
+            const idxB = order.indexOf(bestWindow);
+            if (idxA !== -1 && idxB !== -1) {
+                order[idxA] = bestWindow;
+                order[idxB] = focused;
+            }
+            this._updateBorders();
         }
-
-        this._updateBorders();
     }
 
     _resizeWindow(action, axis) {
@@ -730,30 +900,26 @@ export default class TilingWMExtension extends Extension {
     }
 
     _resizeDwindle(focused, workspace, tiledWindows, idx, axis, delta) {
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
-        if (!workArea) return;
+        const tree = this._bspGetTree(workspace);
+        if (!tree) return;
 
-        const numWindows = tiledWindows.length;
         const targetIsHorizontal = axis === 'width';
-        const depth = Math.min(idx, numWindows - 2);
+        const path = [];
+        this._bspFindPath(tree, focused, path);
 
-        let splitDepth = depth;
-        while (splitDepth >= 0) {
-            if ((splitDepth % 2 === 0) === targetIsHorizontal) break;
-            splitDepth--;
+        for (let i = path.length - 1; i >= 0; i--) {
+            if ((path[i].direction === 'h') === targetIsHorizontal) {
+                const monitor = global.display.get_primary_monitor();
+                const workArea = workspace.get_work_area_for_monitor(monitor);
+                if (!workArea) return;
+                const minR = 0.15;
+                const maxR = 0.85;
+                const axisSize = targetIsHorizontal ? workArea.width : workArea.height;
+                const normalizedDelta = delta / axisSize;
+                path[i].ratio = Math.max(minR, Math.min(maxR, path[i].ratio + normalizedDelta));
+                return;
+            }
         }
-        if (splitDepth < 0) return;
-
-        const splits = this._getDwindleSplits(workspace);
-        const current = splits.has(splitDepth) ? splits.get(splitDepth) : this._settings.get_double('dwindle-ratio');
-        const minR = 0.15;
-        const maxR = 0.85;
-
-        const axisSize = targetIsHorizontal ? workArea.width : workArea.height;
-        const normalizedDelta = delta / axisSize;
-        const newRatio = Math.max(minR, Math.min(maxR, current + normalizedDelta));
-        splits.set(splitDepth, newRatio);
     }
 
     _toggleFloat() {
