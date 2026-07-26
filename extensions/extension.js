@@ -406,19 +406,26 @@ export default class TilingWMExtension extends Extension {
         const areaW = workArea.width - gap * 2;
         const areaH = workArea.height - gap * 2;
 
-        const tree = this._buildDwindleTree(numWindows);
+        const tree = this._buildDwindleTree(numWindows, areaW, areaH);
         let idx = 0;
         this._applyDwindleLayout(tree, tiledWindows, areaX, areaY, areaW, areaH, gap, workspace, 0, idx);
     }
 
-    _buildDwindleTree(count, depth = 0) {
+    _buildDwindleTree(count, areaW, areaH) {
         if (count === 1) return { split: null, children: [] };
-        const direction = depth % 2 === 0 ? 'horizontal' : 'vertical';
+        const direction = areaW >= areaH ? 'horizontal' : 'vertical';
+        const splitSize = direction === 'horizontal' ? areaW : areaH;
+        const ratio = this._settings.get_double('dwindle-ratio');
+        const split = Math.floor(splitSize * ratio);
+        const childW = direction === 'horizontal' ? split : areaW;
+        const childH = direction === 'horizontal' ? areaH : split;
+        const restW = direction === 'horizontal' ? areaW - split : areaW;
+        const restH = direction === 'horizontal' ? areaH : areaH - split;
         return {
             split: direction,
             children: [
-                this._buildDwindleTree(1, depth + 1),
-                this._buildDwindleTree(count - 1, depth + 1),
+                this._buildDwindleTree(1, childW, childH),
+                this._buildDwindleTree(count - 1, restW, restH),
             ],
         };
     }
@@ -757,7 +764,14 @@ export default class TilingWMExtension extends Extension {
     }
 
     _resizeDwindle(focused, workspace, tiledWindows, idx, axis, delta) {
-        const tree = this._buildDwindleTree(tiledWindows.length);
+        const monitor = global.display.get_primary_monitor();
+        const workArea = workspace.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+        const gap = this._settings.get_int('gap');
+        const areaW = workArea.width - gap * 2;
+        const areaH = workArea.height - gap * 2;
+
+        const tree = this._buildDwindleTree(tiledWindows.length, areaW, areaH);
         const targetAxis = axis === 'width' ? 'horizontal' : 'vertical';
         const infos = this._findAllDwindleSplitInfos(tree, idx, 0);
 
@@ -769,10 +783,6 @@ export default class TilingWMExtension extends Extension {
             }
         }
         if (!info) return;
-
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
-        if (!workArea) return;
 
         const splits = this._getDwindleSplits(workspace);
         const current = splits.has(info.depth) ? splits.get(info.depth) : this._settings.get_double('dwindle-ratio');
