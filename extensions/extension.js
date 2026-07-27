@@ -116,20 +116,21 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
             if (this._shouldManage(win)) {
                 this._addWindow(win);
+                const doRetile = () => {
+                    if (this._destroyed) return;
+                    const ws = win.get_workspace();
+                    if (ws) this._retileWorkspace(ws);
+                    this._moveCursorToWindow(win);
+                };
                 const actor = win.get_compositor_private();
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
-                        if (this._destroyed) return;
-                        const ws = win.get_workspace();
-                        if (ws) this._retileWorkspace(ws);
-                        this._moveCursorToWindow(win);
+                        doRetile();
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                        const ws = win.get_workspace();
-                        if (ws) this._retileWorkspace(ws);
-                        this._moveCursorToWindow(win);
+                        doRetile();
                         return false;
                     });
                 }
@@ -306,19 +307,20 @@ export default class TilingWMExtension extends Extension {
     _removeWindow(win) {
         if (!this._settings) return;
         const ws = this._windowWorkspaces.get(win) || win.get_workspace();
-        if (!ws) return;
-        const order = this._getWorkspaceOrder(ws);
-        const idx = order.indexOf(win);
-        if (idx !== -1) order.splice(idx, 1);
         this._windowWorkspaces.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
-        const layout = this._settings.get_string('layout');
-        if (layout === 'dwindle') {
-            const tree = this._bspGetTree(ws);
-            if (tree) this._bspTrees.set(ws, this._bspRemove(tree, win));
+        if (ws) {
+            const order = this._getWorkspaceOrder(ws);
+            const idx = order.indexOf(win);
+            if (idx !== -1) order.splice(idx, 1);
+            const layout = this._settings.get_string('layout');
+            if (layout === 'dwindle') {
+                const tree = this._bspGetTree(ws);
+                if (tree) this._bspTrees.set(ws, this._bspRemove(tree, win));
+            }
+            this._retileWorkspace(ws);
         }
-        this._retileWorkspace(ws);
     }
 
     _connectWindowSignals(win) {
@@ -754,10 +756,6 @@ export default class TilingWMExtension extends Extension {
 
         const focusWindow = global.display.focus_window;
 
-        if (this._settings.get_boolean('follow-focus') && focusWindow) {
-            this._moveCursorToWindow(focusWindow);
-        }
-
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
         const inactiveWidth = this._settings.get_int('inactive-border-width');
@@ -1101,6 +1099,9 @@ export default class TilingWMExtension extends Extension {
 
         if (enabled) {
             this._removeAllBorders();
+            this._bspTrees.clear();
+            this._masterRatios.clear();
+            this._stackRatios.clear();
         } else {
             this._retileAll();
         }
@@ -1224,18 +1225,22 @@ export default class TilingWMExtension extends Extension {
             const dy = py - op.startPy;
             const distance = Math.sqrt(dx * dx + dy * dy);
 
+            let swapped = false;
             if (distance > 30) {
                 const target = global.display.get_window_at_position(px, py);
                 if (target && target !== op.window && this._shouldManage(target) && !this._isFloating(target)) {
                     this._performSwap(op.window, target);
+                    swapped = true;
                 }
             }
 
-            this._moveWindow(
-                op.window,
-                op.origFrame.x, op.origFrame.y,
-                op.origFrame.w, op.origFrame.h
-            );
+            if (!swapped) {
+                this._moveWindow(
+                    op.window,
+                    op.origFrame.x, op.origFrame.y,
+                    op.origFrame.w, op.origFrame.h
+                );
+            }
         }
 
         this._resetCursor();
@@ -1399,7 +1404,6 @@ export default class TilingWMExtension extends Extension {
     }
 
     _setCursorForEdge(edge) {
-        const stage = global.stage;
         const cursorMap = {
             left: 'col-resize',
             right: 'col-resize',
@@ -1407,17 +1411,14 @@ export default class TilingWMExtension extends Extension {
             bottom: 'row-resize',
         };
         try {
-            const cursor = new Shell.Cursor({ type: cursorMap[edge] || 'default' });
-            stage.set_cursor(cursor);
-        } catch (_e) {
-            try { stage.set_cursor_name(cursorMap[edge] || 'default'); } catch (_e2) {}
-        }
+            global.stage.set_cursor_name(cursorMap[edge] || 'default');
+        } catch (_e) {}
     }
 
     _resetCursor() {
-        try { global.stage.set_cursor(null); } catch (_e) {
-            try { global.stage.set_cursor_name('default'); } catch (_e2) {}
-        }
+        try {
+            global.stage.set_cursor_name('default');
+        } catch (_e) {}
     }
 
     // --- Pick Mode ---
