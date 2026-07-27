@@ -8,6 +8,7 @@ import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/
 
 export default class TilingWMExtension extends Extension {
     enable() {
+        this._destroyed = false;
         this._settings = this.getSettings();
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
@@ -33,12 +34,14 @@ export default class TilingWMExtension extends Extension {
         this._registerKeybindings();
         this._updateBorderContainer();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
             this._retileAll();
             return false;
         });
     }
 
     disable() {
+        this._destroyed = true;
         this._restoreMutterDefaults();
         this._removeAllBorders();
         if (this._borderContainer) {
@@ -94,6 +97,7 @@ export default class TilingWMExtension extends Extension {
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
+                        if (this._destroyed) return;
                         const ws = win.get_workspace();
                         if (ws) this._retileWorkspace(ws);
                     });
@@ -199,6 +203,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _addWindow(win) {
+        if (!this._settings) return;
         if (this._windowWorkspaces.has(win)) return;
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
@@ -216,6 +221,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _removeWindow(win) {
+        if (!this._settings) return;
         const ws = this._windowWorkspaces.get(win) || win.get_workspace();
         if (!ws) return;
         const order = this._getWorkspaceOrder(ws);
@@ -288,6 +294,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _retileAll() {
+        if (!this._settings) return;
         const ws = global.workspace_manager.get_active_workspace();
         if (ws) this._retileWorkspace(ws);
         for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
@@ -297,6 +304,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _retileWorkspace(workspace) {
+        if (!this._settings) return;
         if (!this._settings.get_boolean('enabled')) return;
         const tiledWindows = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
@@ -396,6 +404,7 @@ export default class TilingWMExtension extends Extension {
 
     _bspInsert(node, win, x, y, w, h, gap) {
         if (!node) return this._bspMakeLeaf(win);
+        if (node.type === 'empty') return this._bspMakeLeaf(win);
         if (node.type === 'leaf') {
             const dir = w >= h ? 'h' : 'v';
             const ratio = this._settings.get_double('dwindle-ratio');
@@ -413,31 +422,46 @@ export default class TilingWMExtension extends Extension {
     }
 
     _bspRemove(node, win) {
-        if (!node) return null;
+        if (!node) return { type: 'empty' };
+        if (node.type === 'empty') return node;
         if (node.type === 'leaf') {
-            return node.window === win ? null : node;
+            return node.window === win ? { type: 'empty' } : node;
         }
         node.first = this._bspRemove(node.first, win);
         node.second = this._bspRemove(node.second, win);
-        if (!node.first && !node.second) return null;
-        if (!node.first) return node.second;
-        if (!node.second) return node.first;
+        if (node.first.type === 'empty' && node.second.type === 'empty')
+            return { type: 'empty' };
+        if (node.first.type === 'empty') return node.second;
+        if (node.second.type === 'empty') return node.first;
         return node;
     }
 
     _bspCollectWindows(node) {
         if (!node) return [];
+        if (node.type === 'empty') return [];
         if (node.type === 'leaf') return [node.window];
         return [...this._bspCollectWindows(node.first), ...this._bspCollectWindows(node.second)];
     }
 
     _bspLayout(node, x, y, w, h, gap) {
         if (!node) return;
+        if (node.type === 'empty') return;
         if (node.type === 'leaf') {
             this._moveWindow(node.window, x, y, w, h);
             return;
         }
         const isH = node.direction === 'h';
+        const firstEmpty = !node.first || node.first.type === 'empty';
+        const secondEmpty = !node.second || node.second.type === 'empty';
+        if (firstEmpty && secondEmpty) return;
+        if (firstEmpty) {
+            this._bspLayout(node.second, x, y, w, h, gap);
+            return;
+        }
+        if (secondEmpty) {
+            this._bspLayout(node.first, x, y, w, h, gap);
+            return;
+        }
         const axisSize = isH ? w : h;
         const split = Math.floor((axisSize - gap) * node.ratio);
         const secondSize = axisSize - split - gap;
@@ -473,6 +497,7 @@ export default class TilingWMExtension extends Extension {
 
     _bspFindLeafAtPoint(node, x, y, w, h, px, py, gap) {
         if (!node) return null;
+        if (node.type === 'empty') return node;
         if (node.type === 'leaf') return node;
         const isH = node.direction === 'h';
         const axisSize = isH ? w : h;
@@ -493,9 +518,14 @@ export default class TilingWMExtension extends Extension {
 
     _bspReplaceLeaf(node, targetLeaf, newWin, gap) {
         if (!node) return null;
+        if (node.type === 'empty') {
+            if (node === targetLeaf)
+                return this._bspMakeLeaf(newWin);
+            return node;
+        }
         if (node.type === 'leaf') {
             if (node === targetLeaf) {
-                const dir = (node._w >= node._h) ? 'h' : 'v';
+                const dir = ((node._w || 0) >= (node._h || 0)) ? 'h' : 'v';
                 const ratio = this._settings.get_double('dwindle-ratio');
                 return this._bspMakeSplit(dir, ratio, node, this._bspMakeLeaf(newWin));
             }
@@ -508,7 +538,7 @@ export default class TilingWMExtension extends Extension {
 
     _bspTagGeometry(node, x, y, w, h, gap) {
         if (!node) return;
-        if (node.type === 'leaf') {
+        if (node.type === 'empty' || node.type === 'leaf') {
             node._x = x;
             node._y = y;
             node._w = w;
@@ -585,8 +615,7 @@ export default class TilingWMExtension extends Extension {
 
         let tree = this._bspGetTree(workspace);
         const treeWins = this._bspCollectWindows(tree);
-        const needsRebuild = !tree || treeWins.length !== tiledWindows.length ||
-            !tiledWindows.every(w => treeWins.includes(w));
+        const needsRebuild = !tree || tiledWindows.some(w => !treeWins.includes(w));
         if (needsRebuild) {
             tree = this._bspBuildTree(tiledWindows, workArea, gap);
             this._bspTrees.set(workspace, tree);
@@ -604,6 +633,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _updateBorders() {
+        if (!this._settings) return;
         this._removeAllBorders();
         if (!this._settings.get_boolean('enabled')) return;
 
