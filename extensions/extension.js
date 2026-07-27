@@ -41,7 +41,12 @@ export default class TilingWMExtension extends Extension {
             reactive: false,
             visible: true,
         });
-        Main.layoutManager.uiGroup.add_child(this._borderContainer);
+        global.window_group.add_child(this._borderContainer);
+        this._dropOverlay = new St.Widget({
+            reactive: false,
+            visible: true,
+        });
+        Main.layoutManager.uiGroup.add_child(this._dropOverlay);
         this._connectSignals();
         this._registerKeybindings();
         this._updateBorderContainer();
@@ -77,6 +82,10 @@ export default class TilingWMExtension extends Extension {
         if (this._borderContainer) {
             this._borderContainer.destroy();
             this._borderContainer = null;
+        }
+        if (this._dropOverlay) {
+            this._dropOverlay.destroy();
+            this._dropOverlay = null;
         }
         this._disconnectSignals();
         this._removeKeybindings();
@@ -150,6 +159,10 @@ export default class TilingWMExtension extends Extension {
                 const doRaise = () => {
                     if (this._destroyed) return;
                     try { win.make_above(); } catch (_e) {}
+                    const actor = win.get_compositor_private();
+                    if (actor && this._borderContainer) {
+                        try { this._borderContainer.lower(actor); } catch (_e) {}
+                    }
                 };
                 const actor = win.get_compositor_private();
                 if (actor) {
@@ -480,9 +493,17 @@ export default class TilingWMExtension extends Extension {
         const tiled = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
         const windows = workspace.list_windows();
+        const floatActors = [];
         for (const win of windows) {
             if (!tiled.includes(win)) {
                 try { win.make_above(); } catch (_e) {}
+                const actor = win.get_compositor_private();
+                if (actor) floatActors.push(actor);
+            }
+        }
+        if (this._borderContainer && floatActors.length > 0) {
+            for (const actor of floatActors) {
+                try { this._borderContainer.lower(actor); } catch (_e) {}
             }
         }
     }
@@ -962,6 +983,10 @@ export default class TilingWMExtension extends Extension {
         }
         this._borderContainer.set_position(0, 0);
         this._borderContainer.set_size(maxX, maxY);
+        if (this._dropOverlay) {
+            this._dropOverlay.set_position(0, 0);
+            this._dropOverlay.set_size(maxX, maxY);
+        }
     }
 
     // --- Keybindings ---
@@ -1768,7 +1793,7 @@ export default class TilingWMExtension extends Extension {
                 reactive: false,
                 visible: true,
             });
-            this._borderContainer.add_child(this._dropPreview);
+            this._dropOverlay.add_child(this._dropPreview);
         }
         this._dropPreview.set_position(x, y);
         this._dropPreview.set_size(w, h);
