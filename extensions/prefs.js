@@ -47,6 +47,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(mouseResizeRow);
         settings.bind('mouse-resize', mouseResizeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const hideTitleRow = new Adw.SwitchRow({
+            title: _('Hide Title Bars'),
+            subtitle: _('Remove title bars from server-side decorated (SSD) windows'),
+        });
+        group.add(hideTitleRow);
+        settings.bind('hide-title-bars', hideTitleRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const gapRow = new Adw.SpinRow({
             title: _('Window Gap'),
             subtitle: _('Gap between windows in pixels'),

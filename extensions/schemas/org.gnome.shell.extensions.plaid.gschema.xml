@@ -172,6 +172,13 @@
       <description>When enabled, dragging window edges resizes the split ratio and dragging the title bar swaps windows</description>
     </key>
 
+    <!-- Hide title bars on SSD windows -->
+    <key name="hide-title-bars" type="b">
+      <default>false</default>
+      <summary>Hide window title bars</summary>
+      <description>Remove title bars from server-side decorated (SSD) X11/XWayland windows</description>
+    </key>
+
     <!-- Pick mode: used to capture a window click for float rules -->
     <key name="pick-mode" type="b">
       <default>false</default>

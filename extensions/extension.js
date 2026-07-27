@@ -30,6 +30,7 @@ export default class TilingWMExtension extends Extension {
         this._swapTarget = null;
         this._lastSwapTarget = null;
         this._dropPreview = null;
+        this._decorationsHidden = new Set();
 
         this._disableMutterDefaults();
         this._dropOverlay = new St.Widget({
@@ -85,6 +86,8 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = null;
         this._stackRatios = null;
         this._lastFocusedPerWorkspace = null;
+        this._restoreAllDecorations();
+        this._decorationsHidden = null;
         this._signals = null;
         this._swapTarget = null;
         this._lastSwapTarget = null;
@@ -229,6 +232,13 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::single-gap', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::layout', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::dwindle-ratio', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::hide-title-bars', () => {
+            if (this._destroyed) return;
+            if (this._settings.get_boolean('hide-title-bars'))
+                this._applyHideDecorationsAll();
+            else
+                this._restoreAllDecorations();
+        }));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-width', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-width', () => this._updateBorders()));
@@ -378,6 +388,8 @@ export default class TilingWMExtension extends Extension {
             if (layout === 'dwindle' && !this._isFloating(win)) {
                 this._bspInsertForWorkspace(ws, win);
             }
+            if (this._settings.get_boolean('hide-title-bars'))
+                this._hideDecorations(win);
         }
     }
 
@@ -385,6 +397,7 @@ export default class TilingWMExtension extends Extension {
         if (!this._settings) return;
         const ws = this._windowWorkspaces.get(win) || win.get_workspace();
         this._windowWorkspaces.delete(win);
+        this._decorationsHidden.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
         for (const [workspace, lastWin] of this._lastFocusedPerWorkspace) {
@@ -1818,6 +1831,65 @@ export default class TilingWMExtension extends Extension {
             if (newTree && targetLeaf.window !== window) {
                 newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, gap);
                 this._bspTrees.set(ws, newTree);
+            }
+        }
+    }
+
+    // --- Title Bar Hiding ---
+
+    _hideDecorations(win) {
+        if (!win || !this._settings) return;
+        const xid = win.get_xwindow();
+        if (!xid) return;
+        if (this._decorationsHidden.has(win)) return;
+
+        try {
+            Gio.Subprocess.new(
+                ['xprop', '-id', String(xid), '-f', '_MOTIF_WM_HINTS', '32c',
+                 '-set', '_MOTIF_WM_HINTS', '0x2, 0x0, 0x0, 0x0, 0x0'],
+                Gio.SubprocessFlags.NONE
+            );
+            this._decorationsHidden.add(win);
+        } catch (e) {
+            log(`[plaid] _hideDecorations failed: ${e.message}`);
+        }
+    }
+
+    _restoreDecorations(win) {
+        if (!win) return;
+        if (!this._decorationsHidden.has(win)) return;
+        const xid = win.get_xwindow();
+        if (!xid) return;
+
+        try {
+            Gio.Subprocess.new(
+                ['xprop', '-id', String(xid), '-remove', '_MOTIF_WM_HINTS'],
+                Gio.SubprocessFlags.NONE
+            );
+        } catch (e) {}
+        this._decorationsHidden.delete(win);
+    }
+
+    _restoreAllDecorations() {
+        for (const win of this._decorationsHidden) {
+            const xid = win.get_xwindow();
+            if (!xid) continue;
+            try {
+                Gio.Subprocess.new(
+                    ['xprop', '-id', String(xid), '-remove', '_MOTIF_WM_HINTS'],
+                    Gio.SubprocessFlags.NONE
+                );
+            } catch (_e) {}
+        }
+        this._decorationsHidden.clear();
+    }
+
+    _applyHideDecorationsAll() {
+        for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+            const ws = global.workspace_manager.get_workspace_by_index(i);
+            for (const win of ws.list_windows()) {
+                if (this._shouldManage(win))
+                    this._hideDecorations(win);
             }
         }
     }
