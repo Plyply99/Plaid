@@ -158,11 +158,8 @@ export default class TilingWMExtension extends Extension {
             } else if (this._isFloating(win)) {
                 const doRaise = () => {
                     if (this._destroyed) return;
-                    try { win.make_above(); } catch (_e) {}
-                    const actor = win.get_compositor_private();
-                    if (actor && this._borderContainer) {
-                        try { this._borderContainer.lower(actor); } catch (_e) {}
-                    }
+                    const ws = win.get_workspace();
+                    if (ws) this._raiseFloatingWindows(ws);
                 };
                 const actor = win.get_compositor_private();
                 if (actor) {
@@ -502,8 +499,12 @@ export default class TilingWMExtension extends Extension {
             }
         }
         if (this._borderContainer && floatActors.length > 0) {
-            for (const actor of floatActors) {
-                try { this._borderContainer.lower(actor); } catch (_e) {}
+            const children = global.window_group.get_children();
+            for (const child of children) {
+                if (floatActors.includes(child)) {
+                    try { this._borderContainer.lower(child); } catch (_e) {}
+                    break;
+                }
             }
         }
     }
@@ -956,6 +957,8 @@ export default class TilingWMExtension extends Extension {
             this._borderContainer.add_child(border);
             this._windowBorders.set(win, border);
         }
+
+        this._raiseFloatingWindows(ws);
     }
 
     _removeAllBorders() {
