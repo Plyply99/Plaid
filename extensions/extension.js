@@ -19,6 +19,7 @@ export default class TilingWMExtension extends Extension {
         this._masterRatios = new Map();
         this._bspTrees = new Map();
         this._stackRatios = new Map();
+        this._lastFocusedPerWorkspace = new Map();
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
@@ -84,6 +85,7 @@ export default class TilingWMExtension extends Extension {
         this._masterRatios = null;
         this._bspTrees = null;
         this._stackRatios = null;
+        this._lastFocusedPerWorkspace = null;
         this._signals = null;
     }
 
@@ -158,9 +160,13 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.display, global.display.connect('notify::focus-window', () => {
             this._updateBorders();
+            const win = global.display.focus_window;
+            if (win) {
+                const ws = win.get_workspace();
+                if (ws) this._lastFocusedPerWorkspace.set(ws, win);
+            }
             if (this._settings.get_boolean('follow-focus') && this._keyboardFocusChange) {
                 this._keyboardFocusChange = false;
-                const win = global.display.focus_window;
                 if (win) this._moveCursorToWindow(win);
             }
         }));
@@ -186,6 +192,7 @@ export default class TilingWMExtension extends Extension {
                     this._masterRatios.delete(workspace);
                     this._bspTrees.delete(workspace);
                     this._stackRatios.delete(workspace);
+                    this._lastFocusedPerWorkspace.delete(workspace);
                 }
             }
         }));
@@ -195,10 +202,10 @@ export default class TilingWMExtension extends Extension {
             if (!ws) return;
             const windows = this._getWindowsForWorkspace(ws);
             if (windows.length === 0) return;
-            const focusWin = global.display.focus_window;
-            let target = windows[0];
-            if (focusWin && focusWin.get_workspace() === ws && windows.includes(focusWin))
-                target = focusWin;
+            let target = this._lastFocusedPerWorkspace.get(ws);
+            if (!target || !windows.includes(target)) {
+                target = windows[0];
+            }
             this._keyboardFocusChange = true;
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 if (this._destroyed) return false;
@@ -374,6 +381,9 @@ export default class TilingWMExtension extends Extension {
         this._windowWorkspaces.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
+        for (const [workspace, lastWin] of this._lastFocusedPerWorkspace) {
+            if (lastWin === win) this._lastFocusedPerWorkspace.delete(workspace);
+        }
         if (ws) {
             const order = this._getWorkspaceOrder(ws);
             const idx = order.indexOf(win);
