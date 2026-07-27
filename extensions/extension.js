@@ -194,14 +194,18 @@ export default class TilingWMExtension extends Extension {
             const ws = global.workspace_manager.get_active_workspace();
             if (!ws) return;
             const windows = this._getWindowsForWorkspace(ws);
-            if (windows.length > 0) {
-                this._keyboardFocusChange = true;
-                windows[0].activate(global.get_current_time());
-                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                    this._keyboardFocusChange = false;
-                    return false;
-                });
-            }
+            if (windows.length === 0) return;
+            const focusWin = global.display.focus_window;
+            let target = windows[0];
+            if (focusWin && focusWin.get_workspace() === ws && windows.includes(focusWin))
+                target = focusWin;
+            this._keyboardFocusChange = true;
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                if (this._destroyed) return false;
+                try { target.activate(global.get_current_time()); } catch (_e) {}
+                this._keyboardFocusChange = false;
+                return false;
+            });
         }));
         this._addSignal(this._settings, this._settings.connect('changed::float-windows', () => {
             this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
