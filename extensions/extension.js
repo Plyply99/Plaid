@@ -906,6 +906,7 @@ export default class TilingWMExtension extends Extension {
         const windows = this._getWindowsForWorkspace(ws);
         for (const win of windows) {
             if (this._isFloating(win)) continue;
+            if (this._grabOp && win === this._getActiveWindow()) continue;
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
 
@@ -935,6 +936,10 @@ export default class TilingWMExtension extends Extension {
         let child = this._borderContainer.get_first_child();
         while (child) {
             const next = child.get_next_sibling();
+            if (child === this._dropPreview) {
+                child = next;
+                continue;
+            }
             child.destroy();
             child = next;
         }
