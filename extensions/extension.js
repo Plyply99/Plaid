@@ -637,11 +637,12 @@ export default class TilingWMExtension extends Extension {
         return [...this._bspCollectWindows(node.first), ...this._bspCollectWindows(node.second)];
     }
 
-    _bspLayout(node, x, y, w, h, gap) {
+    _bspLayout(node, x, y, w, h, gap, skipWindow) {
         if (!node) return;
         if (node.type === 'empty') return;
         if (node.type === 'leaf') {
-            this._safeMove(node.window, x, y, w, h);
+            if (node.window !== skipWindow)
+                this._safeMove(node.window, x, y, w, h);
             return;
         }
         const isH = node.direction === 'h';
@@ -649,22 +650,22 @@ export default class TilingWMExtension extends Extension {
         const secondEmpty = !node.second || node.second.type === 'empty';
         if (firstEmpty && secondEmpty) return;
         if (firstEmpty) {
-            this._bspLayout(node.second, x, y, w, h, gap);
+            this._bspLayout(node.second, x, y, w, h, gap, skipWindow);
             return;
         }
         if (secondEmpty) {
-            this._bspLayout(node.first, x, y, w, h, gap);
+            this._bspLayout(node.first, x, y, w, h, gap, skipWindow);
             return;
         }
         const axisSize = isH ? w : h;
         const split = Math.floor((axisSize - gap) * node.ratio);
         const secondSize = axisSize - split - gap;
         if (isH) {
-            this._bspLayout(node.first, x, y, split, h, gap);
-            this._bspLayout(node.second, x + split + gap, y, secondSize, h, gap);
+            this._bspLayout(node.first, x, y, split, h, gap, skipWindow);
+            this._bspLayout(node.second, x + split + gap, y, secondSize, h, gap, skipWindow);
         } else {
-            this._bspLayout(node.first, x, y, w, split, gap);
-            this._bspLayout(node.second, x, y + split + gap, w, secondSize, gap);
+            this._bspLayout(node.first, x, y, w, split, gap, skipWindow);
+            this._bspLayout(node.second, x, y + split + gap, w, secondSize, gap, skipWindow);
         }
     }
 
@@ -1322,7 +1323,6 @@ export default class TilingWMExtension extends Extension {
 
     _startGrabLoop(metaWindow, mode) {
         this._stopLiveResizeLoop();
-        const isHorizontal = mode === 'resize' ? this._isHorizontalGrab(this._grabOp) : false;
         let lastWidth = this._grabInitRect?.width || 0;
         let lastHeight = this._grabInitRect?.height || 0;
 
@@ -1343,7 +1343,7 @@ export default class TilingWMExtension extends Extension {
                 lastWidth = frame.width;
                 lastHeight = frame.height;
 
-                this._updateGrabRatio(metaWindow, frame, isHorizontal);
+                this._updateGrabRatio(metaWindow, frame);
                 this._moveTiledExcept(metaWindow);
                 this._doUpdateBorders();
             }
@@ -1360,26 +1360,28 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _isHorizontalGrab(grabOp) {
-        const direction = (grabOp >> 12) & 0xF;
-        return direction !== 0 && (direction & 0xC) === 0;
-    }
-
-    _updateGrabRatio(metaWindow, currentFrame, isHorizontal) {
+    _updateGrabRatio(metaWindow, currentFrame) {
         const ws = metaWindow.get_workspace();
         if (!ws) return;
         const layout = this._settings.get_string('layout');
 
         if (layout === 'master-stack') {
-            this._updateMasterStackRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal);
+            this._updateMasterStackRatioFromGrab(metaWindow, ws, currentFrame);
         } else {
-            this._updateDwindleRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal);
+            this._updateDwindleRatioFromGrab(metaWindow, ws, currentFrame);
         }
     }
 
-    _updateMasterStackRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal) {
+    _updateMasterStackRatioFromGrab(metaWindow, ws, currentFrame) {
         const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiledWindows.length <= 1) return;
+
+        const initW = this._grabInitRect?.width || currentFrame.width;
+        const initH = this._grabInitRect?.height || currentFrame.height;
+        const deltaW = currentFrame.width - initW;
+        const deltaH = currentFrame.height - initH;
+
+        if (deltaW === 0 && deltaH === 0) return;
 
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
@@ -1390,19 +1392,21 @@ export default class TilingWMExtension extends Extension {
         const idx = tiledWindows.indexOf(metaWindow);
         if (idx === -1) return;
 
-        if (isHorizontal) {
+        if (deltaW !== 0) {
             const currentMasterW = (areaW - gap) * this._getMasterRatio(ws);
-            const newMasterW = currentMasterW + (currentFrame.width - (this._grabInitRect.width || currentFrame.width));
+            const newMasterW = currentMasterW + deltaW;
             const minMaster = 100;
             const maxMaster = areaW - gap - (tiledWindows.length - 1) * 100;
-            if (maxMaster < minMaster) return;
-            const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-            this._masterRatios.set(ws, clamped / (areaW - gap));
-        } else if (idx > 0) {
+            if (maxMaster >= minMaster) {
+                const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
+                this._masterRatios.set(ws, clamped / (areaW - gap));
+            }
+        }
+
+        if (deltaH !== 0 && idx > 0) {
             const stackIdx = idx - 1;
             const stackRatios = this._getStackRatios(ws);
             const currentWeight = stackRatios.has(stackIdx) ? stackRatios.get(stackIdx) : 1.0;
-            const deltaH = currentFrame.height - (this._grabInitRect.height || currentFrame.height);
             const deltaWeight = deltaH * 0.005;
             const newWeight = Math.max(0.1, currentWeight + deltaWeight);
             stackRatios.set(stackIdx, newWeight);
@@ -1414,26 +1418,41 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _updateDwindleRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal) {
+    _updateDwindleRatioFromGrab(metaWindow, ws, currentFrame) {
         const tree = this._bspGetTree(ws);
         if (!tree) return;
+
+        const initW = this._grabInitRect?.width || currentFrame.width;
+        const initH = this._grabInitRect?.height || currentFrame.height;
+        const deltaW = currentFrame.width - initW;
+        const deltaH = currentFrame.height - initH;
+
+        if (deltaW === 0 && deltaH === 0) return;
+
         const path = [];
         this._bspFindPath(tree, metaWindow, path);
 
-        for (let i = path.length - 1; i >= 0; i--) {
-            if ((path[i].direction === 'h') === isHorizontal) {
-                const monitor = global.display.get_primary_monitor();
-                const workArea = ws.get_work_area_for_monitor(monitor);
-                if (!workArea) return;
-                const minR = 0.15;
-                const maxR = 0.85;
-                const axisSize = isHorizontal ? workArea.width : workArea.height;
-                const delta = isHorizontal
-                    ? currentFrame.width - (this._grabInitRect.width || currentFrame.width)
-                    : currentFrame.height - (this._grabInitRect.height || currentFrame.height);
-                const normalizedDelta = delta / axisSize;
-                path[i].ratio = Math.max(minR, Math.min(maxR, path[i].ratio + normalizedDelta));
-                return;
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+        const minR = 0.15;
+        const maxR = 0.85;
+
+        if (deltaW !== 0) {
+            for (let i = path.length - 1; i >= 0; i--) {
+                if (path[i].direction === 'h') {
+                    path[i].ratio = Math.max(minR, Math.min(maxR, path[i].ratio + deltaW / workArea.width));
+                    break;
+                }
+            }
+        }
+
+        if (deltaH !== 0) {
+            for (let i = path.length - 1; i >= 0; i--) {
+                if (path[i].direction === 'v') {
+                    path[i].ratio = Math.max(minR, Math.min(maxR, path[i].ratio + deltaH / workArea.height));
+                    break;
+                }
             }
         }
     }
@@ -1486,13 +1505,7 @@ export default class TilingWMExtension extends Extension {
         } else if (layout === 'dwindle') {
             const tree = this._bspGetTree(ws);
             if (!tree) return;
-            this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap);
-            for (const w of tiledWindows) {
-                if (w !== skipWindow) {
-                    const frame = w.get_frame_rect();
-                    this._safeMove(w, frame.x, frame.y, frame.width, frame.height);
-                }
-            }
+            this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
         }
     }
 
