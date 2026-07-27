@@ -19,6 +19,8 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = new Map();
         this._stackRatios = new Map();
         this._signals = [];
+        this._pendingRetileIds = new Map();
+        this._pendingBorderId = 0;
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
             name: 'tiling-wm-borders',
@@ -42,6 +44,9 @@ export default class TilingWMExtension extends Extension {
 
     disable() {
         this._destroyed = true;
+        for (const id of (this._pendingRetileIds || new Map()).values())
+            GLib.source_remove(id);
+        if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
         this._restoreMutterDefaults();
         this._removeAllBorders();
         if (this._borderContainer) {
@@ -174,6 +179,38 @@ export default class TilingWMExtension extends Extension {
             }
         }
         this._actorSignals = null;
+        for (const id of this._pendingRetileIds.values())
+            GLib.source_remove(id);
+        this._pendingRetileIds.clear();
+        if (this._pendingBorderId) {
+            GLib.source_remove(this._pendingBorderId);
+            this._pendingBorderId = 0;
+        }
+    }
+
+    _scheduleRetile(workspace) {
+        if (this._destroyed || !workspace) return;
+        if (this._pendingRetileIds.has(workspace))
+            GLib.source_remove(this._pendingRetileIds.get(workspace));
+        const id = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._pendingRetileIds.delete(workspace);
+            if (this._destroyed) return false;
+            this._doRetileWorkspace(workspace);
+            return false;
+        });
+        this._pendingRetileIds.set(workspace, id);
+    }
+
+    _scheduleBorders() {
+        if (this._destroyed) return;
+        if (this._pendingBorderId)
+            GLib.source_remove(this._pendingBorderId);
+        this._pendingBorderId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._pendingBorderId = 0;
+            if (this._destroyed) return false;
+            this._doUpdateBorders();
+            return false;
+        });
     }
 
     _shouldManage(win) {
@@ -294,16 +331,20 @@ export default class TilingWMExtension extends Extension {
     }
 
     _retileAll() {
-        if (!this._settings) return;
-        const ws = global.workspace_manager.get_active_workspace();
-        if (ws) this._retileWorkspace(ws);
+        if (!this._settings || this._destroyed) return;
         for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
             const w = global.workspace_manager.get_workspace_by_index(i);
-            if (w !== ws) this._retileWorkspace(w);
+            this._scheduleRetile(w);
         }
+        this._scheduleBorders();
     }
 
     _retileWorkspace(workspace) {
+        if (!this._settings || this._destroyed) return;
+        this._scheduleRetile(workspace);
+    }
+
+    _doRetileWorkspace(workspace) {
         if (!this._settings) return;
         if (!this._settings.get_boolean('enabled')) return;
         const tiledWindows = this._getWindowsForWorkspace(workspace)
@@ -317,7 +358,7 @@ export default class TilingWMExtension extends Extension {
             this._retileMasterStack(workspace, tiledWindows);
         }
 
-        this._updateBorders();
+        this._doUpdateBorders();
     }
 
     _getMasterRatio(workspace) {
@@ -627,12 +668,22 @@ export default class TilingWMExtension extends Extension {
     _moveWindow(win, x, y, w, h) {
         if (!win || win.is_fullscreen()) return;
         if (win.is_maximized()) return;
+        if (!win.get_workspace()) return;
         const rect = win.get_frame_rect();
         if (rect.width === 0 || rect.height === 0) return;
-        win.move_resize_frame(false, x, y, w, h);
+        try {
+            win.move_resize_frame(false, x, y, w, h);
+        } catch (e) {
+            log(`[tiling-wm] _moveWindow failed: ${e.message}`);
+        }
     }
 
     _updateBorders() {
+        if (!this._settings || this._destroyed) return;
+        this._scheduleBorders();
+    }
+
+    _doUpdateBorders() {
         if (!this._settings) return;
         this._removeAllBorders();
         if (!this._settings.get_boolean('enabled')) return;
@@ -849,12 +900,16 @@ export default class TilingWMExtension extends Extension {
         } else {
             const frameA = focused.get_frame_rect();
             const frameB = bestWindow.get_frame_rect();
-            focused.move_resize_frame(
-                false, frameB.x, frameB.y, frameB.width, frameB.height
-            );
-            bestWindow.move_resize_frame(
-                false, frameA.x, frameA.y, frameA.width, frameA.height
-            );
+            try {
+                focused.move_resize_frame(
+                    false, frameB.x, frameB.y, frameB.width, frameB.height
+                );
+                bestWindow.move_resize_frame(
+                    false, frameA.x, frameA.y, frameA.width, frameA.height
+                );
+            } catch (e) {
+                log(`[tiling-wm] swap move_resize failed: ${e.message}`);
+            }
 
             const order = this._getWorkspaceOrder(ws);
             const idxA = order.indexOf(focused);
