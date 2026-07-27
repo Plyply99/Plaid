@@ -1317,12 +1317,13 @@ export default class TilingWMExtension extends Extension {
         const numStack = tiledWindows.length - 1;
         if (numStack === 0) return;
 
+        const monitor = global.display.get_primary_monitor();
+        const workArea = workspace.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+        const gap = this._settings.get_int('gap');
+        const areaW = workArea.width - gap * 2;
+
         if (axis === 'width') {
-            if (idx !== 0) return;
-            const monitor = global.display.get_primary_monitor();
-            const workArea = workspace.get_work_area_for_monitor(monitor);
-            if (!workArea) return;
-            const areaW = workArea.width - this._settings.get_int('gap') * 2;
             const currentRatio = this._getMasterRatio(workspace);
             const currentMasterW = areaW * currentRatio;
             const newMasterW = currentMasterW + delta;
@@ -1505,6 +1506,14 @@ export default class TilingWMExtension extends Extension {
             if (idx === 0) {
                 this._masterRatios.set(ws, frame.width / (areaW - gap));
             } else if (idx > 0) {
+                const stackW = frame.width;
+                const newMasterW = areaW - stackW - gap;
+                const minMaster = 100;
+                const maxMaster = areaW - gap - numStack * 100;
+                if (maxMaster >= minMaster) {
+                    const clampedMaster = Math.max(minMaster, Math.min(maxMaster, newMasterW));
+                    this._masterRatios.set(ws, clampedMaster / (areaW - gap));
+                }
                 const areaH = workArea.height - gap * 2;
                 const gapTotal = gap * (numStack - 1);
                 const totalStackH = areaH - gapTotal;
@@ -1632,6 +1641,9 @@ export default class TilingWMExtension extends Extension {
             let masterW;
             if (draggedIdx === 0) {
                 masterW = skipWindow.get_frame_rect().width;
+            } else if (draggedIdx > 0) {
+                const sf = skipWindow.get_frame_rect();
+                masterW = areaW - sf.width - gap;
             } else {
                 masterW = Math.floor((areaW - gap) * this._getMasterRatio(ws));
             }
