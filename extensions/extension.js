@@ -1667,6 +1667,9 @@ export default class TilingWMExtension extends Extension {
                 let h;
                 if (j === resizeStackIdx) {
                     h = resizeStackH;
+                } else if (j < resizeStackIdx) {
+                    const cur = tiledWindows[j + 1].get_frame_rect();
+                    h = cur.height;
                 } else if (resizeStackIdx >= 0) {
                     const otherWeights = [];
                     let otherTotal = 0;
@@ -1744,6 +1747,9 @@ export default class TilingWMExtension extends Extension {
                     let h;
                     if (isDragged) {
                         h = skipWindow.get_frame_rect().height;
+                    } else if (draggedIdx > 0 && (draggedIdx - 1) >= startIdx && (draggedIdx - 1) < startIdx + count && j < (draggedIdx - 1 - startIdx)) {
+                        const cur = win.get_frame_rect();
+                        h = cur.height;
                     } else if (draggedIdx > 0 && (draggedIdx - 1) >= startIdx && (draggedIdx - 1) < startIdx + count) {
                         const otherWeights = [];
                         let otherTotal = 0;
