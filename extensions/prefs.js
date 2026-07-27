@@ -35,7 +35,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const followRow = new Adw.SwitchRow({
             title: _('Cursor Follows Focus'),
-            subtitle: _('Move mouse cursor to the center of the focused window'),
+            subtitle: _('Warp cursor to focused window on keybind navigation and new windows'),
         });
         group.add(followRow);
         settings.bind('follow-focus', followRow, 'active', Gio.SettingsBindFlags.DEFAULT);

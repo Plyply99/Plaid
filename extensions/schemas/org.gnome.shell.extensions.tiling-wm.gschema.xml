@@ -162,7 +162,7 @@
     <key name="follow-focus" type="b">
       <default>true</default>
       <summary>Move cursor to focused window</summary>
-      <description>When true, the mouse cursor warps to the center of the focused window</description>
+      <description>When true, the mouse cursor warps to the center of the focused window on keybind navigation and new window creation, but not on mouse clicks</description>
     </key>
 
     <!-- Mouse interaction: edge-resize and title-bar swap -->

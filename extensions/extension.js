@@ -26,6 +26,7 @@ export default class TilingWMExtension extends Extension {
         this._stagePressId = 0;
         this._stageReleaseId = 0;
         this._stageMotionId = 0;
+        this._keyboardFocusChange = false;
 
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
@@ -140,7 +141,8 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.display, global.display.connect('notify::focus-window', () => {
             this._updateBorders();
-            if (this._settings.get_boolean('follow-focus')) {
+            if (this._settings.get_boolean('follow-focus') && this._keyboardFocusChange) {
+                this._keyboardFocusChange = false;
                 const win = global.display.focus_window;
                 if (win) this._moveCursorToWindow(win);
             }
@@ -957,7 +959,12 @@ export default class TilingWMExtension extends Extension {
         }
 
         if (bestWindow) {
+            this._keyboardFocusChange = true;
             bestWindow.activate(global.get_current_time());
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._keyboardFocusChange = false;
+                return false;
+            });
         }
     }
 
@@ -1130,6 +1137,15 @@ export default class TilingWMExtension extends Extension {
         }
 
         this._settings.set_strv('float-windows', [...current]);
+        const ws = focused.get_workspace();
+        if (ws) {
+            this._keyboardFocusChange = true;
+            this._retileWorkspace(ws);
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._keyboardFocusChange = false;
+                return false;
+            });
+        }
     }
 
     _toggleTiling() {
@@ -1142,7 +1158,12 @@ export default class TilingWMExtension extends Extension {
             this._masterRatios.clear();
             this._stackRatios.clear();
         } else {
+            this._keyboardFocusChange = true;
             this._retileAll();
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._keyboardFocusChange = false;
+                return false;
+            });
         }
     }
 
