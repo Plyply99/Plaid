@@ -317,6 +317,17 @@ export default class TilingWMExtension extends Extension {
             const ws = win.get_workspace();
             if (ws) this._retileWorkspace(ws);
         }) });
+        sigIds.push({ emitter: win, id: win.connect('notify::maximized-horizontally', () => {
+            if (win.maximized_horizontally) {
+                win.unmaximize(Meta.MaximizeFlags.BOTH);
+                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    if (this._destroyed) return false;
+                    const ws = win.get_workspace();
+                    if (ws) this._retileWorkspace(ws);
+                    return false;
+                });
+            }
+        }) });
         this._actorSignals.set(actor, sigIds);
     }
 
@@ -681,7 +692,6 @@ export default class TilingWMExtension extends Extension {
 
     _moveWindow(win, x, y, w, h) {
         if (!win || win.is_fullscreen()) return;
-        if (win.is_maximized()) return;
         if (!win.get_workspace()) return;
         const rect = win.get_frame_rect();
         if (rect.width === 0 || rect.height === 0) return;
