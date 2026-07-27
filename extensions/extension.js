@@ -26,6 +26,7 @@ export default class TilingWMExtension extends Extension {
         this._stagePressId = 0;
         this._stageReleaseId = 0;
         this._stageMotionId = 0;
+        this._pendingCursorWarp = new Set();
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
             name: 'tiling-wm-borders',
@@ -83,6 +84,7 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = null;
         this._stackRatios = null;
         this._signals = null;
+        this._pendingCursorWarp = null;
     }
 
     _disableMutterDefaults() {
@@ -116,11 +118,11 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
             if (this._shouldManage(win)) {
                 this._addWindow(win);
+                this._pendingCursorWarp.add(win);
                 const doRetile = () => {
                     if (this._destroyed) return;
                     const ws = win.get_workspace();
                     if (ws) this._retileWorkspace(ws);
-                    this._moveCursorToWindow(win);
                 };
                 const actor = win.get_compositor_private();
                 if (actor) {
@@ -140,9 +142,7 @@ export default class TilingWMExtension extends Extension {
             this._updateBorders();
             if (this._settings.get_boolean('follow-focus')) {
                 const win = global.display.focus_window;
-                if (win && !this._isPointerOverWindow(win)) {
-                    this._moveCursorToWindow(win);
-                }
+                if (win) this._moveCursorToWindow(win);
             }
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
@@ -269,17 +269,6 @@ export default class TilingWMExtension extends Extension {
             seat.warp_pointer(centerX, centerY);
         } catch (e) {
             log(`[tiling-wm] _moveCursorToWindow failed: ${e.message}`);
-        }
-    }
-
-    _isPointerOverWindow(win) {
-        try {
-            const [px, py] = global.get_pointer();
-            const frame = win.get_frame_rect();
-            return px >= frame.x && px <= frame.x + frame.width &&
-                   py >= frame.y && py <= frame.y + frame.height;
-        } catch (_e) {
-            return false;
         }
     }
 
@@ -439,6 +428,13 @@ export default class TilingWMExtension extends Extension {
         }
 
         this._doUpdateBorders();
+
+        for (const win of this._pendingCursorWarp) {
+            if (win.get_workspace() === workspace) {
+                this._moveCursorToWindow(win);
+                this._pendingCursorWarp.delete(win);
+            }
+        }
     }
 
     _getMasterRatio(workspace) {
