@@ -172,6 +172,20 @@ export default class TilingWMExtension extends Extension {
                 }
             }
         }));
+        this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
+            if (this._destroyed || !this._settings.get_boolean('enabled')) return;
+            const ws = global.workspace_manager.get_active_workspace();
+            if (!ws) return;
+            const windows = this._getWindowsForWorkspace(ws);
+            if (windows.length > 0) {
+                this._keyboardFocusChange = true;
+                windows[0].activate(global.get_current_time());
+                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._keyboardFocusChange = false;
+                    return false;
+                });
+            }
+        }));
         this._addSignal(this._settings, this._settings.connect('changed::float-windows', () => {
             this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
             this._retileAll();
