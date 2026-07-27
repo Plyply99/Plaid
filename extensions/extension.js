@@ -1658,8 +1658,7 @@ export default class TilingWMExtension extends Extension {
 
             const stackRatios = this._getStackRatios(ws);
             const resizeStackIdx = draggedIdx > 0 ? draggedIdx - 1 : -1;
-            const draggedFrame = resizeStackIdx >= 0 ? skipWindow.get_frame_rect() : null;
-            const resizeStackH = draggedFrame ? draggedFrame.height : 0;
+            const resizeStackH = resizeStackIdx >= 0 ? skipWindow.get_frame_rect().height : 0;
 
             let y = areaY;
             for (let j = 0; j < numStack; j++) {
@@ -1699,11 +1698,7 @@ export default class TilingWMExtension extends Extension {
                 }
                 if (tiledWindows[j + 1] !== skipWindow)
                     this._safeMove(tiledWindows[j + 1], areaX + masterW + gap, y, stackW, h);
-                if (j === resizeStackIdx && draggedFrame) {
-                    y = draggedFrame.y + draggedFrame.height + gap;
-                } else if (!isLast) {
-                    y += h + gap;
-                }
+                if (!isLast) y += h + gap;
             }
         } else if (layout === 'centered-master') {
             if (tiledWindows.length === 1) return;
@@ -1776,12 +1771,7 @@ export default class TilingWMExtension extends Extension {
                             : Math.floor((areaH - gap * (count - 1)) * weights[j] / totalWeight);
                     }
                     if (!isDragged) this._safeMove(win, colX, y, colW, h);
-                    if (isDragged) {
-                        const draggedFrame = skipWindow.get_frame_rect();
-                        y = draggedFrame.y + draggedFrame.height + gap;
-                    } else if (!isLast) {
-                        y += h + gap;
-                    }
+                    if (!isLast) y += h + gap;
                 }
             };
 
