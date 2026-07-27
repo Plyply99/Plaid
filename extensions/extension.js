@@ -23,14 +23,11 @@ export default class TilingWMExtension extends Extension {
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
-        this._mouseOp = null;
-        this._stagePressId = 0;
-        this._stageReleaseId = 0;
-        this._stageMotionId = 0;
         this._keyboardFocusChange = false;
-        this._previewLine = null;
-        this._dropHighlight = null;
-        this._currentDropTarget = null;
+        this._grabOp = null;
+        this._grabInitRect = null;
+        this._liveResizeId = 0;
+        this._swapTarget = null;
 
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
@@ -70,9 +67,8 @@ export default class TilingWMExtension extends Extension {
         for (const id of (this._pendingRetileIds || new Map()).values())
             GLib.source_remove(id);
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
-        this._disconnectStageEvents();
-        this._removePreviewLine();
-        this._removeDropHighlight();
+        this._stopLiveResizeLoop();
+        this._disconnectGrabSignals();
         this._restoreMutterDefaults();
         this._removeAllBorders();
         if (this._borderContainer) {
@@ -242,7 +238,7 @@ export default class TilingWMExtension extends Extension {
             }
         }));
 
-        this._connectMouseEvents();
+        this._connectGrabSignals();
 
     }
 
@@ -410,12 +406,6 @@ export default class TilingWMExtension extends Extension {
         if (this._actorSignals.has(actor)) return;
         const sigIds = [];
         sigIds.push({ emitter: win, id: win.connect('position-changed', () => {
-            if (this._mouseOp && this._mouseOp.active && this._mouseOp.type === 'resize' && this._mouseOp.window === win) {
-                try {
-                    win.move_resize_frame(false, this._mouseOp.frozenX, this._mouseOp.frozenY, this._mouseOp.origFrame.w, this._mouseOp.origFrame.h);
-                } catch (_e) {}
-                return;
-            }
             this._updateBorders();
         }) });
         sigIds.push({ emitter: win, id: win.connect('size-changed', () => this._updateBorders()) });
@@ -897,10 +887,6 @@ export default class TilingWMExtension extends Extension {
             this._borderContainer.add_child(border);
             this._windowBorders.set(win, border);
         }
-        if (this._previewLine)
-            this._borderContainer.set_child_above_sibling(this._previewLine, null);
-        if (this._dropHighlight)
-            this._borderContainer.set_child_above_sibling(this._dropHighlight, null);
     }
 
     _removeAllBorders() {
@@ -908,9 +894,7 @@ export default class TilingWMExtension extends Extension {
         let child = this._borderContainer.get_first_child();
         while (child) {
             const next = child.get_next_sibling();
-            if (child !== this._previewLine && child !== this._dropHighlight) {
-                child.destroy();
-            }
+            child.destroy();
             child = next;
         }
         this._windowBorders.clear();
@@ -1259,167 +1243,136 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    // --- Mouse Edge Resize & Title Bar Swap ---
+    // --- Grab-Based Mouse Resize & Swap ---
 
-    _detectWindowEdge(win, px, py) {
-        const frame = win.get_frame_rect();
-        const THRESHOLD = 8;
-        const TITLE_BAR_HEIGHT = 30;
-
-        if (py >= frame.y && py < frame.y + TITLE_BAR_HEIGHT)
-            return null;
-
-        const edges = [];
-        if (px >= frame.x && px <= frame.x + THRESHOLD)
-            edges.push({ edge: 'left', dist: px - frame.x });
-        if (px >= frame.x + frame.width - THRESHOLD && px <= frame.x + frame.width)
-            edges.push({ edge: 'right', dist: frame.x + frame.width - px });
-        if (py >= frame.y && py <= frame.y + THRESHOLD)
-            edges.push({ edge: 'top', dist: py - frame.y });
-        if (py >= frame.y + frame.height - THRESHOLD && py <= frame.y + frame.height)
-            edges.push({ edge: 'bottom', dist: frame.y + frame.height - py });
-
-        if (edges.length === 0) return null;
-        edges.sort((a, b) => a.dist - b.dist);
-        return edges[0].edge;
+    _connectGrabSignals() {
+        this._addSignal(global.display, global.display.connect('grab-op-begin', (_d, metaWindow, grabOp) => {
+            if (this._destroyed || !this._settings || !this._settings.get_boolean('mouse-resize')) return;
+            if (!this._settings.get_boolean('enabled')) return;
+            this._handleGrabBegin(metaWindow, grabOp);
+        }));
+        this._addSignal(global.display, global.display.connect('grab-op-end', (_d, metaWindow, grabOp) => {
+            this._handleGrabEnd(metaWindow, grabOp);
+        }));
     }
 
-    _connectMouseEvents() {
-        this._disconnectStageEvents();
-        const stage = global.stage;
-        this._stagePressId = stage.connect('button-press-event', (_s, event) => this._onButtonPress(event));
-        this._stageReleaseId = stage.connect('button-release-event', (_s, event) => this._onButtonRelease(event));
-        this._stageMotionId = stage.connect('motion-event', (_s, event) => this._onPointerMotion(event));
+    _disconnectGrabSignals() {
+        this._stopLiveResizeLoop();
     }
 
-    _disconnectStageEvents() {
-        const stage = global.stage;
-        if (this._stagePressId) {
-            try { stage.disconnect(this._stagePressId); } catch (_e) {}
-            this._stagePressId = 0;
-        }
-        if (this._stageReleaseId) {
-            try { stage.disconnect(this._stageReleaseId); } catch (_e) {}
-            this._stageReleaseId = 0;
-        }
-        if (this._stageMotionId) {
-            try { stage.disconnect(this._stageMotionId); } catch (_e) {}
-            this._stageMotionId = 0;
+    _handleGrabBegin(metaWindow, grabOp) {
+        if (!metaWindow || metaWindow.get_window_type() !== Meta.WindowType.NORMAL) return;
+        if (metaWindow.is_skip_taskbar()) return;
+        const ws = metaWindow.get_workspace();
+        if (!ws || ws !== global.workspace_manager.get_active_workspace()) return;
+
+        this._grabOp = grabOp;
+        this._grabInitRect = metaWindow.get_frame_rect();
+
+        if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
+            this._startLiveResizeLoop(metaWindow);
+        } else if (this._isMoveGrab(grabOp) && !this._isFloating(metaWindow)) {
+            this._swapTarget = null;
+        } else {
+            this._grabOp = null;
+            this._grabInitRect = null;
         }
     }
 
-    _onButtonPress(event) {
-        if (this._mouseOp) return false;
-        if (!this._settings || this._destroyed) return false;
-        if (!this._settings.get_boolean('mouse-resize')) return false;
-        if (!this._settings.get_boolean('enabled')) return false;
-
-        const [px, py] = event.get_coords();
-        const win = global.display.get_window_at_position(px, py);
-        if (!win) return false;
-        if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
-        if (win.is_skip_taskbar()) return false;
-
-        const ws = win.get_workspace();
-        if (!ws) return false;
-        if (ws !== global.workspace_manager.get_active_workspace()) return false;
-
-        const isFloating = this._isFloating(win);
-        const edge = this._detectWindowEdge(win, px, py);
-
-        if (edge) {
-            const frame = win.get_frame_rect();
-            this._mouseOp = {
-                active: true,
-                type: 'resize',
-                window: win,
-                edge: edge,
-                origFrame: { x: frame.x, y: frame.y, w: frame.width, h: frame.height },
-                startPx: px,
-                startPy: py,
-                frozenX: frame.x,
-                frozenY: frame.y,
-            };
-            this._setCursorForEdge(edge);
-            return true;
-        }
-
-        if (isFloating) return false;
-
-        const frame = win.get_frame_rect();
-        this._mouseOp = {
-            active: true,
-            type: 'swap',
-            window: win,
-            origFrame: { x: frame.x, y: frame.y, w: frame.width, h: frame.height },
-            startPx: px,
-            startPy: py,
-        };
-        return false;
-    }
-
-    _onButtonRelease(_event) {
-        if (!this._mouseOp || !this._mouseOp.active) return false;
-        const op = this._mouseOp;
-
-        if (op.type === 'resize') {
-            const [px, py] = global.get_pointer();
-            const delta = op.edge === 'left' || op.edge === 'right'
-                ? px - op.startPx : py - op.startPy;
-
-            if (!this._isFloating(op.window) && Math.abs(delta) > 2) {
-                const layout = this._settings.get_string('layout');
-                if (layout === 'master-stack') {
-                    this._applyMasterStackResizeFromMouse(op, delta);
-                } else {
-                    this._applyDwindleResizeFromMouse(op, delta);
-                }
+    _handleGrabEnd(metaWindow, grabOp) {
+        if (this._isMoveGrab(grabOp) && this._swapTarget && metaWindow) {
+            const target = this._swapTarget;
+            if (target !== metaWindow && this._shouldManage(target) && !this._isFloating(target)) {
+                this._performSwap(metaWindow, target);
+                const ws = metaWindow.get_workspace();
+                if (ws) this._retileWorkspace(ws);
             }
-            this._removePreviewLine();
-        } else if (op.type === 'swap') {
-            const [px, py] = global.get_pointer();
-            const dx = px - op.startPx;
-            const dy = py - op.startPy;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            let swapped = false;
-            if (distance > 30) {
-                const target = this._currentDropTarget ||
-                    global.display.get_window_at_position(px, py);
-                if (target && target !== op.window && this._shouldManage(target) && !this._isFloating(target)) {
-                    this._performSwap(op.window, target);
-                    swapped = true;
-                }
-            }
-
-            if (!swapped) {
-                this._moveWindow(
-                    op.window,
-                    op.origFrame.x, op.origFrame.y,
-                    op.origFrame.w, op.origFrame.h
-                );
-            }
-
-            this._removeDropHighlight();
         }
 
-        this._resetCursor();
-        this._mouseOp = null;
-        if (op.type !== 'resize' || !this._isFloating(op.window)) {
-            const ws = global.workspace_manager.get_active_workspace();
+        this._stopLiveResizeLoop();
+        this._grabOp = null;
+        this._grabInitRect = null;
+        this._swapTarget = null;
+
+        if (metaWindow && !this._isFloating(metaWindow)) {
+            const ws = metaWindow.get_workspace();
             if (ws) this._retileWorkspace(ws);
         }
-        return false;
     }
 
-    _applyMasterStackResizeFromMouse(op, delta) {
-        const ws = op.window.get_workspace();
+    _isResizeGrab(grabOp) {
+        const op = grabOp & ~1024;
+        return (op >= Meta.GrabOp.RESIZING_N && op <= Meta.GrabOp.RESIZING_SW) ||
+            op === Meta.GrabOp.KEYBOARD_RESIZING_UNKNOWN ||
+            (op >= Meta.GrabOp.KEYBOARD_RESIZING_N && op <= Meta.GrabOp.KEYBOARD_RESIZING_S);
+    }
+
+    _isMoveGrab(grabOp) {
+        const op = grabOp & ~1024;
+        return op === Meta.GrabOp.MOVING || op === Meta.GrabOp.MOVING_UNCONSTRAINED ||
+            op === Meta.GrabOp.KEYBOARD_MOVING;
+    }
+
+    _startLiveResizeLoop(metaWindow) {
+        this._stopLiveResizeLoop();
+        const isHorizontal = this._isHorizontalGrab(this._grabOp);
+        let lastWidth = this._grabInitRect?.width || 0;
+        let lastHeight = this._grabInitRect?.height || 0;
+
+        this._liveResizeId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            if (this._destroyed || !metaWindow || !this._grabOp) {
+                this._liveResizeId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+
+            const frame = metaWindow.get_frame_rect();
+            if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
+
+            if (frame.width === lastWidth && frame.height === lastHeight &&
+                frame.x === this._grabInitRect.x && frame.y === this._grabInitRect.y) {
+                this._checkSwapTarget(metaWindow);
+                return GLib.SOURCE_CONTINUE;
+            }
+            lastWidth = frame.width;
+            lastHeight = frame.height;
+
+            this._updateGrabRatio(metaWindow, frame, isHorizontal);
+            this._moveTiledExcept(metaWindow);
+            this._doUpdateBorders();
+            this._grabInitRect = { x: frame.x, y: frame.y, width: frame.width, height: frame.height };
+            this._checkSwapTarget(metaWindow);
+
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopLiveResizeLoop() {
+        if (this._liveResizeId) {
+            GLib.source_remove(this._liveResizeId);
+            this._liveResizeId = 0;
+        }
+    }
+
+    _isHorizontalGrab(grabOp) {
+        const op = grabOp & ~1024;
+        return op === Meta.GrabOp.RESIZING_E || op === Meta.GrabOp.RESIZING_W ||
+            op === Meta.GrabOp.KEYBOARD_RESIZING_E || op === Meta.GrabOp.KEYBOARD_RESIZING_W;
+    }
+
+    _updateGrabRatio(metaWindow, currentFrame, isHorizontal) {
+        const ws = metaWindow.get_workspace();
         if (!ws) return;
         const layout = this._settings.get_string('layout');
-        if (layout !== 'master-stack') return;
 
-        const tiledWindows = this._getWindowsForWorkspace(ws)
-            .filter(w => !this._isFloating(w));
+        if (layout === 'master-stack') {
+            this._updateMasterStackRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal);
+        } else {
+            this._updateDwindleRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal);
+        }
+    }
+
+    _updateMasterStackRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal) {
+        const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiledWindows.length <= 1) return;
 
         const monitor = global.display.get_primary_monitor();
@@ -1428,42 +1381,125 @@ export default class TilingWMExtension extends Extension {
         const gap = this._settings.get_int('gap');
         const areaW = workArea.width - gap * 2;
 
-        const idx = tiledWindows.indexOf(op.window);
+        const idx = tiledWindows.indexOf(metaWindow);
         if (idx === -1) return;
 
-        const currentRatio = this._getMasterRatio(ws);
-        const currentMasterW = (areaW - gap) * currentRatio;
-        const newMasterW = currentMasterW + delta;
-        const minMaster = 100;
-        const maxMaster = areaW - gap - (tiledWindows.length - 1) * 100;
-        if (maxMaster < minMaster) return;
-        const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-        this._masterRatios.set(ws, clamped / (areaW - gap));
+        if (isHorizontal) {
+            const currentMasterW = (areaW - gap) * this._getMasterRatio(ws);
+            const newMasterW = currentMasterW + (currentFrame.width - (this._grabInitRect.width || currentFrame.width));
+            const minMaster = 100;
+            const maxMaster = areaW - gap - (tiledWindows.length - 1) * 100;
+            if (maxMaster < minMaster) return;
+            const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
+            this._masterRatios.set(ws, clamped / (areaW - gap));
+        } else if (idx > 0) {
+            const stackIdx = idx - 1;
+            const stackRatios = this._getStackRatios(ws);
+            const currentWeight = stackRatios.has(stackIdx) ? stackRatios.get(stackIdx) : 1.0;
+            const deltaH = currentFrame.height - (this._grabInitRect.height || currentFrame.height);
+            const deltaWeight = deltaH * 0.005;
+            const newWeight = Math.max(0.1, currentWeight + deltaWeight);
+            stackRatios.set(stackIdx, newWeight);
+            const neighborIdx = stackIdx + 1 < tiledWindows.length - 1 ? stackIdx + 1 : stackIdx - 1;
+            if (neighborIdx >= 0 && neighborIdx < tiledWindows.length - 1) {
+                const neighborWeight = stackRatios.has(neighborIdx) ? stackRatios.get(neighborIdx) : 1.0;
+                stackRatios.set(neighborIdx, Math.max(0.1, neighborWeight - deltaWeight));
+            }
+        }
     }
 
-    _applyDwindleResizeFromMouse(op, delta) {
-        const ws = op.window.get_workspace();
-        if (!ws) return;
+    _updateDwindleRatioFromGrab(metaWindow, ws, currentFrame, isHorizontal) {
         const tree = this._bspGetTree(ws);
         if (!tree) return;
-
-        const targetIsHorizontal = op.edge === 'left' || op.edge === 'right';
         const path = [];
-        this._bspFindPath(tree, op.window, path);
+        this._bspFindPath(tree, metaWindow, path);
 
         for (let i = path.length - 1; i >= 0; i--) {
-            if ((path[i].direction === 'h') === targetIsHorizontal) {
+            if ((path[i].direction === 'h') === isHorizontal) {
                 const monitor = global.display.get_primary_monitor();
                 const workArea = ws.get_work_area_for_monitor(monitor);
                 if (!workArea) return;
                 const minR = 0.15;
                 const maxR = 0.85;
-                const axisSize = targetIsHorizontal ? workArea.width : workArea.height;
+                const axisSize = isHorizontal ? workArea.width : workArea.height;
+                const delta = isHorizontal
+                    ? currentFrame.width - (this._grabInitRect.width || currentFrame.width)
+                    : currentFrame.height - (this._grabInitRect.height || currentFrame.height);
                 const normalizedDelta = delta / axisSize;
                 path[i].ratio = Math.max(minR, Math.min(maxR, path[i].ratio + normalizedDelta));
                 return;
             }
         }
+    }
+
+    _moveTiledExcept(skipWindow) {
+        const ws = skipWindow.get_workspace();
+        if (!ws) return;
+        const layout = this._settings.get_string('layout');
+        const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+        const gap = this._settings.get_int('gap');
+        const singleGap = this._settings.get_int('single-gap');
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+
+        if (layout === 'master-stack') {
+            if (tiledWindows.length === 1) return;
+            const areaX = workArea.x + gap;
+            const areaY = workArea.y + gap;
+            const areaW = workArea.width - gap * 2;
+            const areaH = workArea.height - gap * 2;
+            const masterRatio = this._getMasterRatio(ws);
+            const masterW = Math.floor((areaW - gap) * masterRatio);
+            const stackW = areaW - masterW - gap;
+            const numStack = tiledWindows.length - 1;
+
+            for (let i = 0; i < tiledWindows.length; i++) {
+                if (tiledWindows[i] === skipWindow) continue;
+                if (i === 0) {
+                    this._safeMove(tiledWindows[i], areaX, areaY, masterW, areaH);
+                } else {
+                    const stackRatios = this._getStackRatios(ws);
+                    const weights = [];
+                    let totalWeight = 0;
+                    for (let j = 0; j < numStack; j++) {
+                        const w = stackRatios.has(j) ? stackRatios.get(j) : 1.0;
+                        weights.push(w);
+                        totalWeight += w;
+                    }
+                    let y = areaY;
+                    for (let j = 0; j < numStack; j++) {
+                        const isLast = j === numStack - 1;
+                        const h = isLast
+                            ? (areaY + areaH - y)
+                            : Math.floor((areaH - gap * (numStack - 1)) * weights[j] / totalWeight);
+                        if (j === i - 1 && tiledWindows[i] !== skipWindow) {
+                            this._safeMove(tiledWindows[i], areaX + masterW + gap, y, stackW, h);
+                        }
+                        if (!isLast) y += h + gap;
+                    }
+                }
+            }
+        } else if (layout === 'dwindle') {
+            const tree = this._bspGetTree(ws);
+            if (!tree) return;
+            this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap);
+            for (const w of tiledWindows) {
+                if (w !== skipWindow) {
+                    const frame = w.get_frame_rect();
+                    this._safeMove(w, frame.x, frame.y, frame.width, frame.height);
+                }
+            }
+        }
+    }
+
+    _safeMove(win, x, y, w, h) {
+        if (!win || win.is_fullscreen() || !win.get_workspace()) return;
+        try {
+            const actor = win.get_compositor_private();
+            if (actor) actor.remove_all_transitions();
+            win.move_resize_frame(true, x, y, w, h);
+        } catch (_e) {}
     }
 
     _performSwap(winA, winB) {
@@ -1483,7 +1519,7 @@ export default class TilingWMExtension extends Extension {
             winA.move_resize_frame(false, frameB.x, frameB.y, frameB.width, frameB.height);
             winB.move_resize_frame(false, frameA.x, frameA.y, frameA.width, frameA.height);
         } catch (e) {
-            log(`[plaid] mouse swap move_resize failed: ${e.message}`);
+            log(`[plaid] swap move_resize failed: ${e.message}`);
         }
 
         const order = this._getWorkspaceOrder(ws);
@@ -1495,250 +1531,14 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _onPointerMotion(event) {
-        if (!this._mouseOp || !this._mouseOp.active) {
-            this._updateEdgeCursor(event);
-            return false;
-        }
-
-        const op = this._mouseOp;
-        const [px, py] = event.get_coords();
-
-        if (op.type === 'resize') {
-            const delta = op.edge === 'left' || op.edge === 'right'
-                ? px - op.startPx : py - op.startPy;
-
-            if (this._isFloating(op.window)) {
-                let x = op.origFrame.x;
-                let y = op.origFrame.y;
-                let w = op.origFrame.w;
-                let h = op.origFrame.h;
-                if (op.edge === 'right') {
-                    w = Math.max(100, op.origFrame.w + delta);
-                } else if (op.edge === 'left') {
-                    w = Math.max(100, op.origFrame.w - delta);
-                    x = op.origFrame.x + op.origFrame.w - w;
-                } else if (op.edge === 'bottom') {
-                    h = Math.max(100, op.origFrame.h + delta);
-                } else if (op.edge === 'top') {
-                    h = Math.max(100, op.origFrame.h - delta);
-                    y = op.origFrame.y + op.origFrame.h - h;
-                }
-                this._moveWindow(op.window, x, y, w, h);
-            } else {
-                this._moveWindow(op.window, op.frozenX, op.frozenY, op.origFrame.w, op.origFrame.h);
-
-                const layout = this._settings.get_string('layout');
-                if (layout === 'master-stack') {
-                    this._applyMasterStackResizeFromMouse(op, delta);
-                } else {
-                    this._applyDwindleResizeFromMouse(op, delta);
-                }
-                const ws = op.window.get_workspace();
-                if (ws) this._doRetileWorkspace(ws);
-
-                const pos = this._getSplitPreviewPosition(op, delta);
-                if (pos) {
-                    this._createPreviewLine();
-                    this._updatePreviewLine(pos.x, pos.y, pos.w, pos.h);
-                }
-            }
-        } else if (op.type === 'swap') {
-            try {
-                op.window.move_resize_frame(
-                    false,
-                    op.origFrame.x + px - op.startPx,
-                    op.origFrame.y + py - op.startPy,
-                    op.origFrame.w,
-                    op.origFrame.h
-                );
-            } catch (_e) {}
-            this._updateBorders();
-
-            const dx = px - op.startPx;
-            const dy = py - op.startPy;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            let target = null;
-            if (distance > 30) {
-                target = global.display.get_window_at_position(px, py);
-                if (target && (target === op.window || !this._shouldManage(target) || this._isFloating(target)))
-                    target = null;
-            }
-            if (target !== this._currentDropTarget) {
-                this._currentDropTarget = target;
-                if (target) {
-                    this._createDropHighlight();
-                    this._showDropHighlight(target);
-                } else {
-                    this._removeDropHighlight();
-                }
-            }
-        }
-
-        return false;
-    }
-
-    _updateEdgeCursor(event) {
-        if (!this._settings || !this._settings.get_boolean('mouse-resize')) {
-            this._resetCursor();
-            return;
-        }
-        if (!this._settings.get_boolean('enabled')) {
-            this._resetCursor();
-            return;
-        }
-
-        const [px, py] = event.get_coords();
-        const win = global.display.get_window_at_position(px, py);
-        if (!win || win.get_window_type() !== Meta.WindowType.NORMAL || win.is_skip_taskbar()) {
-            this._resetCursor();
-            return;
-        }
-
-        const ws = win.get_workspace();
-        if (!ws || ws !== global.workspace_manager.get_active_workspace()) {
-            this._resetCursor();
-            return;
-        }
-
-        const edge = this._detectWindowEdge(win, px, py);
-        if (edge) {
-            this._setCursorForEdge(edge);
+    _checkSwapTarget(metaWindow) {
+        if (!this._isMoveGrab(this._grabOp)) return;
+        const [px, py] = global.get_pointer();
+        const target = global.display.get_window_at_position(px, py);
+        if (target && target !== metaWindow && this._shouldManage(target) && !this._isFloating(target)) {
+            this._swapTarget = target;
         } else {
-            this._resetCursor();
-        }
-    }
-
-    _setCursorForEdge(edge) {
-        const cursorMap = {
-            left: 'col-resize',
-            right: 'col-resize',
-            top: 'row-resize',
-            bottom: 'row-resize',
-        };
-        try {
-            global.stage.set_cursor_name(cursorMap[edge] || 'default');
-        } catch (_e) {}
-    }
-
-    _resetCursor() {
-        try {
-            global.stage.set_cursor_name('default');
-        } catch (_e) {}
-    }
-
-    // --- Preview Line (split indicator during edge resize) ---
-
-    _createPreviewLine() {
-        if (this._previewLine) return;
-        this._previewLine = new St.Widget({
-            name: 'plaid-preview-line',
-            style: 'background-color: rgba(53, 132, 228, 0.7);',
-            reactive: false,
-            visible: true,
-        });
-        this._borderContainer.add_child(this._previewLine);
-    }
-
-    _updatePreviewLine(x, y, w, h) {
-        if (!this._previewLine) this._createPreviewLine();
-        this._previewLine.set_position(x, y);
-        this._previewLine.set_size(w, h);
-        this._previewLine.show();
-    }
-
-    _removePreviewLine() {
-        if (this._previewLine) {
-            this._previewLine.destroy();
-            this._previewLine = null;
-        }
-    }
-
-    _getSplitPreviewPosition(op, delta) {
-        const layout = this._settings.get_string('layout');
-        const ws = op.window.get_workspace();
-        if (!ws) return null;
-
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
-        if (!workArea) return null;
-        const gap = this._settings.get_int('gap');
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
-
-        if (layout === 'master-stack') {
-            const tiledWindows = this._getWindowsForWorkspace(ws)
-                .filter(w => !this._isFloating(w));
-            if (tiledWindows.length <= 1) return null;
-
-            const masterRatio = this._getMasterRatio(ws);
-            const splitX = areaX + Math.floor((areaW - gap) * masterRatio);
-            return { x: splitX, y: areaY, w: gap, h: areaH };
-        }
-
-        // Dwindle: walk BSP path to find the controlling split
-        const tree = this._bspGetTree(ws);
-        if (!tree) return null;
-        const path = [];
-        this._bspFindPath(tree, op.window, path);
-
-        const isHorizontalDrag = op.edge === 'left' || op.edge === 'right';
-        for (let i = path.length - 1; i >= 0; i--) {
-            const node = path[i];
-            if (node.type !== 'split') continue;
-            if ((node.direction === 'h') === isHorizontalDrag) {
-                const frame = op.origFrame;
-                if (isHorizontalDrag) {
-                    const size = frame.width;
-                    const split = Math.floor((size - gap) * node.ratio);
-                    const inFirstChild = frame.x <= areaX + split;
-                    const splitScreen = inFirstChild
-                        ? areaX + split
-                        : areaX + split + gap;
-                    return { x: splitScreen, y: areaY, w: gap, h: areaH };
-                } else {
-                    const size = frame.height;
-                    const split = Math.floor((size - gap) * node.ratio);
-                    const inFirstChild = frame.y <= areaY + split;
-                    const splitScreen = inFirstChild
-                        ? areaY + split
-                        : areaY + split + gap;
-                    return { x: areaX, y: splitScreen, w: areaW, h: gap };
-                }
-            }
-        }
-        return null;
-    }
-
-    // --- Drop Zone Highlight (during title bar drag) ---
-
-    _createDropHighlight() {
-        if (this._dropHighlight) return;
-        this._dropHighlight = new St.Widget({
-            name: 'plaid-drop-highlight',
-            style: 'background-color: rgba(53, 132, 228, 0.25);',
-            reactive: false,
-            visible: true,
-        });
-        this._borderContainer.add_child(this._dropHighlight);
-    }
-
-    _showDropHighlight(win) {
-        if (!win) return;
-        if (!this._dropHighlight) this._createDropHighlight();
-        const frame = win.get_frame_rect();
-        this._dropHighlight.set_position(frame.x, frame.y);
-        this._dropHighlight.set_size(frame.width, frame.height);
-        this._dropHighlight.show();
-    }
-
-    _removeDropHighlight() {
-        this._currentDropTarget = null;
-        if (this._dropHighlight) {
-            this._dropHighlight.destroy();
-            this._dropHighlight = null;
+            this._swapTarget = null;
         }
     }
 
