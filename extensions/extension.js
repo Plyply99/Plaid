@@ -140,7 +140,9 @@ export default class TilingWMExtension extends Extension {
             this._updateBorders();
             if (this._settings.get_boolean('follow-focus')) {
                 const win = global.display.focus_window;
-                if (win) this._moveCursorToWindow(win);
+                if (win && !this._isPointerOverWindow(win)) {
+                    this._moveCursorToWindow(win);
+                }
             }
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
@@ -267,6 +269,17 @@ export default class TilingWMExtension extends Extension {
             seat.warp_pointer(centerX, centerY);
         } catch (e) {
             log(`[tiling-wm] _moveCursorToWindow failed: ${e.message}`);
+        }
+    }
+
+    _isPointerOverWindow(win) {
+        try {
+            const [px, py] = global.get_pointer();
+            const frame = win.get_frame_rect();
+            return px >= frame.x && px <= frame.x + frame.width &&
+                   py >= frame.y && py <= frame.y + frame.height;
+        } catch (_e) {
+            return false;
         }
     }
 
