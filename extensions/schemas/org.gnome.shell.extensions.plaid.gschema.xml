@@ -23,7 +23,7 @@
     <key name="layout" type="s">
       <default>'master-stack'</default>
       <summary>Tiling layout</summary>
-      <description>Layout algorithm to use: 'master-stack' or 'dwindle'</description>
+      <description>Layout algorithm to use: 'master-stack', 'centered-master', or 'dwindle'</description>
     </key>
 
     <key name="dwindle-ratio" type="d">

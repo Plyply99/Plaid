@@ -77,6 +77,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const layoutModel = new Gtk.StringList();
         layoutModel.append(_('Master Stack'));
+        layoutModel.append(_('Centered Master'));
         layoutModel.append(_('Dwindle'));
         const layoutRow = new Adw.ComboRow({
             title: _('Tiling Layout'),
@@ -85,8 +86,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         group.add(layoutRow);
 
-        const layoutMap = { 'master-stack': 0, 'dwindle': 1 };
-        const reverseLayoutMap = { 0: 'master-stack', 1: 'dwindle' };
+        const layoutMap = { 'master-stack': 0, 'centered-master': 1, 'dwindle': 2 };
+        const reverseLayoutMap = { 0: 'master-stack', 1: 'centered-master', 2: 'dwindle' };
         layoutRow.set_selected(layoutMap[settings.get_string('layout')] ?? 0);
         layoutRow.connect('notify::selected', () => {
             settings.set_string('layout', reverseLayoutMap[layoutRow.get_selected()]);
