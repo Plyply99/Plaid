@@ -993,10 +993,13 @@ export default class TilingWMExtension extends Extension {
         ];
 
         for (const { key, fn } of bindings) {
+            const flags = key.startsWith('resize-')
+                ? Meta.KeyBindingFlags.NONE
+                : Meta.KeyBindingFlags.IGNORE_AUTOREPEAT;
             Main.wm.addKeybinding(
                 key,
                 this._settings,
-                Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+                flags,
                 Shell.ActionMode.NORMAL,
                 fn
             );
