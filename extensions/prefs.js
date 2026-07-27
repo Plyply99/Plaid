@@ -41,7 +41,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         settings.bind('follow-focus', followRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         const mouseResizeRow = new Adw.SwitchRow({
-            title: _('Mouse Resize & Swap'),
+            title: _('Mouse Resize and Swap'),
             subtitle: _('Drag window edges to resize splits, drag title bar to swap windows'),
         });
         group.add(mouseResizeRow);
