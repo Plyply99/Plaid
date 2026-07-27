@@ -911,7 +911,7 @@ export default class TilingWMExtension extends Extension {
 
         const windows = this._getWindowsForWorkspace(ws);
         for (const win of windows) {
-            if (this._isFloating(win)) continue;
+            if (win.is_fullscreen()) continue;
             if (this._grabOp && win === this._getActiveWindow()) continue;
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
