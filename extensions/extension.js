@@ -927,10 +927,10 @@ export default class TilingWMExtension extends Extension {
 
             const border = new St.Widget({
                 name: 'tiling-border',
-                x: -borderWidth,
-                y: -borderWidth,
-                width: frame.width + borderWidth * 2,
-                height: frame.height + borderWidth * 2,
+                x: Math.floor(borderWidth / 2),
+                y: Math.floor(borderWidth / 2),
+                width: frame.width - borderWidth,
+                height: frame.height - borderWidth,
                 style: `border: ${borderWidth}px solid ${borderColor}; border-radius: ${borderRadius}px;`,
                 reactive: false,
                 visible: true,
