@@ -354,6 +354,9 @@ export default class TilingWMExtension extends Extension {
         const title = win.get_title();
         if (title && this._floatingTitles.has(title)) return true;
         if (win.is_fullscreen()) return true;
+        if (win.get_window_type() !== Meta.WindowType.NORMAL) return true;
+        if (win.is_skip_taskbar()) return true;
+        if (win.get_transient_for()) return true;
         return false;
     }
 
@@ -473,9 +476,11 @@ export default class TilingWMExtension extends Extension {
 
     _raiseFloatingWindows(workspace) {
         if (!workspace) return;
+        const tiled = this._getWindowsForWorkspace(workspace)
+            .filter(w => !this._isFloating(w));
         const windows = workspace.list_windows();
         for (const win of windows) {
-            if (this._isFloating(win)) {
+            if (!tiled.includes(win)) {
                 try { win.make_above(); } catch (_e) {}
             }
         }
