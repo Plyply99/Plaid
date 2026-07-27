@@ -1,3 +1,4 @@
+import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
@@ -52,6 +53,10 @@ export default class TilingWMExtension extends Extension {
 
     disable() {
         this._destroyed = true;
+        if (this._pickFocusId) {
+            try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+            this._pickFocusId = null;
+        }
         for (const id of (this._pendingRetileIds || new Map()).values())
             GLib.source_remove(id);
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
@@ -113,11 +118,13 @@ export default class TilingWMExtension extends Extension {
                         if (this._destroyed) return;
                         const ws = win.get_workspace();
                         if (ws) this._retileWorkspace(ws);
+                        this._moveCursorToWindow(win);
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         const ws = win.get_workspace();
                         if (ws) this._retileWorkspace(ws);
+                        this._moveCursorToWindow(win);
                         return false;
                     });
                 }
@@ -168,6 +175,11 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-width', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::border-radius', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::pick-mode', () => {
+            if (this._settings.get_boolean('pick-mode')) {
+                this._startPickMode();
+            }
+        }));
     }
 
     _addSignal(emitter, id) {
@@ -232,6 +244,19 @@ export default class TilingWMExtension extends Extension {
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         if (title && this._floatingTitles.has(title)) return false;
         return true;
+    }
+
+    _moveCursorToWindow(win) {
+        try {
+            const frame = win.get_frame_rect();
+            if (frame.width === 0 || frame.height === 0) return;
+            const centerX = frame.x + frame.width / 2;
+            const centerY = frame.y + frame.height / 2;
+            const seat = Clutter.get_default_backend().get_seat();
+            seat.warp_pointer(centerX, centerY);
+        } catch (e) {
+            log(`[tiling-wm] _moveCursorToWindow failed: ${e.message}`);
+        }
     }
 
     _isFloating(win) {
@@ -1063,5 +1088,27 @@ export default class TilingWMExtension extends Extension {
         } else {
             this._retileAll();
         }
+    }
+
+    // --- Pick Mode ---
+
+    _startPickMode() {
+        if (this._pickFocusId) {
+            try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+            this._pickFocusId = null;
+        }
+        this._pickFocusId = global.display.connect('notify::focus-window', () => {
+            const win = global.display.focus_window;
+            if (!win) return;
+            if (this._pickFocusId) {
+                try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+                this._pickFocusId = null;
+            }
+            const cls = win.get_wm_class_instance() || '';
+            const title = win.get_title() || '';
+            this._settings.set_string('pick-mode-class', cls);
+            this._settings.set_string('pick-mode-title', title);
+            this._settings.set_boolean('pick-mode', false);
+        });
     }
 }

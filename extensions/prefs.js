@@ -354,11 +354,67 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         window.add(page);
 
+        const pickGroup = new Adw.PreferencesGroup({
+            title: _('Quick Pick'),
+            description: _('Click a window to add it to the float list'),
+        });
+        page.add(pickGroup);
+
+        const pickRow = new Adw.ActionRow({
+            title: _('Pick Window to Float'),
+            subtitle: _('Click any window on the desktop to capture it'),
+            activatable: true,
+        });
+        const pickButton = new Gtk.Button({
+            icon_name: 'input-mouse-symbolic',
+            css_classes: ['flat', 'circular'],
+        });
+        pickRow.add_suffix(pickButton);
+        pickRow.set_activatable_widget(pickButton);
+        pickGroup.add(pickRow);
+
+        let pickWatchId = 0;
+        pickButton.connect('clicked', () => {
+            settings.set_boolean('pick-mode', false);
+            settings.set_string('pick-mode-class', '');
+            settings.set_string('pick-mode-title', '');
+            settings.set_boolean('pick-mode', true);
+            window.minimize();
+
+            if (pickWatchId) settings.disconnect(pickWatchId);
+            pickWatchId = settings.connect('changed::pick-mode', () => {
+                if (settings.get_boolean('pick-mode')) return;
+                settings.disconnect(pickWatchId);
+                pickWatchId = 0;
+
+                const cls = settings.get_string('pick-mode-class');
+                const title = settings.get_string('pick-mode-title');
+                if (!cls && !title) {
+                    window.present();
+                    return;
+                }
+
+                this._showPickChoiceDialog(window, settings, cls, title,
+                    (target, value) => {
+                        const current = new Set(settings.get_strv(target));
+                        current.add(value);
+                        settings.set_strv(target, [...current]);
+                        if (target === 'float-windows')
+                            this._rebuildFloatList(settings, this._floatClassGroup, this._floatClassAddRow, 'float-windows', '_floatClassRows');
+                        else
+                            this._rebuildFloatList(settings, this._floatTitleGroup, this._floatTitleAddRow, 'float-titles', '_floatTitleRows');
+                    },
+                    () => window.present()
+                );
+            });
+        });
+
         const classGroup = new Adw.PreferencesGroup({
             title: _('Floating by Window Class'),
             description: _('WM_CLASS instance names of windows that should float (not be tiled)'),
         });
         page.add(classGroup);
+        this._floatClassGroup = classGroup;
 
         this._floatClassRows = [];
 
@@ -373,6 +429,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         addClassRow.add_suffix(addClassButton);
         addClassRow.set_activatable_widget(addClassButton);
         classGroup.add(addClassRow);
+        this._floatClassAddRow = addClassRow;
 
         addClassButton.connect('clicked', () => {
             this._showAddFloatDialog(window, settings, classGroup, addClassRow, 'float-windows', _('WM_CLASS instance name (e.g. gimp)'));
@@ -385,6 +442,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             description: _('Exact window titles that should float (case-sensitive)'),
         });
         page.add(titleGroup);
+        this._floatTitleGroup = titleGroup;
 
         this._floatTitleRows = [];
 
@@ -399,12 +457,88 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         addTitleRow.add_suffix(addTitleButton);
         addTitleRow.set_activatable_widget(addTitleButton);
         titleGroup.add(addTitleRow);
+        this._floatTitleAddRow = addTitleRow;
 
         addTitleButton.connect('clicked', () => {
             this._showAddFloatDialog(window, settings, titleGroup, addTitleRow, 'float-titles', _('Exact window title (e.g. Picture-in-Picture)'));
         });
 
         this._rebuildFloatList(settings, titleGroup, addTitleRow, 'float-titles', '_floatTitleRows');
+    }
+
+    _showPickChoiceDialog(window, settings, cls, title, onAdd, onDone) {
+        const dialog = new Adw.Window({
+            modal: true,
+            transient_for: window,
+            title: _('Add Floating Window'),
+            default_width: 420,
+            default_height: 200,
+        });
+
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 12,
+            margin_top: 24,
+            margin_bottom: 24,
+            margin_start: 24,
+            margin_end: 24,
+        });
+
+        const infoLabel = new Gtk.Label({
+            label: _('Which identifier should be used?'),
+            css_classes: ['heading'],
+        });
+        box.append(infoLabel);
+
+        const btnBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+            halign: Gtk.Align.CENTER,
+            marginTop: 12,
+        });
+
+        if (cls) {
+            const classBtn = new Gtk.Button({
+                label: _('WM_CLASS: %s').replace('%s', cls),
+                css_classes: ['suggested-action'],
+                hexpand: true,
+            });
+            classBtn.connect('clicked', () => {
+                onAdd('float-windows', cls.toLowerCase());
+                dialog.close();
+                onDone();
+            });
+            btnBox.append(classBtn);
+        }
+
+        if (title) {
+            const titleBtn = new Gtk.Button({
+                label: _('Title: %s').replace('%s', title),
+                css_classes: ['suggested-action'],
+                hexpand: true,
+            });
+            titleBtn.connect('clicked', () => {
+                onAdd('float-titles', title);
+                dialog.close();
+                onDone();
+            });
+            btnBox.append(titleBtn);
+        }
+
+        box.append(btnBox);
+
+        const cancelBtn = new Gtk.Button({
+            label: _('Cancel'),
+            halign: Gtk.Align.CENTER,
+        });
+        cancelBtn.connect('clicked', () => {
+            dialog.close();
+            onDone();
+        });
+        box.append(cancelBtn);
+
+        dialog.set_content(box);
+        dialog.present();
     }
 
     _rebuildFloatList(settings, group, addRow, settingsKey, rowsProperty) {
