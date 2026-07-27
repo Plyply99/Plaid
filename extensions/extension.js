@@ -37,6 +37,14 @@ export default class TilingWMExtension extends Extension {
         this._updateBorderContainer();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                for (const win of ws.list_windows()) {
+                    if (this._shouldManage(win)) {
+                        this._addWindow(win);
+                    }
+                }
+            }
             this._retileAll();
             return false;
         });
@@ -214,11 +222,14 @@ export default class TilingWMExtension extends Extension {
     }
 
     _shouldManage(win) {
-        if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
-        if (win.is_skip_taskbar()) return false;
         const wms = win.get_wm_class_instance();
-        if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         const title = win.get_title();
+        const wtype = win.get_window_type();
+        const skip = win.is_skip_taskbar();
+        log(`[tiling-wm] _shouldManage: class=${wms} title=${title} type=${wtype} skip_taskbar=${skip} floating_class=${wms && this._floatingClasses.has(wms.toLowerCase())} floating_title=${title && this._floatingTitles.has(title)}`);
+        if (wtype !== Meta.WindowType.NORMAL) return false;
+        if (skip) return false;
+        if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         if (title && this._floatingTitles.has(title)) return false;
         return true;
     }
@@ -263,8 +274,7 @@ export default class TilingWMExtension extends Extension {
         if (!ws) return;
         const order = this._getWorkspaceOrder(ws);
         const idx = order.indexOf(win);
-        if (idx === -1) return;
-        order.splice(idx, 1);
+        if (idx !== -1) order.splice(idx, 1);
         this._windowWorkspaces.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
@@ -323,11 +333,14 @@ export default class TilingWMExtension extends Extension {
     }
 
     _getWindowsForWorkspace(workspace) {
-        return workspace.list_windows().filter(w =>
+        const order = this._getWorkspaceOrder(workspace);
+        const all = order.filter(w =>
             w.get_window_type() === Meta.WindowType.NORMAL &&
             !w.is_skip_taskbar() &&
             !w.minimized
         );
+        log(`[tiling-wm] _getWindowsForWorkspace: tracked=${order.length} tiled=${all.length}`);
+        return all;
     }
 
     _retileAll() {
@@ -349,6 +362,7 @@ export default class TilingWMExtension extends Extension {
         if (!this._settings.get_boolean('enabled')) return;
         const tiledWindows = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
+        log(`[tiling-wm] _doRetileWorkspace: tiled=${tiledWindows.length} classes=${tiledWindows.map(w => w.get_wm_class_instance()).join(',')}`);
         if (tiledWindows.length === 0) return;
 
         const layout = this._settings.get_string('layout');
@@ -671,6 +685,10 @@ export default class TilingWMExtension extends Extension {
         if (!win.get_workspace()) return;
         const rect = win.get_frame_rect();
         if (rect.width === 0 || rect.height === 0) return;
+        const classInstance = win.get_wm_class_instance();
+        if (classInstance && classInstance.toLowerCase().includes('firefox')) {
+            log(`[tiling-wm] _moveWindow firefox: x=${x} y=${y} w=${w} h=${h} frame=${JSON.stringify({x:rect.x,y:rect.y,w:rect.width,h:rect.height})}`);
+        }
         try {
             win.move_resize_frame(false, x, y, w, h);
         } catch (e) {
