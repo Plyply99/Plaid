@@ -28,6 +28,9 @@ export default class TilingWMExtension extends Extension {
         this._stageReleaseId = 0;
         this._stageMotionId = 0;
         this._keyboardFocusChange = false;
+        this._previewLine = null;
+        this._dropHighlight = null;
+        this._currentDropTarget = null;
 
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
@@ -68,6 +71,8 @@ export default class TilingWMExtension extends Extension {
             GLib.source_remove(id);
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
         this._disconnectStageEvents();
+        this._removePreviewLine();
+        this._removeDropHighlight();
         this._restoreMutterDefaults();
         this._removeAllBorders();
         if (this._borderContainer) {
@@ -1364,6 +1369,7 @@ export default class TilingWMExtension extends Extension {
                     this._applyDwindleResizeFromMouse(op, delta);
                 }
             }
+            this._removePreviewLine();
         } else if (op.type === 'swap') {
             const [px, py] = global.get_pointer();
             const dx = px - op.startPx;
@@ -1372,7 +1378,8 @@ export default class TilingWMExtension extends Extension {
 
             let swapped = false;
             if (distance > 30) {
-                const target = global.display.get_window_at_position(px, py);
+                const target = this._currentDropTarget ||
+                    global.display.get_window_at_position(px, py);
                 if (target && target !== op.window && this._shouldManage(target) && !this._isFloating(target)) {
                     this._performSwap(op.window, target);
                     swapped = true;
@@ -1386,6 +1393,8 @@ export default class TilingWMExtension extends Extension {
                     op.origFrame.w, op.origFrame.h
                 );
             }
+
+            this._removeDropHighlight();
         }
 
         this._resetCursor();
@@ -1521,6 +1530,12 @@ export default class TilingWMExtension extends Extension {
                 }
                 const ws = op.window.get_workspace();
                 if (ws) this._doRetileWorkspace(ws);
+
+                const pos = this._getSplitPreviewPosition(op, delta);
+                if (pos) {
+                    this._createPreviewLine();
+                    this._updatePreviewLine(pos.x, pos.y, pos.w, pos.h);
+                }
             }
         } else if (op.type === 'swap') {
             try {
@@ -1533,6 +1548,25 @@ export default class TilingWMExtension extends Extension {
                 );
             } catch (_e) {}
             this._updateBorders();
+
+            const dx = px - op.startPx;
+            const dy = py - op.startPy;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            let target = null;
+            if (distance > 30) {
+                target = global.display.get_window_at_position(px, py);
+                if (target && (target === op.window || !this._shouldManage(target) || this._isFloating(target)))
+                    target = null;
+            }
+            if (target !== this._currentDropTarget) {
+                this._currentDropTarget = target;
+                if (target) {
+                    this._createDropHighlight();
+                    this._showDropHighlight(target);
+                } else {
+                    this._removeDropHighlight();
+                }
+            }
         }
 
         return false;
@@ -1585,6 +1619,121 @@ export default class TilingWMExtension extends Extension {
         try {
             global.stage.set_cursor_name('default');
         } catch (_e) {}
+    }
+
+    // --- Preview Line (split indicator during edge resize) ---
+
+    _createPreviewLine() {
+        if (this._previewLine) return;
+        this._previewLine = new St.Widget({
+            name: 'plaid-preview-line',
+            style: 'background-color: rgba(53, 132, 228, 0.7);',
+            reactive: false,
+            visible: true,
+        });
+        this._borderContainer.add_child(this._previewLine);
+    }
+
+    _updatePreviewLine(x, y, w, h) {
+        if (!this._previewLine) this._createPreviewLine();
+        this._previewLine.set_position(x, y);
+        this._previewLine.set_size(w, h);
+        this._previewLine.show();
+    }
+
+    _removePreviewLine() {
+        if (this._previewLine) {
+            this._previewLine.destroy();
+            this._previewLine = null;
+        }
+    }
+
+    _getSplitPreviewPosition(op, delta) {
+        const layout = this._settings.get_string('layout');
+        const ws = op.window.get_workspace();
+        if (!ws) return null;
+
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return null;
+        const gap = this._settings.get_int('gap');
+        const areaX = workArea.x + gap;
+        const areaY = workArea.y + gap;
+        const areaW = workArea.width - gap * 2;
+        const areaH = workArea.height - gap * 2;
+
+        if (layout === 'master-stack') {
+            const tiledWindows = this._getWindowsForWorkspace(ws)
+                .filter(w => !this._isFloating(w));
+            if (tiledWindows.length <= 1) return null;
+
+            const masterRatio = this._getMasterRatio(ws);
+            const splitX = areaX + Math.floor((areaW - gap) * masterRatio);
+            return { x: splitX, y: areaY, w: gap, h: areaH };
+        }
+
+        // Dwindle: walk BSP path to find the controlling split
+        const tree = this._bspGetTree(ws);
+        if (!tree) return null;
+        const path = [];
+        this._bspFindPath(tree, op.window, path);
+
+        const isHorizontalDrag = op.edge === 'left' || op.edge === 'right';
+        for (let i = path.length - 1; i >= 0; i--) {
+            const node = path[i];
+            if (node.type !== 'split') continue;
+            if ((node.direction === 'h') === isHorizontalDrag) {
+                const frame = op.origFrame;
+                if (isHorizontalDrag) {
+                    const size = frame.width;
+                    const split = Math.floor((size - gap) * node.ratio);
+                    const inFirstChild = frame.x <= areaX + split;
+                    const splitScreen = inFirstChild
+                        ? areaX + split
+                        : areaX + split + gap;
+                    return { x: splitScreen, y: areaY, w: gap, h: areaH };
+                } else {
+                    const size = frame.height;
+                    const split = Math.floor((size - gap) * node.ratio);
+                    const inFirstChild = frame.y <= areaY + split;
+                    const splitScreen = inFirstChild
+                        ? areaY + split
+                        : areaY + split + gap;
+                    return { x: areaX, y: splitScreen, w: areaW, h: gap };
+                }
+            }
+        }
+        return null;
+    }
+
+    // --- Drop Zone Highlight (during title bar drag) ---
+
+    _createDropHighlight() {
+        if (this._dropHighlight) return;
+        this._dropHighlight = new St.Widget({
+            name: 'plaid-drop-highlight',
+            style: 'background-color: rgba(53, 132, 228, 0.25);',
+            reactive: false,
+            visible: true,
+        });
+        this._borderContainer.add_child(this._dropHighlight);
+    }
+
+    _showDropHighlight(win) {
+        if (!win) return;
+        if (!this._dropHighlight) this._createDropHighlight();
+        const frame = win.get_frame_rect();
+        this._dropHighlight.set_position(frame.x, frame.y);
+        this._dropHighlight.set_size(frame.width, frame.height);
+        this._dropHighlight.show();
+    }
+
+    _removeDropHighlight() {
+        this._currentDropTarget = null;
+        if (this._dropHighlight) {
+            this._dropHighlight.destroy();
+            this._dropHighlight = null;
+        }
     }
 
     // --- Pick Mode ---
