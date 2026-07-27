@@ -257,7 +257,8 @@ export default class TilingWMExtension extends Extension {
             if (frame.width === 0 || frame.height === 0) return;
             const centerX = frame.x + frame.width / 2;
             const centerY = frame.y + frame.height / 2;
-            const seat = Clutter.get_default_backend().get_seat();
+            const backend = Clutter.get_default_backend();
+            const seat = backend.get_default_seat();
             seat.warp_pointer(centerX, centerY);
         } catch (e) {
             log(`[tiling-wm] _moveCursorToWindow failed: ${e.message}`);
