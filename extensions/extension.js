@@ -28,6 +28,7 @@ export default class TilingWMExtension extends Extension {
         this._grabInitRect = null;
         this._liveResizeId = 0;
         this._swapTarget = null;
+        this._lastSwapTarget = null;
 
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
@@ -88,6 +89,8 @@ export default class TilingWMExtension extends Extension {
         this._stackRatios = null;
         this._lastFocusedPerWorkspace = null;
         this._signals = null;
+        this._swapTarget = null;
+        this._lastSwapTarget = null;
     }
 
     _disableMutterDefaults() {
@@ -1319,12 +1322,23 @@ export default class TilingWMExtension extends Extension {
     _handleGrabEnd(metaWindow, grabOp) {
         const wasTracking = this._grabOp !== null;
 
-        if (this._isMoveGrab(grabOp) && wasTracking && this._swapTarget && metaWindow) {
-            const target = this._swapTarget;
-            if (target !== metaWindow && this._shouldManage(target) && !this._isFloating(target)) {
-                this._performSwap(metaWindow, target);
-                const ws = metaWindow.get_workspace();
-                if (ws) this._retileWorkspace(ws);
+        if (wasTracking && metaWindow && !this._isFloating(metaWindow)) {
+            const ws = metaWindow.get_workspace();
+            if (ws) {
+                if (this._isMoveGrab(grabOp)) {
+                    if (this._lastSwapTarget) {
+                        const target = this._lastSwapTarget;
+                        if (target !== metaWindow && this._shouldManage(target) && !this._isFloating(target)) {
+                            this._updateRatiosAtGrabEnd(metaWindow, ws);
+                        } else {
+                            this._swapInLayout(metaWindow, target);
+                        }
+                    }
+                    this._retileWorkspace(ws);
+                } else {
+                    this._updateRatiosAtGrabEnd(metaWindow, ws);
+                    this._retileWorkspace(ws);
+                }
             }
         }
 
@@ -1332,14 +1346,7 @@ export default class TilingWMExtension extends Extension {
         this._grabOp = null;
         this._grabInitRect = null;
         this._swapTarget = null;
-
-        if (wasTracking && metaWindow && !this._isFloating(metaWindow)) {
-            const ws = metaWindow.get_workspace();
-            if (ws) {
-                this._updateRatiosAtGrabEnd(metaWindow, ws);
-                this._retileWorkspace(ws);
-            }
-        }
+        this._lastSwapTarget = null;
     }
 
     _updateRatiosAtGrabEnd(win, ws) {
@@ -1425,9 +1432,31 @@ export default class TilingWMExtension extends Extension {
 
                 this._moveTiledExcept(metaWindow);
                 this._doUpdateBorders();
+            } else if (mode === 'move') {
+                const frameChanged = frame.width !== lastWidth || frame.height !== lastHeight;
+                if (frameChanged) {
+                    lastWidth = frame.width;
+                    lastHeight = frame.height;
+                }
             }
 
             this._checkSwapTarget(metaWindow);
+
+            if (mode === 'move') {
+                const target = this._swapTarget;
+                if (target !== this._lastSwapTarget) {
+                    if (this._lastSwapTarget)
+                        this._swapInLayout(metaWindow, this._lastSwapTarget);
+                    if (target)
+                        this._swapInLayout(metaWindow, target);
+                    this._lastSwapTarget = target;
+                }
+                if (this._lastSwapTarget) {
+                    this._moveTiledExcept(metaWindow);
+                    this._doUpdateBorders();
+                }
+            }
+
             return GLib.SOURCE_CONTINUE;
         });
     }
@@ -1543,32 +1572,40 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
     }
 
-    _performSwap(winA, winB) {
+    _swapInLayout(winA, winB) {
+        if (!winA || !winB) return;
         const ws = winA.get_workspace();
         if (!ws) return;
-
         const layout = this._settings.get_string('layout');
         if (layout === 'dwindle') {
             const tree = this._bspGetTree(ws);
             if (tree) this._bspSwapWindows(tree, winA, winB);
-            return;
+        } else {
+            const order = this._getWorkspaceOrder(ws);
+            const idxA = order.indexOf(winA);
+            const idxB = order.indexOf(winB);
+            if (idxA !== -1 && idxB !== -1) {
+                order[idxA] = winB;
+                order[idxB] = winA;
+            }
         }
+    }
 
-        const frameA = winA.get_frame_rect();
-        const frameB = winB.get_frame_rect();
-        try {
-            winA.move_resize_frame(false, frameB.x, frameB.y, frameB.width, frameB.height);
-            winB.move_resize_frame(false, frameA.x, frameA.y, frameA.width, frameA.height);
-        } catch (e) {
-            log(`[plaid] swap move_resize failed: ${e.message}`);
-        }
+    _performSwap(winA, winB) {
+        this._swapInLayout(winA, winB);
+        const ws = winA.get_workspace();
+        if (!ws) return;
 
-        const order = this._getWorkspaceOrder(ws);
-        const idxA = order.indexOf(winA);
-        const idxB = order.indexOf(winB);
-        if (idxA !== -1 && idxB !== -1) {
-            order[idxA] = winB;
-            order[idxB] = winA;
+        const layout = this._settings.get_string('layout');
+        if (layout !== 'dwindle') {
+            const frameA = winA.get_frame_rect();
+            const frameB = winB.get_frame_rect();
+            try {
+                winA.move_resize_frame(false, frameB.x, frameB.y, frameB.width, frameB.height);
+                winB.move_resize_frame(false, frameA.x, frameA.y, frameA.width, frameA.height);
+            } catch (e) {
+                log(`[plaid] swap move_resize failed: ${e.message}`);
+            }
         }
     }
 
