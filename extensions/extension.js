@@ -920,10 +920,14 @@ export default class TilingWMExtension extends Extension {
 
             if (borderWidth === 0) continue;
 
+            const buffer = win.get_buffer_rect();
+            const offsetX = frame.x - buffer.x;
+            const offsetY = frame.y - buffer.y;
+
             const border = new St.Widget({
                 name: 'tiling-border',
-                x: -borderWidth + 10,
-                y: -borderWidth + 10,
+                x: offsetX - borderWidth,
+                y: offsetY - borderWidth,
                 width: frame.width + borderWidth * 2,
                 height: frame.height + borderWidth * 2,
                 style: `border: ${borderWidth}px solid ${borderColor}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
