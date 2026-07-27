@@ -62,12 +62,6 @@
       <description>Radius of border corners in pixels (0 for square corners)</description>
     </key>
 
-    <key name="corner-radius" type="i">
-      <default>0</default>
-      <summary>Window corner radius</summary>
-      <description>Radius of window corners in pixels, applied via shader (0 = no rounding)</description>
-    </key>
-
     <!-- Float window patterns (WM_CLASS instance names) -->
     <key name="float-windows" type="as">
       <default><![CDATA[['gimp', 'steam', 'vlc']]]></default>

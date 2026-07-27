@@ -202,20 +202,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         styleGroup.add(radiusRow);
         settings.bind('border-radius', radiusRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-
-        const windowRadiusRow = new Adw.SpinRow({
-            title: _('Window Corner Radius'),
-            subtitle: _('Rounds the actual window pixels (shader effect, 0 = off)'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 50,
-                step_increment: 1,
-                page_increment: 5,
-                value: settings.get_int('corner-radius'),
-            }),
-        });
-        styleGroup.add(windowRadiusRow);
-        settings.bind('corner-radius', windowRadiusRow, 'value', Gio.SettingsBindFlags.DEFAULT);
     }
 
     _buildColorRow(settings, key, title) {
