@@ -1,4 +1,4 @@
-# Tiling Window Manager for GNOME
+# Plaid
 
 A tiling window manager extension for GNOME Shell 50. Tiles windows automatically with configurable layouts, gaps, borders, and keybindings.
 
@@ -27,13 +27,13 @@ A tiling window manager extension for GNOME Shell 50. Tiles windows automaticall
 
 ```bash
 # Copy to GNOME Shell extensions directory
-cp -r extensions/* ~/.local/share/gnome-shell/extensions/tiling-wm@gnome/
+cp -r extensions/* ~/.local/share/gnome-shell/extensions/plaid@gnome/
 
 # Recompile schemas (if editing the schema)
-glib-compile-schemas ~/.local/share/gnome-shell/extensions/tiling-wm@gnome/schemas/
+glib-compile-schemas ~/.local/share/gnome-shell/extensions/plaid@gnome/schemas/
 
 # Enable the extension
-gnome-extensions enable tiling-wm@gnome
+gnome-extensions enable plaid@gnome
 
 # Reload GNOME Shell (X11 only, Alt+F2 then r) or log out/in (Wayland)
 ```

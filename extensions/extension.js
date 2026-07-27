@@ -31,7 +31,7 @@ export default class TilingWMExtension extends Extension {
 
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
-            name: 'tiling-wm-borders',
+            name: 'plaid-borders',
             x: 0,
             y: 0,
             width: 0,
@@ -313,7 +313,7 @@ export default class TilingWMExtension extends Extension {
             seat.warp_pointer(centerX, centerY);
             return true;
         } catch (e) {
-            log(`[tiling-wm] _moveCursorToWindow failed: ${e.message}`);
+            log(`[plaid] _moveCursorToWindow failed: ${e.message}`);
             return false;
         }
     }
@@ -842,7 +842,7 @@ export default class TilingWMExtension extends Extension {
         try {
             win.move_resize_frame(false, x, y, w, h);
         } catch (e) {
-            log(`[tiling-wm] _moveWindow failed: ${e.message}`);
+            log(`[plaid] _moveWindow failed: ${e.message}`);
         }
     }
 
@@ -1082,7 +1082,7 @@ export default class TilingWMExtension extends Extension {
                     false, frameA.x, frameA.y, frameA.width, frameA.height
                 );
             } catch (e) {
-                log(`[tiling-wm] swap move_resize failed: ${e.message}`);
+                log(`[plaid] swap move_resize failed: ${e.message}`);
             }
 
             const order = this._getWorkspaceOrder(ws);
@@ -1468,7 +1468,7 @@ export default class TilingWMExtension extends Extension {
             winA.move_resize_frame(false, frameB.x, frameB.y, frameB.width, frameB.height);
             winB.move_resize_frame(false, frameA.x, frameA.y, frameA.width, frameA.height);
         } catch (e) {
-            log(`[tiling-wm] mouse swap move_resize failed: ${e.message}`);
+            log(`[plaid] mouse swap move_resize failed: ${e.message}`);
         }
 
         const order = this._getWorkspaceOrder(ws);

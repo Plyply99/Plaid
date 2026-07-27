@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-  <schema id="org.gnome.shell.extensions.tiling-wm"
-          path="/org/gnome/shell/extensions/tiling-wm/">
+  <schema id="org.gnome.shell.extensions.plaid"
+          path="/org/gnome/shell/extensions/plaid/">
 
     <key name="enabled" type="b">
       <default>true</default>

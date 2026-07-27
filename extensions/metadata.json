@@ -1,9 +1,9 @@
 {
-  "uuid": "tiling-wm@gnome",
-  "name": "Tiling Window Manager",
-  "description": "Turns GNOME into a tiling window manager with configurable borders, keybinds, and float windows",
+  "uuid": "plaid@gnome",
+  "name": "Plaid",
+  "description": "A tiling window manager for GNOME with configurable borders, keybinds, and float rules",
   "shell-version": ["50"],
   "version": 5020,
   "url": "",
-  "settings-schema": "org.gnome.shell.extensions.tiling-wm"
+  "settings-schema": "org.gnome.shell.extensions.plaid"
 }
