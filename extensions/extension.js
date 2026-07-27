@@ -1698,15 +1698,14 @@ export default class TilingWMExtension extends Extension {
             const leftCount = Math.floor(numStack / 2);
             const rightCount = numStack - leftCount;
 
-            let masterW, masterX;
+            let masterW;
             if (draggedIdx === 0) {
-                const frame = skipWindow.get_frame_rect();
-                masterW = Math.max(100, Math.min(areaW * 0.85, frame.width));
-                masterX = frame.x;
+                masterW = skipWindow.get_frame_rect().width;
             } else {
-                masterW = Math.max(100, Math.min(areaW * 0.85, Math.floor(areaW * this._getMasterRatio(ws))));
-                masterX = areaX + Math.floor((areaW - masterW) / 2);
+                masterW = Math.floor(areaW * this._getMasterRatio(ws));
             }
+            masterW = Math.max(100, Math.min(areaW * 0.85, masterW));
+            const masterX = areaX + Math.floor((areaW - masterW) / 2);
 
             if (tiledWindows[0] !== skipWindow)
                 this._safeMove(tiledWindows[0], masterX, areaY, masterW, areaH);
