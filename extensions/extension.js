@@ -747,6 +747,11 @@ export default class TilingWMExtension extends Extension {
         if (!this._settings.get_boolean('enabled')) return;
 
         const focusWindow = global.display.focus_window;
+
+        if (this._settings.get_boolean('follow-focus') && focusWindow) {
+            this._moveCursorToWindow(focusWindow);
+        }
+
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
         const inactiveWidth = this._settings.get_int('inactive-border-width');
