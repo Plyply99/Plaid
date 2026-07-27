@@ -1,11 +1,61 @@
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
+
+const CornerEffect = GObject.registerClass({
+    GTypeName: 'PlaidCornerEffect',
+    Properties: {
+        'radius': GObject.ParamSpec.double(
+            'radius', 'Radius', 'Radius',
+            GObject.ParamFlags.READWRITE,
+            0, 200, 0,
+        ),
+    },
+}, class CornerEffect extends Clutter.ShaderEffect {
+    _init(params = {}) {
+        super._init(params);
+        this._radius = 0;
+        this._sizeId = 0;
+    }
+
+    get radius() {
+        return this._radius;
+    }
+
+    set radius(value) {
+        if (this._radius !== value) {
+            this._radius = value;
+            this.set_uniform_value('radius', parseFloat(value));
+        }
+    }
+
+    vfunc_set_actor(actor) {
+        if (this._sizeId) {
+            const old = this.get_actor();
+            if (old) old.disconnect(this._sizeId);
+            this._sizeId = 0;
+        }
+        if (actor) {
+            this._updateSize(actor);
+            this._sizeId = actor.connect('notify::size', () => {
+                this._updateSize(actor);
+            });
+        }
+        super.vfunc_set_actor(actor);
+    }
+
+    _updateSize(actor) {
+        const [w, h] = actor.get_size();
+        this.set_uniform_value('width', parseFloat(w));
+        this.set_uniform_value('height', parseFloat(h));
+    }
+});
 
 export default class TilingWMExtension extends Extension {
     enable() {
@@ -31,6 +81,14 @@ export default class TilingWMExtension extends Extension {
         this._lastSwapTarget = null;
         this._dropPreview = null;
         this._decorationsHidden = new Set();
+        this._cornerEffects = new Map();
+        this._cornerShaderSource = null;
+        const shaderPath = this.path + '/corner.glsl';
+        try {
+            this._cornerShaderSource = Shell.get_file_contents_utf8_sync(shaderPath);
+        } catch (e) {
+            log(`[plaid] Failed to load corner shader: ${e.message}`);
+        }
 
         this._disableMutterDefaults();
         this._dropOverlay = new St.Widget({
@@ -52,6 +110,7 @@ export default class TilingWMExtension extends Extension {
                 }
             }
             this._retileAll();
+            this._applyCornerRadiusAll();
             return false;
         });
     }
@@ -69,6 +128,7 @@ export default class TilingWMExtension extends Extension {
         this._disconnectGrabSignals();
         this._restoreMutterDefaults();
         this._removeAllBorders();
+        this._removeAllCornerEffects();
         this._hideDropPreview();
         if (this._dropOverlay) {
             this._dropOverlay.destroy();
@@ -89,6 +149,8 @@ export default class TilingWMExtension extends Extension {
         this._restoreAllDecorations();
         this._decorationsHidden = null;
         this._signals = null;
+        this._cornerEffects = null;
+        this._cornerShaderSource = null;
         this._swapTarget = null;
         this._lastSwapTarget = null;
     }
@@ -150,15 +212,21 @@ export default class TilingWMExtension extends Extension {
                     const ws = win.get_workspace();
                     if (ws) this._raiseFloatingWindows(ws);
                 };
+                const doCorner = () => {
+                    if (this._destroyed) return;
+                    this._applyCornerRadius(win);
+                };
                 const actor = win.get_compositor_private();
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
                         doRaise();
+                        doCorner();
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         doRaise();
+                        doCorner();
                         return false;
                     });
                 }
@@ -244,6 +312,9 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-width', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::border-radius', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::corner-radius', () => {
+            this._applyCornerRadiusAll();
+        }));
         this._addSignal(this._settings, this._settings.connect('changed::pick-mode', () => {
             if (this._settings.get_boolean('pick-mode')) {
                 this._startPickMode();
@@ -390,6 +461,7 @@ export default class TilingWMExtension extends Extension {
             }
             if (this._settings.get_boolean('hide-title-bars'))
                 this._hideDecorations(win);
+            this._applyCornerRadius(win);
         }
     }
 
@@ -400,6 +472,7 @@ export default class TilingWMExtension extends Extension {
         this._decorationsHidden.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
+        this._removeCornerEffect(win);
         for (const [workspace, lastWin] of this._lastFocusedPerWorkspace) {
             if (lastWin === win) this._lastFocusedPerWorkspace.delete(workspace);
         }
@@ -895,6 +968,71 @@ export default class TilingWMExtension extends Extension {
         } catch (e) {
             log(`[plaid] _moveWindow failed: ${e.message}`);
         }
+    }
+
+    _applyCornerRadius(win) {
+        if (!this._settings || this._destroyed) return;
+        if (!this._cornerShaderSource) return;
+        const radius = this._settings.get_int('corner-radius');
+        const actor = win.get_compositor_private();
+        if (!actor) return;
+
+        const existing = this._cornerEffects.get(win);
+        if (existing) {
+            existing.radius = radius;
+            if (radius <= 0) this._removeCornerEffect(win);
+            actor.queue_repaint();
+            return;
+        }
+
+        if (radius <= 0) return;
+
+        const effect = new CornerEffect({ radius });
+        try {
+            effect.set_shader_source(this._cornerShaderSource);
+        } catch (e) {
+            log(`[plaid] Failed to set shader source: ${e.message}`);
+            return;
+        }
+        actor.add_effect(effect);
+        this._cornerEffects.set(win, effect);
+    }
+
+    _applyCornerRadiusAll() {
+        if (!this._settings || this._destroyed) return;
+        const radius = this._settings.get_int('corner-radius');
+        if (radius <= 0) {
+            this._removeAllCornerEffects();
+            return;
+        }
+        for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+            const ws = global.workspace_manager.get_workspace_by_index(i);
+            for (const win of ws.list_windows()) {
+                const actor = win.get_compositor_private();
+                if (actor) this._applyCornerRadius(win);
+            }
+        }
+    }
+
+    _removeCornerEffect(win) {
+        const effect = this._cornerEffects.get(win);
+        if (effect) {
+            const actor = win.get_compositor_private();
+            if (actor) {
+                try { actor.remove_effect(effect); } catch (_e) {}
+            }
+            this._cornerEffects.delete(win);
+        }
+    }
+
+    _removeAllCornerEffects() {
+        for (const [win, effect] of this._cornerEffects) {
+            const actor = win.get_compositor_private();
+            if (actor) {
+                try { actor.remove_effect(effect); } catch (_e) {}
+            }
+        }
+        this._cornerEffects.clear();
     }
 
     _updateBorders() {
