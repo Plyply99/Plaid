@@ -119,7 +119,6 @@ export default class TilingWMExtension extends Extension {
 
     _connectSignals() {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
-            log(`[plaid] window-created: "${win.get_title()}" type=${win.get_window_type()} skip_taskbar=${win.is_skip_taskbar()} transient=${!!win.get_transient_for()} class=${win.get_wm_class_instance()}`);
             if (this._shouldManage(win)) {
                 this._addWindow(win);
                 const doRetile = () => {
