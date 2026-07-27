@@ -641,7 +641,7 @@ export default class TilingWMExtension extends Extension {
         if (!node) return;
         if (node.type === 'empty') return;
         if (node.type === 'leaf') {
-            this._moveWindow(node.window, x, y, w, h);
+            this._safeMove(node.window, x, y, w, h);
             return;
         }
         const isH = node.direction === 'h';
@@ -1268,11 +1268,12 @@ export default class TilingWMExtension extends Extension {
 
         this._grabOp = grabOp;
         this._grabInitRect = metaWindow.get_frame_rect();
+        this._swapTarget = null;
 
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
-            this._startLiveResizeLoop(metaWindow);
+            this._startGrabLoop(metaWindow, 'resize');
         } else if (this._isMoveGrab(grabOp) && !this._isFloating(metaWindow)) {
-            this._swapTarget = null;
+            this._startGrabLoop(metaWindow, 'move');
         } else {
             this._grabOp = null;
             this._grabInitRect = null;
@@ -1280,7 +1281,9 @@ export default class TilingWMExtension extends Extension {
     }
 
     _handleGrabEnd(metaWindow, grabOp) {
-        if (this._isMoveGrab(grabOp) && this._swapTarget && metaWindow) {
+        const wasTracking = this._grabOp !== null;
+
+        if (this._isMoveGrab(grabOp) && wasTracking && this._swapTarget && metaWindow) {
             const target = this._swapTarget;
             if (target !== metaWindow && this._shouldManage(target) && !this._isFloating(target)) {
                 this._performSwap(metaWindow, target);
@@ -1294,28 +1297,32 @@ export default class TilingWMExtension extends Extension {
         this._grabInitRect = null;
         this._swapTarget = null;
 
-        if (metaWindow && !this._isFloating(metaWindow)) {
+        if (wasTracking && metaWindow && !this._isFloating(metaWindow)) {
             const ws = metaWindow.get_workspace();
             if (ws) this._retileWorkspace(ws);
         }
     }
 
     _isResizeGrab(grabOp) {
-        const op = grabOp & ~1024;
-        return (op >= Meta.GrabOp.RESIZING_N && op <= Meta.GrabOp.RESIZING_SW) ||
-            op === Meta.GrabOp.KEYBOARD_RESIZING_UNKNOWN ||
-            (op >= Meta.GrabOp.KEYBOARD_RESIZING_N && op <= Meta.GrabOp.KEYBOARD_RESIZING_S);
+        // GNOME 50: MetaGrabOp is bitfield-encoded.
+        // WINDOW_BASE=1, direction in bits 12-15 (W=1,E=2,S=4,N=8).
+        // Resize ops have direction bits; move ops have none.
+        if (grabOp === Meta.GrabOp.KEYBOARD_RESIZING_UNKNOWN) return true;
+        if (grabOp === Meta.GrabOp.NONE) return false;
+        const direction = (grabOp >> 12) & 0xF;
+        return (grabOp & 1) !== 0 && direction !== 0;
     }
 
     _isMoveGrab(grabOp) {
-        const op = grabOp & ~1024;
-        return op === Meta.GrabOp.MOVING || op === Meta.GrabOp.MOVING_UNCONSTRAINED ||
-            op === Meta.GrabOp.KEYBOARD_MOVING;
+        if (grabOp === Meta.GrabOp.NONE) return false;
+        if (grabOp === Meta.GrabOp.KEYBOARD_RESIZING_UNKNOWN) return false;
+        const direction = (grabOp >> 12) & 0xF;
+        return (grabOp & 1) !== 0 && direction === 0;
     }
 
-    _startLiveResizeLoop(metaWindow) {
+    _startGrabLoop(metaWindow, mode) {
         this._stopLiveResizeLoop();
-        const isHorizontal = this._isHorizontalGrab(this._grabOp);
+        const isHorizontal = mode === 'resize' ? this._isHorizontalGrab(this._grabOp) : false;
         let lastWidth = this._grabInitRect?.width || 0;
         let lastHeight = this._grabInitRect?.height || 0;
 
@@ -1328,20 +1335,20 @@ export default class TilingWMExtension extends Extension {
             const frame = metaWindow.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
 
-            if (frame.width === lastWidth && frame.height === lastHeight &&
-                frame.x === this._grabInitRect.x && frame.y === this._grabInitRect.y) {
-                this._checkSwapTarget(metaWindow);
-                return GLib.SOURCE_CONTINUE;
+            if (mode === 'resize') {
+                if (frame.width === lastWidth && frame.height === lastHeight) {
+                    this._checkSwapTarget(metaWindow);
+                    return GLib.SOURCE_CONTINUE;
+                }
+                lastWidth = frame.width;
+                lastHeight = frame.height;
+
+                this._updateGrabRatio(metaWindow, frame, isHorizontal);
+                this._moveTiledExcept(metaWindow);
+                this._doUpdateBorders();
             }
-            lastWidth = frame.width;
-            lastHeight = frame.height;
 
-            this._updateGrabRatio(metaWindow, frame, isHorizontal);
-            this._moveTiledExcept(metaWindow);
-            this._doUpdateBorders();
-            this._grabInitRect = { x: frame.x, y: frame.y, width: frame.width, height: frame.height };
             this._checkSwapTarget(metaWindow);
-
             return GLib.SOURCE_CONTINUE;
         });
     }
@@ -1354,9 +1361,8 @@ export default class TilingWMExtension extends Extension {
     }
 
     _isHorizontalGrab(grabOp) {
-        const op = grabOp & ~1024;
-        return op === Meta.GrabOp.RESIZING_E || op === Meta.GrabOp.RESIZING_W ||
-            op === Meta.GrabOp.KEYBOARD_RESIZING_E || op === Meta.GrabOp.KEYBOARD_RESIZING_W;
+        const direction = (grabOp >> 12) & 0xF;
+        return direction !== 0 && (direction & 0xC) === 0;
     }
 
     _updateGrabRatio(metaWindow, currentFrame, isHorizontal) {
@@ -1438,7 +1444,6 @@ export default class TilingWMExtension extends Extension {
         const layout = this._settings.get_string('layout');
         const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         const gap = this._settings.get_int('gap');
-        const singleGap = this._settings.get_int('single-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
@@ -1454,31 +1459,29 @@ export default class TilingWMExtension extends Extension {
             const stackW = areaW - masterW - gap;
             const numStack = tiledWindows.length - 1;
 
-            for (let i = 0; i < tiledWindows.length; i++) {
-                if (tiledWindows[i] === skipWindow) continue;
-                if (i === 0) {
-                    this._safeMove(tiledWindows[i], areaX, areaY, masterW, areaH);
-                } else {
-                    const stackRatios = this._getStackRatios(ws);
-                    const weights = [];
-                    let totalWeight = 0;
-                    for (let j = 0; j < numStack; j++) {
-                        const w = stackRatios.has(j) ? stackRatios.get(j) : 1.0;
-                        weights.push(w);
-                        totalWeight += w;
-                    }
-                    let y = areaY;
-                    for (let j = 0; j < numStack; j++) {
-                        const isLast = j === numStack - 1;
-                        const h = isLast
-                            ? (areaY + areaH - y)
-                            : Math.floor((areaH - gap * (numStack - 1)) * weights[j] / totalWeight);
-                        if (j === i - 1 && tiledWindows[i] !== skipWindow) {
-                            this._safeMove(tiledWindows[i], areaX + masterW + gap, y, stackW, h);
-                        }
-                        if (!isLast) y += h + gap;
-                    }
+            if (tiledWindows[0] !== skipWindow) {
+                this._safeMove(tiledWindows[0], areaX, areaY, masterW, areaH);
+            }
+
+            const stackRatios = this._getStackRatios(ws);
+            const weights = [];
+            let totalWeight = 0;
+            for (let j = 0; j < numStack; j++) {
+                const w = stackRatios.has(j) ? stackRatios.get(j) : 1.0;
+                weights.push(w);
+                totalWeight += w;
+            }
+
+            let y = areaY;
+            for (let j = 0; j < numStack; j++) {
+                const isLast = j === numStack - 1;
+                const h = isLast
+                    ? (areaY + areaH - y)
+                    : Math.floor((areaH - gap * (numStack - 1)) * weights[j] / totalWeight);
+                if (tiledWindows[j + 1] !== skipWindow) {
+                    this._safeMove(tiledWindows[j + 1], areaX + masterW + gap, y, stackW, h);
                 }
+                if (!isLast) y += h + gap;
             }
         } else if (layout === 'dwindle') {
             const tree = this._bspGetTree(ws);
@@ -1533,9 +1536,11 @@ export default class TilingWMExtension extends Extension {
 
     _checkSwapTarget(metaWindow) {
         if (!this._isMoveGrab(this._grabOp)) return;
+        const ws = metaWindow.get_workspace();
         const [px, py] = global.get_pointer();
         const target = global.display.get_window_at_position(px, py);
-        if (target && target !== metaWindow && this._shouldManage(target) && !this._isFloating(target)) {
+        if (target && target !== metaWindow && target.get_workspace() === ws &&
+            this._shouldManage(target) && !this._isFloating(target)) {
             this._swapTarget = target;
         } else {
             this._swapTarget = null;
