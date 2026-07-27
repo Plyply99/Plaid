@@ -897,6 +897,10 @@ export default class TilingWMExtension extends Extension {
             this._borderContainer.add_child(border);
             this._windowBorders.set(win, border);
         }
+        if (this._previewLine)
+            this._borderContainer.set_child_above_sibling(this._previewLine, null);
+        if (this._dropHighlight)
+            this._borderContainer.set_child_above_sibling(this._dropHighlight, null);
     }
 
     _removeAllBorders() {
@@ -904,7 +908,9 @@ export default class TilingWMExtension extends Extension {
         let child = this._borderContainer.get_first_child();
         while (child) {
             const next = child.get_next_sibling();
-            child.destroy();
+            if (child !== this._previewLine && child !== this._dropHighlight) {
+                child.destroy();
+            }
             child = next;
         }
         this._windowBorders.clear();
