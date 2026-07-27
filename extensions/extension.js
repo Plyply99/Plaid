@@ -26,7 +26,7 @@ export default class TilingWMExtension extends Extension {
         this._stagePressId = 0;
         this._stageReleaseId = 0;
         this._stageMotionId = 0;
-        this._pendingCursorWarp = new Set();
+
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
             name: 'tiling-wm-borders',
@@ -84,7 +84,6 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = null;
         this._stackRatios = null;
         this._signals = null;
-        this._pendingCursorWarp = null;
     }
 
     _disableMutterDefaults() {
@@ -118,7 +117,6 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
             if (this._shouldManage(win)) {
                 this._addWindow(win);
-                this._pendingCursorWarp.add(win);
                 const doRetile = () => {
                     if (this._destroyed) return;
                     const ws = win.get_workspace();
@@ -129,10 +127,12 @@ export default class TilingWMExtension extends Extension {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
                         doRetile();
+                        this._cursorWarpDeferred(win);
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         doRetile();
+                        this._cursorWarpDeferred(win);
                         return false;
                     });
                 }
@@ -261,14 +261,40 @@ export default class TilingWMExtension extends Extension {
     _moveCursorToWindow(win) {
         try {
             const frame = win.get_frame_rect();
-            if (frame.width === 0 || frame.height === 0) return;
+            if (frame.width === 0 || frame.height === 0) return false;
             const centerX = frame.x + frame.width / 2;
             const centerY = frame.y + frame.height / 2;
             const backend = Clutter.get_default_backend();
             const seat = backend.get_default_seat();
             seat.warp_pointer(centerX, centerY);
+            return true;
         } catch (e) {
             log(`[tiling-wm] _moveCursorToWindow failed: ${e.message}`);
+            return false;
+        }
+    }
+
+    _cursorWarpDeferred(win) {
+        if (this._destroyed) return;
+        let prevFrame = null;
+        let retries = 0;
+        const MAX_RETRIES = 6;
+        const tryWarp = () => {
+            if (this._destroyed || retries >= MAX_RETRIES) return false;
+            retries++;
+            if (!win || !win.get_workspace()) return false;
+            const frame = win.get_frame_rect();
+            if (frame.width === 0 || frame.height === 0) return true;
+            if (prevFrame && frame.x === prevFrame.x && frame.y === prevFrame.y &&
+                frame.width === prevFrame.w && frame.height === prevFrame.h) {
+                this._moveCursorToWindow(win);
+                return false;
+            }
+            prevFrame = { x: frame.x, y: frame.y, w: frame.width, h: frame.height };
+            return true;
+        };
+        if (tryWarp()) {
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, tryWarp);
         }
     }
 
@@ -428,13 +454,6 @@ export default class TilingWMExtension extends Extension {
         }
 
         this._doUpdateBorders();
-
-        for (const win of this._pendingCursorWarp) {
-            if (win.get_workspace() === workspace) {
-                this._moveCursorToWindow(win);
-                this._pendingCursorWarp.delete(win);
-            }
-        }
     }
 
     _getMasterRatio(workspace) {
