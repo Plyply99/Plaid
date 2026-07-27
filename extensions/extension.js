@@ -32,16 +32,6 @@ export default class TilingWMExtension extends Extension {
         this._dropPreview = null;
 
         this._disableMutterDefaults();
-        this._borderContainer = new St.Widget({
-            name: 'plaid-borders',
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-            reactive: false,
-            visible: true,
-        });
-        global.window_group.add_child(this._borderContainer);
         this._dropOverlay = new St.Widget({
             reactive: false,
             visible: true,
@@ -49,9 +39,9 @@ export default class TilingWMExtension extends Extension {
         Main.layoutManager.uiGroup.add_child(this._dropOverlay);
         this._connectSignals();
         this._registerKeybindings();
-        this._updateBorderContainer();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
+            this._updateDropOverlaySize();
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 for (const win of ws.list_windows()) {
@@ -79,10 +69,6 @@ export default class TilingWMExtension extends Extension {
         this._restoreMutterDefaults();
         this._removeAllBorders();
         this._hideDropPreview();
-        if (this._borderContainer) {
-            this._borderContainer.destroy();
-            this._borderContainer = null;
-        }
         if (this._dropOverlay) {
             this._dropOverlay.destroy();
             this._dropOverlay = null;
@@ -188,7 +174,7 @@ export default class TilingWMExtension extends Extension {
             }
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
-            this._updateBorderContainer();
+            this._updateDropOverlaySize();
             this._retileAll();
         }));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('workspace-added', (_m, index) => {
@@ -490,21 +476,9 @@ export default class TilingWMExtension extends Extension {
         const tiled = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
         const windows = workspace.list_windows();
-        const floatActors = [];
         for (const win of windows) {
             if (!tiled.includes(win)) {
                 try { win.make_above(); } catch (_e) {}
-                const actor = win.get_compositor_private();
-                if (actor) floatActors.push(actor);
-            }
-        }
-        if (this._borderContainer && floatActors.length > 0) {
-            const children = global.window_group.get_children();
-            for (const child of children) {
-                if (floatActors.includes(child)) {
-                    try { this._borderContainer.lower(child); } catch (_e) {}
-                    break;
-                }
             }
         }
     }
@@ -935,6 +909,8 @@ export default class TilingWMExtension extends Extension {
         for (const win of windows) {
             if (win.is_fullscreen()) continue;
             if (this._grabOp && win === this._getActiveWindow()) continue;
+            const actor = win.get_compositor_private();
+            if (!actor) continue;
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
 
@@ -946,15 +922,15 @@ export default class TilingWMExtension extends Extension {
 
             const border = new St.Widget({
                 name: 'tiling-border',
-                x: frame.x - borderWidth,
-                y: frame.y - borderWidth,
+                x: -borderWidth,
+                y: -borderWidth,
                 width: frame.width + borderWidth * 2,
                 height: frame.height + borderWidth * 2,
                 style: `border: ${borderWidth}px solid ${borderColor}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
                 reactive: false,
                 visible: true,
             });
-            this._borderContainer.add_child(border);
+            actor.add_child(border);
             this._windowBorders.set(win, border);
         }
 
@@ -976,7 +952,7 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _updateBorderContainer() {
+    _updateDropOverlaySize() {
         const monitors = global.display.get_n_monitors();
         let maxX = 0, maxY = 0;
         for (let i = 0; i < monitors; i++) {
@@ -984,8 +960,6 @@ export default class TilingWMExtension extends Extension {
             maxX = Math.max(maxX, geom.x + geom.width);
             maxY = Math.max(maxY, geom.y + geom.height);
         }
-        this._borderContainer.set_position(0, 0);
-        this._borderContainer.set_size(maxX, maxY);
         if (this._dropOverlay) {
             this._dropOverlay.set_position(0, 0);
             this._dropOverlay.set_size(maxX, maxY);
