@@ -1843,33 +1843,36 @@ export default class TilingWMExtension extends Extension {
         if (!win || !this._settings) return;
         if (this._decorationsHidden.has(win)) return;
 
-        const xid = win.get_xwindow();
-        if (xid) {
+        const wasSsd = win.decorated !== undefined && win.decorated;
+        if (wasSsd) {
             try {
-                Gio.Subprocess.new(
-                    ['xprop', '-id', String(xid), '-f', '_MOTIF_WM_HINTS', '32c',
-                     '-set', '_MOTIF_WM_HINTS', '0x2, 0x0, 0x0, 0x0, 0x0'],
-                    Gio.SubprocessFlags.NONE
-                );
+                this._savedDecoratedState.set(win, true);
+                win.decorated = false;
                 this._decorationsHidden.add(win);
-                log(`[plaid] hid X11 decorations for "${win.get_title()}"`);
+                log(`[plaid] hid SSD decorations for "${win.get_title()}"`);
+                return;
             } catch (e) {
-                log(`[plaid] _hideDecorations xprop failed: ${e.message}`);
+                log(`[plaid] decorated=false failed: ${e.message}`);
+                this._savedDecoratedState.delete(win);
             }
+        }
+
+        const xid = win.get_xwindow();
+        if (!xid) {
+            log(`[plaid] Cannot hide titlebar for "${win.get_title()}": CSD window (app draws its own titlebar)`);
             return;
         }
 
         try {
-            if (win.decorated) {
-                win.decorated = false;
-                this._savedDecoratedState.set(win, true);
-                this._decorationsHidden.add(win);
-                log(`[plaid] hid SSD decorations for "${win.get_title()}"`);
-            } else {
-                log(`[plaid] Cannot hide titlebar for "${win.get_title()}": CSD window (app draws its own titlebar)`);
-            }
+            Gio.Subprocess.new(
+                ['xprop', '-id', String(xid), '-f', '_MOTIF_WM_HINTS', '32c',
+                 '-set', '_MOTIF_WM_HINTS', '0x2, 0x0, 0x0, 0x0, 0x0'],
+                Gio.SubprocessFlags.NONE
+            );
+            this._decorationsHidden.add(win);
+            log(`[plaid] hid X11 decorations for "${win.get_title()}"`);
         } catch (e) {
-            log(`[plaid] decorated=false failed: ${e.message}`);
+            log(`[plaid] _hideDecorations failed: ${e.message}`);
         }
     }
 
@@ -1878,40 +1881,42 @@ export default class TilingWMExtension extends Extension {
         if (!this._decorationsHidden.has(win)) return;
 
         if (this._savedDecoratedState && this._savedDecoratedState.has(win)) {
-            try { win.decorated = true; } catch (e) {}
+            try {
+                win.decorated = true;
+            } catch (e) {}
             this._savedDecoratedState.delete(win);
             this._decorationsHidden.delete(win);
             return;
         }
 
         const xid = win.get_xwindow();
-        if (xid) {
-            try {
-                Gio.Subprocess.new(
-                    ['xprop', '-id', String(xid), '-remove', '_MOTIF_WM_HINTS'],
-                    Gio.SubprocessFlags.NONE
-                );
-            } catch (e) {}
-        }
+        if (!xid) return;
+        try {
+            Gio.Subprocess.new(
+                ['xprop', '-id', String(xid), '-remove', '_MOTIF_WM_HINTS'],
+                Gio.SubprocessFlags.NONE
+            );
+        } catch (e) {}
         this._decorationsHidden.delete(win);
     }
 
     _restoreAllDecorations() {
         for (const win of this._decorationsHidden) {
             if (this._savedDecoratedState && this._savedDecoratedState.has(win)) {
-                try { win.decorated = true; } catch (e) {}
+                try {
+                    win.decorated = true;
+                } catch (e) {}
                 this._savedDecoratedState.delete(win);
                 continue;
             }
             const xid = win.get_xwindow();
-            if (xid) {
-                try {
-                    Gio.Subprocess.new(
-                        ['xprop', '-id', String(xid), '-remove', '_MOTIF_WM_HINTS'],
-                        Gio.SubprocessFlags.NONE
-                    );
-                } catch (_e) {}
-            }
+            if (!xid) continue;
+            try {
+                Gio.Subprocess.new(
+                    ['xprop', '-id', String(xid), '-remove', '_MOTIF_WM_HINTS'],
+                    Gio.SubprocessFlags.NONE
+                );
+            } catch (_e) {}
         }
         this._decorationsHidden.clear();
     }
