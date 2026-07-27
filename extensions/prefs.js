@@ -40,6 +40,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(followRow);
         settings.bind('follow-focus', followRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const mouseResizeRow = new Adw.SwitchRow({
+            title: _('Mouse Resize & Swap'),
+            subtitle: _('Drag window edges to resize splits, drag title bar to swap windows'),
+        });
+        group.add(mouseResizeRow);
+        settings.bind('mouse-resize', mouseResizeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const gapRow = new Adw.SpinRow({
             title: _('Window Gap'),
             subtitle: _('Gap between windows in pixels'),

@@ -165,16 +165,18 @@
       <description>When true, the mouse cursor warps to the center of the focused window</description>
     </key>
 
+    <!-- Mouse interaction: edge-resize and title-bar swap -->
+    <key name="mouse-resize" type="b">
+      <default>true</default>
+      <summary>Enable mouse-based resize and swap</summary>
+      <description>When enabled, dragging window edges resizes the split ratio and dragging the title bar swaps windows</description>
+    </key>
+
+    <!-- Pick mode: used to capture a window click for float rules -->
     <key name="pick-mode" type="b">
       <default>false</default>
       <summary>Pick mode active</summary>
       <description>When true, the next window click is captured for float rule creation</description>
-    </key>
-
-    <key name="pick-mode-target" type="s">
-      <default>''</default>
-      <summary>Pick mode target list</summary>
-      <description>Which float list to add to: 'float-windows' or 'float-titles'</description>
     </key>
 
     <key name="pick-mode-class" type="s">

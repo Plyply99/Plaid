@@ -22,6 +22,10 @@ export default class TilingWMExtension extends Extension {
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
+        this._mouseOp = null;
+        this._stagePressId = 0;
+        this._stageReleaseId = 0;
+        this._stageMotionId = 0;
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
             name: 'tiling-wm-borders',
@@ -60,6 +64,7 @@ export default class TilingWMExtension extends Extension {
         for (const id of (this._pendingRetileIds || new Map()).values())
             GLib.source_remove(id);
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
+        this._disconnectStageEvents();
         this._restoreMutterDefaults();
         this._removeAllBorders();
         if (this._borderContainer) {
@@ -185,6 +190,8 @@ export default class TilingWMExtension extends Extension {
             }
         }));
 
+        this._connectMouseEvents();
+
     }
 
     _addSignal(emitter, id) {
@@ -241,11 +248,8 @@ export default class TilingWMExtension extends Extension {
     _shouldManage(win) {
         const wms = win.get_wm_class_instance();
         const title = win.get_title();
-        const wtype = win.get_window_type();
-        const skip = win.is_skip_taskbar();
-        log(`[tiling-wm] _shouldManage: class=${wms} title=${title} type=${wtype} skip_taskbar=${skip} floating_class=${wms && this._floatingClasses.has(wms.toLowerCase())} floating_title=${title && this._floatingTitles.has(title)}`);
-        if (wtype !== Meta.WindowType.NORMAL) return false;
-        if (skip) return false;
+        if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
+        if (win.is_skip_taskbar()) return false;
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         if (title && this._floatingTitles.has(title)) return false;
         return true;
@@ -324,7 +328,15 @@ export default class TilingWMExtension extends Extension {
         if (!actor) return;
         if (this._actorSignals.has(actor)) return;
         const sigIds = [];
-        sigIds.push({ emitter: win, id: win.connect('position-changed', () => this._updateBorders()) });
+        sigIds.push({ emitter: win, id: win.connect('position-changed', () => {
+            if (this._mouseOp && this._mouseOp.active && this._mouseOp.type === 'resize' && this._mouseOp.window === win) {
+                try {
+                    win.move_resize_frame(false, this._mouseOp.frozenX, this._mouseOp.frozenY, this._mouseOp.origFrame.w, this._mouseOp.origFrame.h);
+                } catch (_e) {}
+                return;
+            }
+            this._updateBorders();
+        }) });
         sigIds.push({ emitter: win, id: win.connect('size-changed', () => this._updateBorders()) });
         sigIds.push({ emitter: win, id: win.connect('unmanaged', () => this._removeWindow(win)) });
         sigIds.push({ emitter: actor, id: actor.connect('destroy', () => this._removeWindow(win)) });
@@ -376,13 +388,11 @@ export default class TilingWMExtension extends Extension {
 
     _getWindowsForWorkspace(workspace) {
         const order = this._getWorkspaceOrder(workspace);
-        const all = order.filter(w =>
+        return order.filter(w =>
             w.get_window_type() === Meta.WindowType.NORMAL &&
             !w.is_skip_taskbar() &&
             !w.minimized
         );
-        log(`[tiling-wm] _getWindowsForWorkspace: tracked=${order.length} tiled=${all.length}`);
-        return all;
     }
 
     _retileAll() {
@@ -404,7 +414,6 @@ export default class TilingWMExtension extends Extension {
         if (!this._settings.get_boolean('enabled')) return;
         const tiledWindows = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
-        log(`[tiling-wm] _doRetileWorkspace: tiled=${tiledWindows.length} classes=${tiledWindows.map(w => w.get_wm_class_instance()).join(',')}`);
         if (tiledWindows.length === 0) return;
 
         const layout = this._settings.get_string('layout');
@@ -726,10 +735,6 @@ export default class TilingWMExtension extends Extension {
         if (!win.get_workspace()) return;
         const rect = win.get_frame_rect();
         if (rect.width === 0 || rect.height === 0) return;
-        const classInstance = win.get_wm_class_instance();
-        if (classInstance && classInstance.toLowerCase().includes('firefox')) {
-            log(`[tiling-wm] _moveWindow firefox: x=${x} y=${y} w=${w} h=${h} frame=${JSON.stringify({x:rect.x,y:rect.y,w:rect.width,h:rect.height})}`);
-        }
         try {
             win.move_resize_frame(false, x, y, w, h);
         } catch (e) {
@@ -1098,6 +1103,320 @@ export default class TilingWMExtension extends Extension {
             this._removeAllBorders();
         } else {
             this._retileAll();
+        }
+    }
+
+    // --- Mouse Edge Resize & Title Bar Swap ---
+
+    _detectWindowEdge(win, px, py) {
+        const frame = win.get_frame_rect();
+        const THRESHOLD = 8;
+        const TITLE_BAR_HEIGHT = 30;
+
+        if (py >= frame.y && py < frame.y + TITLE_BAR_HEIGHT)
+            return null;
+
+        const edges = [];
+        if (px >= frame.x && px <= frame.x + THRESHOLD)
+            edges.push({ edge: 'left', dist: px - frame.x });
+        if (px >= frame.x + frame.width - THRESHOLD && px <= frame.x + frame.width)
+            edges.push({ edge: 'right', dist: frame.x + frame.width - px });
+        if (py >= frame.y && py <= frame.y + THRESHOLD)
+            edges.push({ edge: 'top', dist: py - frame.y });
+        if (py >= frame.y + frame.height - THRESHOLD && py <= frame.y + frame.height)
+            edges.push({ edge: 'bottom', dist: frame.y + frame.height - py });
+
+        if (edges.length === 0) return null;
+        edges.sort((a, b) => a.dist - b.dist);
+        return edges[0].edge;
+    }
+
+    _connectMouseEvents() {
+        this._disconnectStageEvents();
+        const stage = global.stage;
+        this._stagePressId = stage.connect('button-press-event', (_s, event) => this._onButtonPress(event));
+        this._stageReleaseId = stage.connect('button-release-event', (_s, event) => this._onButtonRelease(event));
+        this._stageMotionId = stage.connect('motion-event', (_s, event) => this._onPointerMotion(event));
+    }
+
+    _disconnectStageEvents() {
+        const stage = global.stage;
+        if (this._stagePressId) {
+            try { stage.disconnect(this._stagePressId); } catch (_e) {}
+            this._stagePressId = 0;
+        }
+        if (this._stageReleaseId) {
+            try { stage.disconnect(this._stageReleaseId); } catch (_e) {}
+            this._stageReleaseId = 0;
+        }
+        if (this._stageMotionId) {
+            try { stage.disconnect(this._stageMotionId); } catch (_e) {}
+            this._stageMotionId = 0;
+        }
+    }
+
+    _onButtonPress(event) {
+        if (this._mouseOp) return false;
+        if (!this._settings || this._destroyed) return false;
+        if (!this._settings.get_boolean('mouse-resize')) return false;
+        if (!this._settings.get_boolean('enabled')) return false;
+
+        const [px, py] = event.get_coords();
+        const win = global.display.get_window_at_position(px, py);
+        if (!win || !this._shouldManage(win)) return false;
+        if (this._isFloating(win)) return false;
+
+        const ws = win.get_workspace();
+        if (!ws) return false;
+        if (ws !== global.workspace_manager.get_active_workspace()) return false;
+
+        const edge = this._detectWindowEdge(win, px, py);
+
+        if (edge) {
+            const frame = win.get_frame_rect();
+            this._mouseOp = {
+                active: true,
+                type: 'resize',
+                window: win,
+                edge: edge,
+                origFrame: { x: frame.x, y: frame.y, w: frame.width, h: frame.height },
+                startPx: px,
+                startPy: py,
+                frozenX: frame.x,
+                frozenY: frame.y,
+            };
+            this._setCursorForEdge(edge);
+            return true;
+        }
+
+        const frame = win.get_frame_rect();
+        this._mouseOp = {
+            active: true,
+            type: 'swap',
+            window: win,
+            origFrame: { x: frame.x, y: frame.y, w: frame.width, h: frame.height },
+            startPx: px,
+            startPy: py,
+        };
+        return false;
+    }
+
+    _onButtonRelease(_event) {
+        if (!this._mouseOp || !this._mouseOp.active) return false;
+        const op = this._mouseOp;
+
+        if (op.type === 'resize') {
+            const [px, py] = global.get_pointer();
+            const delta = op.edge === 'left' || op.edge === 'right'
+                ? px - op.startPx : py - op.startPy;
+
+            if (Math.abs(delta) > 2) {
+                const layout = this._settings.get_string('layout');
+                if (layout === 'master-stack') {
+                    this._applyMasterStackResizeFromMouse(op, delta);
+                } else {
+                    this._applyDwindleResizeFromMouse(op, delta);
+                }
+            }
+        } else if (op.type === 'swap') {
+            const [px, py] = global.get_pointer();
+            const dx = px - op.startPx;
+            const dy = py - op.startPy;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance > 30) {
+                const target = global.display.get_window_at_position(px, py);
+                if (target && target !== op.window && this._shouldManage(target) && !this._isFloating(target)) {
+                    this._performSwap(op.window, target);
+                }
+            }
+
+            this._moveWindow(
+                op.window,
+                op.origFrame.x, op.origFrame.y,
+                op.origFrame.w, op.origFrame.h
+            );
+        }
+
+        this._resetCursor();
+        this._mouseOp = null;
+        const ws = global.workspace_manager.get_active_workspace();
+        if (ws) this._retileWorkspace(ws);
+        return false;
+    }
+
+    _applyMasterStackResizeFromMouse(op, delta) {
+        const ws = op.window.get_workspace();
+        if (!ws) return;
+        const layout = this._settings.get_string('layout');
+        if (layout !== 'master-stack') return;
+
+        const tiledWindows = this._getWindowsForWorkspace(ws)
+            .filter(w => !this._isFloating(w));
+        if (tiledWindows.length <= 1) return;
+
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+        const gap = this._settings.get_int('gap');
+        const areaW = workArea.width - gap * 2;
+
+        const idx = tiledWindows.indexOf(op.window);
+        if (idx === -1) return;
+
+        const currentRatio = this._getMasterRatio(ws);
+        const currentMasterW = (areaW - gap) * currentRatio;
+        const newMasterW = currentMasterW + delta;
+        const minMaster = 100;
+        const maxMaster = areaW - gap - (tiledWindows.length - 1) * 100;
+        if (maxMaster < minMaster) return;
+        const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
+        this._masterRatios.set(ws, clamped / (areaW - gap));
+    }
+
+    _applyDwindleResizeFromMouse(op, delta) {
+        const ws = op.window.get_workspace();
+        if (!ws) return;
+        const tree = this._bspGetTree(ws);
+        if (!tree) return;
+
+        const targetIsHorizontal = op.edge === 'left' || op.edge === 'right';
+        const path = [];
+        this._bspFindPath(tree, op.window, path);
+
+        for (let i = path.length - 1; i >= 0; i--) {
+            if ((path[i].direction === 'h') === targetIsHorizontal) {
+                const monitor = global.display.get_primary_monitor();
+                const workArea = ws.get_work_area_for_monitor(monitor);
+                if (!workArea) return;
+                const minR = 0.15;
+                const maxR = 0.85;
+                const axisSize = targetIsHorizontal ? workArea.width : workArea.height;
+                const normalizedDelta = delta / axisSize;
+                path[i].ratio = Math.max(minR, Math.min(maxR, path[i].ratio + normalizedDelta));
+                return;
+            }
+        }
+    }
+
+    _performSwap(winA, winB) {
+        const ws = winA.get_workspace();
+        if (!ws) return;
+
+        const layout = this._settings.get_string('layout');
+        if (layout === 'dwindle') {
+            const tree = this._bspGetTree(ws);
+            if (tree) this._bspSwapWindows(tree, winA, winB);
+            return;
+        }
+
+        const frameA = winA.get_frame_rect();
+        const frameB = winB.get_frame_rect();
+        try {
+            winA.move_resize_frame(false, frameB.x, frameB.y, frameB.width, frameB.height);
+            winB.move_resize_frame(false, frameA.x, frameA.y, frameA.width, frameA.height);
+        } catch (e) {
+            log(`[tiling-wm] mouse swap move_resize failed: ${e.message}`);
+        }
+
+        const order = this._getWorkspaceOrder(ws);
+        const idxA = order.indexOf(winA);
+        const idxB = order.indexOf(winB);
+        if (idxA !== -1 && idxB !== -1) {
+            order[idxA] = winB;
+            order[idxB] = winA;
+        }
+    }
+
+    _onPointerMotion(event) {
+        if (!this._mouseOp || !this._mouseOp.active) {
+            this._updateEdgeCursor(event);
+            return false;
+        }
+
+        const op = this._mouseOp;
+        const [px, py] = event.get_coords();
+
+        if (op.type === 'resize') {
+            const delta = op.edge === 'left' || op.edge === 'right'
+                ? px - op.startPx : py - op.startPy;
+
+            this._moveWindow(op.window, op.frozenX, op.frozenY, op.origFrame.w, op.origFrame.h);
+
+            const layout = this._settings.get_string('layout');
+            if (layout === 'master-stack') {
+                this._applyMasterStackResizeFromMouse(op, delta);
+            } else {
+                this._applyDwindleResizeFromMouse(op, delta);
+            }
+            const ws = op.window.get_workspace();
+            if (ws) this._doRetileWorkspace(ws);
+        } else if (op.type === 'swap') {
+            try {
+                op.window.move_resize_frame(
+                    false,
+                    op.origFrame.x + px - op.startPx,
+                    op.origFrame.y + py - op.startPy,
+                    op.origFrame.w,
+                    op.origFrame.h
+                );
+            } catch (_e) {}
+            this._updateBorders();
+        }
+
+        return false;
+    }
+
+    _updateEdgeCursor(event) {
+        if (!this._settings || !this._settings.get_boolean('mouse-resize')) {
+            this._resetCursor();
+            return;
+        }
+        if (!this._settings.get_boolean('enabled')) {
+            this._resetCursor();
+            return;
+        }
+
+        const [px, py] = event.get_coords();
+        const win = global.display.get_window_at_position(px, py);
+        if (!win || !this._shouldManage(win) || this._isFloating(win)) {
+            this._resetCursor();
+            return;
+        }
+
+        const ws = win.get_workspace();
+        if (!ws || ws !== global.workspace_manager.get_active_workspace()) {
+            this._resetCursor();
+            return;
+        }
+
+        const edge = this._detectWindowEdge(win, px, py);
+        if (edge) {
+            this._setCursorForEdge(edge);
+        } else {
+            this._resetCursor();
+        }
+    }
+
+    _setCursorForEdge(edge) {
+        const stage = global.stage;
+        const cursorMap = {
+            left: 'col-resize',
+            right: 'col-resize',
+            top: 'row-resize',
+            bottom: 'row-resize',
+        };
+        try {
+            const cursor = new Shell.Cursor({ type: cursorMap[edge] || 'default' });
+            stage.set_cursor(cursor);
+        } catch (_e) {
+            try { stage.set_cursor_name(cursorMap[edge] || 'default'); } catch (_e2) {}
+        }
+    }
+
+    _resetCursor() {
+        try { global.stage.set_cursor(null); } catch (_e) {
+            try { global.stage.set_cursor_name('default'); } catch (_e2) {}
         }
     }
 
