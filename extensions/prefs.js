@@ -384,7 +384,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             css_classes: ['flat', 'circular'],
         });
         pickRow.add_suffix(pickButton);
-        pickRow.set_activatable_widget(pickButton);
+        pickRow.set_activatable(pickButton);
         pickGroup.add(pickRow);
 
         let pickWatchId = 0;
@@ -441,7 +441,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             css_classes: ['flat', 'circular'],
         });
         addClassRow.add_suffix(addClassButton);
-        addClassRow.set_activatable_widget(addClassButton);
+        addClassRow.set_activatable(addClassButton);
         classGroup.add(addClassRow);
         this._floatClassAddRow = addClassRow;
 
@@ -469,7 +469,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             css_classes: ['flat', 'circular'],
         });
         addTitleRow.add_suffix(addTitleButton);
-        addTitleRow.set_activatable_widget(addTitleButton);
+        addTitleRow.set_activatable(addTitleButton);
         titleGroup.add(addTitleRow);
         this._floatTitleAddRow = addTitleRow;
 
