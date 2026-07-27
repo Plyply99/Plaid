@@ -17,10 +17,13 @@ const CornerEffect = GObject.registerClass({
             0, 200, 0,
         ),
     },
-}, class CornerEffect extends Clutter.ShaderEffect {
+}, class CornerEffect extends Shell.GLSLEffect {
     _init(params = {}) {
         super._init(params);
         this._radius = 0;
+        this._uRadius = 0;
+        this._uWidth = 0;
+        this._uHeight = 0;
         this._sizeId = 0;
     }
 
@@ -31,8 +34,66 @@ const CornerEffect = GObject.registerClass({
     set radius(value) {
         if (this._radius !== value) {
             this._radius = value;
-            this.set_uniform_value('radius', parseFloat(value));
+            if (this._uRadius)
+                this.set_uniform_float(this._uRadius, 1, [value]);
         }
+    }
+
+    vfunc_build_pipeline() {
+        const declarations = `
+        uniform float uRadius;
+        uniform float uWidth;
+        uniform float uHeight;
+
+        float circle_bounds(vec2 p, vec2 center, float clip_radius) {
+            vec2 delta = p - center;
+            float dist_squared = dot(delta, delta);
+            float outer_radius = clip_radius + 0.5;
+            if (dist_squared >= (outer_radius * outer_radius))
+                return 0.0;
+            float inner_radius = clip_radius - 0.5;
+            if (dist_squared <= (inner_radius * inner_radius))
+                return 1.0;
+            return outer_radius - sqrt(dist_squared);
+        }
+
+        float rounded_rect_coverage(vec2 p, vec4 bounds, float clip_radius) {
+            if (p.x < bounds.x || p.x > bounds.z || p.y < bounds.y || p.y > bounds.w)
+                return 0.0;
+            vec2 center;
+            float center_left = bounds.x + clip_radius;
+            float center_right = bounds.z - clip_radius;
+            if (p.x < center_left)
+                center.x = center_left + 2.0;
+            else if (p.x > center_right)
+                center.x = center_right - 1.0;
+            else
+                return 1.0;
+            float center_top = bounds.y + clip_radius;
+            float center_bottom = bounds.w - clip_radius;
+            if (p.y < center_top)
+                center.y = center_top + 2.0;
+            else if (p.y > center_bottom)
+                center.y = center_bottom - 1.0;
+            else
+                return 1.0;
+            return circle_bounds(p, center, clip_radius);
+        }
+        `;
+
+        const code = `
+        vec2 uv = cogl_tex_coord_in[0].xy;
+        vec2 pos = uv * vec2(uWidth, uHeight);
+        vec4 c = cogl_color_out;
+        vec4 bounds = vec4(0.0, 0.0, uWidth, uHeight);
+        float alpha = rounded_rect_coverage(pos, bounds, uRadius);
+        cogl_color_out = vec4(c.rgb * alpha, min(alpha, c.a));
+        `;
+
+        this.add_glsl_snippet(Shell.SnippetHook.FRAGMENT, declarations, code, false);
+        this._uRadius = this.get_uniform_location('uRadius');
+        this._uWidth = this.get_uniform_location('uWidth');
+        this._uHeight = this.get_uniform_location('uHeight');
     }
 
     vfunc_set_actor(actor) {
@@ -52,8 +113,10 @@ const CornerEffect = GObject.registerClass({
 
     _updateSize(actor) {
         const [w, h] = actor.get_size();
-        this.set_uniform_value('width', parseFloat(w));
-        this.set_uniform_value('height', parseFloat(h));
+        if (this._uWidth)
+            this.set_uniform_float(this._uWidth, 1, [w]);
+        if (this._uHeight)
+            this.set_uniform_float(this._uHeight, 1, [h]);
     }
 });
 
@@ -82,13 +145,6 @@ export default class TilingWMExtension extends Extension {
         this._dropPreview = null;
         this._decorationsHidden = new Set();
         this._cornerEffects = new Map();
-        this._cornerShaderSource = null;
-        const shaderPath = this.path + '/corner.glsl';
-        try {
-            this._cornerShaderSource = Shell.get_file_contents_utf8_sync(shaderPath);
-        } catch (e) {
-            log(`[plaid] Failed to load corner shader: ${e.message}`);
-        }
 
         this._disableMutterDefaults();
         this._dropOverlay = new St.Widget({
@@ -150,7 +206,6 @@ export default class TilingWMExtension extends Extension {
         this._decorationsHidden = null;
         this._signals = null;
         this._cornerEffects = null;
-        this._cornerShaderSource = null;
         this._swapTarget = null;
         this._lastSwapTarget = null;
     }
@@ -972,7 +1027,6 @@ export default class TilingWMExtension extends Extension {
 
     _applyCornerRadius(win) {
         if (!this._settings || this._destroyed) return;
-        if (!this._cornerShaderSource) return;
         const radius = this._settings.get_int('corner-radius');
         const actor = win.get_compositor_private();
         if (!actor) return;
@@ -988,12 +1042,6 @@ export default class TilingWMExtension extends Extension {
         if (radius <= 0) return;
 
         const effect = new CornerEffect({ radius });
-        try {
-            effect.set_shader_source(this._cornerShaderSource);
-        } catch (e) {
-            log(`[plaid] Failed to set shader source: ${e.message}`);
-            return;
-        }
         actor.add_effect(effect);
         this._cornerEffects.set(win, effect);
     }
