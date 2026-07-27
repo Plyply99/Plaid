@@ -137,6 +137,23 @@ export default class TilingWMExtension extends Extension {
                         return false;
                     });
                 }
+            } else if (this._isFloating(win)) {
+                const doRaise = () => {
+                    if (this._destroyed) return;
+                    try { win.make_above(); } catch (_e) {}
+                };
+                const actor = win.get_compositor_private();
+                if (actor) {
+                    const firstFrameId = actor.connect('first-frame', () => {
+                        actor.disconnect(firstFrameId);
+                        doRaise();
+                    });
+                } else {
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                        doRaise();
+                        return false;
+                    });
+                }
             }
         }));
         this._addSignal(global.display, global.display.connect('notify::focus-window', () => {
@@ -320,7 +337,6 @@ export default class TilingWMExtension extends Extension {
         const title = win.get_title();
         if (title && this._floatingTitles.has(title)) return true;
         if (win.is_fullscreen()) return true;
-        if (win.is_above()) return true;
         return false;
     }
 
@@ -441,6 +457,16 @@ export default class TilingWMExtension extends Extension {
         );
     }
 
+    _raiseFloatingWindows(workspace) {
+        if (!workspace) return;
+        const windows = workspace.list_windows();
+        for (const win of windows) {
+            if (this._isFloating(win)) {
+                try { win.make_above(); } catch (_e) {}
+            }
+        }
+    }
+
     _retileAll() {
         if (!this._settings || this._destroyed) return;
         for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
@@ -457,10 +483,16 @@ export default class TilingWMExtension extends Extension {
 
     _doRetileWorkspace(workspace) {
         if (!this._settings) return;
-        if (!this._settings.get_boolean('enabled')) return;
+        if (!this._settings.get_boolean('enabled')) {
+            this._raiseFloatingWindows(workspace);
+            return;
+        }
         const tiledWindows = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
-        if (tiledWindows.length === 0) return;
+        if (tiledWindows.length === 0) {
+            this._raiseFloatingWindows(workspace);
+            return;
+        }
 
         const layout = this._settings.get_string('layout');
         if (layout === 'dwindle') {
@@ -470,6 +502,7 @@ export default class TilingWMExtension extends Extension {
         }
 
         this._doUpdateBorders();
+        this._raiseFloatingWindows(workspace);
     }
 
     _getMasterRatio(workspace) {
