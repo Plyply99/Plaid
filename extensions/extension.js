@@ -922,32 +922,27 @@ export default class TilingWMExtension extends Extension {
 
             if (borderWidth === 0) continue;
 
+            const actor = win.get_compositor_private();
+            if (!actor) continue;
+
             const border = new St.Widget({
                 name: 'tiling-border',
-                x: frame.x - borderWidth,
-                y: frame.y - borderWidth,
+                x: -borderWidth,
+                y: -borderWidth,
                 width: frame.width + borderWidth * 2,
                 height: frame.height + borderWidth * 2,
                 style: `border: ${borderWidth}px solid ${borderColor}; border-radius: ${borderRadius}px;`,
                 reactive: false,
                 visible: true,
             });
-            this._borderContainer.add_child(border);
+            actor.insert_child_at_index(border, 0);
             this._windowBorders.set(win, border);
         }
     }
 
     _removeAllBorders() {
-        if (!this._borderContainer) return;
-        let child = this._borderContainer.get_first_child();
-        while (child) {
-            const next = child.get_next_sibling();
-            if (child === this._dropPreview) {
-                child = next;
-                continue;
-            }
-            child.destroy();
-            child = next;
+        for (const border of this._windowBorders.values()) {
+            try { border.destroy(); } catch (_e) {}
         }
         this._windowBorders.clear();
     }
@@ -955,7 +950,7 @@ export default class TilingWMExtension extends Extension {
     _removeBorder(win) {
         const border = this._windowBorders.get(win);
         if (border) {
-            border.destroy();
+            try { border.destroy(); } catch (_e) {}
             this._windowBorders.delete(win);
         }
     }
