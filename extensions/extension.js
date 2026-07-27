@@ -1428,14 +1428,7 @@ export default class TilingWMExtension extends Extension {
                 this._moveTiledExcept(metaWindow);
                 this._doUpdateBorders();
             } else if (mode === 'move') {
-                const frameChanged = frame.width !== lastWidth || frame.height !== lastHeight;
-                if (frameChanged) {
-                    lastWidth = frame.width;
-                    lastHeight = frame.height;
-                }
                 this._updateMoveDragPreview(metaWindow);
-                this._moveTiledExcept(metaWindow);
-                this._doUpdateBorders();
             }
 
             return GLib.SOURCE_CONTINUE;
