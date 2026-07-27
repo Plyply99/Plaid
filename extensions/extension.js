@@ -1052,7 +1052,14 @@ export default class TilingWMExtension extends Extension {
     _resizeWindow(action, axis) {
         const focused = this._getActiveWindow();
         if (!focused) return;
-        if (this._isFloating(focused)) return;
+
+        const amount = this._settings.get_int('resize-amount');
+        const delta = action === 'grow' ? amount : -amount;
+
+        if (this._isFloating(focused)) {
+            this._resizeFloating(focused, axis, delta);
+            return;
+        }
 
         const ws = focused.get_workspace();
         if (!ws) return;
@@ -1063,8 +1070,6 @@ export default class TilingWMExtension extends Extension {
         if (idx === -1 || tiledWindows.length <= 1) return;
 
         const layout = this._settings.get_string('layout');
-        const amount = this._settings.get_int('resize-amount');
-        const delta = action === 'grow' ? amount : -amount;
 
         if (layout === 'dwindle') {
             this._resizeDwindle(focused, ws, tiledWindows, idx, axis, delta);
@@ -1073,6 +1078,21 @@ export default class TilingWMExtension extends Extension {
         }
 
         this._retileWorkspace(ws);
+    }
+
+    _resizeFloating(win, axis, delta) {
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) return;
+        let x = frame.x;
+        let y = frame.y;
+        let w = frame.width;
+        let h = frame.height;
+        if (axis === 'width') {
+            w = Math.max(100, w + delta);
+        } else {
+            h = Math.max(100, h + delta);
+        }
+        this._moveWindow(win, x, y, w, h);
     }
 
     _resizeMasterStack(focused, workspace, tiledWindows, idx, axis, delta) {
@@ -1238,13 +1258,15 @@ export default class TilingWMExtension extends Extension {
 
         const [px, py] = event.get_coords();
         const win = global.display.get_window_at_position(px, py);
-        if (!win || !this._shouldManage(win)) return false;
-        if (this._isFloating(win)) return false;
+        if (!win) return false;
+        if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
+        if (win.is_skip_taskbar()) return false;
 
         const ws = win.get_workspace();
         if (!ws) return false;
         if (ws !== global.workspace_manager.get_active_workspace()) return false;
 
+        const isFloating = this._isFloating(win);
         const edge = this._detectWindowEdge(win, px, py);
 
         if (edge) {
@@ -1263,6 +1285,8 @@ export default class TilingWMExtension extends Extension {
             this._setCursorForEdge(edge);
             return true;
         }
+
+        if (isFloating) return false;
 
         const frame = win.get_frame_rect();
         this._mouseOp = {
@@ -1285,7 +1309,7 @@ export default class TilingWMExtension extends Extension {
             const delta = op.edge === 'left' || op.edge === 'right'
                 ? px - op.startPx : py - op.startPy;
 
-            if (Math.abs(delta) > 2) {
+            if (!this._isFloating(op.window) && Math.abs(delta) > 2) {
                 const layout = this._settings.get_string('layout');
                 if (layout === 'master-stack') {
                     this._applyMasterStackResizeFromMouse(op, delta);
@@ -1319,8 +1343,10 @@ export default class TilingWMExtension extends Extension {
 
         this._resetCursor();
         this._mouseOp = null;
-        const ws = global.workspace_manager.get_active_workspace();
-        if (ws) this._retileWorkspace(ws);
+        if (op.type !== 'resize' || !this._isFloating(op.window)) {
+            const ws = global.workspace_manager.get_active_workspace();
+            if (ws) this._retileWorkspace(ws);
+        }
         return false;
     }
 
@@ -1420,16 +1446,35 @@ export default class TilingWMExtension extends Extension {
             const delta = op.edge === 'left' || op.edge === 'right'
                 ? px - op.startPx : py - op.startPy;
 
-            this._moveWindow(op.window, op.frozenX, op.frozenY, op.origFrame.w, op.origFrame.h);
-
-            const layout = this._settings.get_string('layout');
-            if (layout === 'master-stack') {
-                this._applyMasterStackResizeFromMouse(op, delta);
+            if (this._isFloating(op.window)) {
+                let x = op.origFrame.x;
+                let y = op.origFrame.y;
+                let w = op.origFrame.w;
+                let h = op.origFrame.h;
+                if (op.edge === 'right') {
+                    w = Math.max(100, op.origFrame.w + delta);
+                } else if (op.edge === 'left') {
+                    w = Math.max(100, op.origFrame.w - delta);
+                    x = op.origFrame.x + op.origFrame.w - w;
+                } else if (op.edge === 'bottom') {
+                    h = Math.max(100, op.origFrame.h + delta);
+                } else if (op.edge === 'top') {
+                    h = Math.max(100, op.origFrame.h - delta);
+                    y = op.origFrame.y + op.origFrame.h - h;
+                }
+                this._moveWindow(op.window, x, y, w, h);
             } else {
-                this._applyDwindleResizeFromMouse(op, delta);
+                this._moveWindow(op.window, op.frozenX, op.frozenY, op.origFrame.w, op.origFrame.h);
+
+                const layout = this._settings.get_string('layout');
+                if (layout === 'master-stack') {
+                    this._applyMasterStackResizeFromMouse(op, delta);
+                } else {
+                    this._applyDwindleResizeFromMouse(op, delta);
+                }
+                const ws = op.window.get_workspace();
+                if (ws) this._doRetileWorkspace(ws);
             }
-            const ws = op.window.get_workspace();
-            if (ws) this._doRetileWorkspace(ws);
         } else if (op.type === 'swap') {
             try {
                 op.window.move_resize_frame(
@@ -1458,7 +1503,7 @@ export default class TilingWMExtension extends Extension {
 
         const [px, py] = event.get_coords();
         const win = global.display.get_window_at_position(px, py);
-        if (!win || !this._shouldManage(win) || this._isFloating(win)) {
+        if (!win || win.get_window_type() !== Meta.WindowType.NORMAL || win.is_skip_taskbar()) {
             this._resetCursor();
             return;
         }
