@@ -922,20 +922,17 @@ export default class TilingWMExtension extends Extension {
 
             if (borderWidth === 0) continue;
 
-            const actor = win.get_compositor_private();
-            if (!actor) continue;
-
             const border = new St.Widget({
                 name: 'tiling-border',
-                x: Math.floor(borderWidth / 2),
-                y: Math.floor(borderWidth / 2),
-                width: frame.width - borderWidth,
-                height: frame.height - borderWidth,
-                style: `border: ${borderWidth}px solid ${borderColor}; border-radius: ${borderRadius}px;`,
+                x: frame.x - borderWidth,
+                y: frame.y - borderWidth,
+                width: frame.width + borderWidth * 2,
+                height: frame.height + borderWidth * 2,
+                style: `border: ${borderWidth}px solid ${borderColor}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
                 reactive: false,
                 visible: true,
             });
-            actor.insert_child_at_index(border, 0);
+            this._borderContainer.add_child(border);
             this._windowBorders.set(win, border);
         }
     }
