@@ -29,6 +29,7 @@ export default class TilingWMExtension extends Extension {
         this._liveResizeId = 0;
         this._swapTarget = null;
         this._lastSwapTarget = null;
+        this._dropPreview = null;
 
         this._disableMutterDefaults();
         this._borderContainer = new St.Widget({
@@ -72,6 +73,7 @@ export default class TilingWMExtension extends Extension {
         this._disconnectGrabSignals();
         this._restoreMutterDefaults();
         this._removeAllBorders();
+        this._hideDropPreview();
         if (this._borderContainer) {
             this._borderContainer.destroy();
             this._borderContainer = null;
@@ -1326,22 +1328,15 @@ export default class TilingWMExtension extends Extension {
             const ws = metaWindow.get_workspace();
             if (ws) {
                 if (this._isMoveGrab(grabOp)) {
-                    if (this._lastSwapTarget) {
-                        const target = this._lastSwapTarget;
-                        if (target !== metaWindow && this._shouldManage(target) && !this._isFloating(target)) {
-                            this._updateRatiosAtGrabEnd(metaWindow, ws);
-                        } else {
-                            this._swapInLayout(metaWindow, target);
-                        }
-                    }
-                    this._retileWorkspace(ws);
+                    this._repositionWindow(metaWindow, ws);
                 } else {
                     this._updateRatiosAtGrabEnd(metaWindow, ws);
-                    this._retileWorkspace(ws);
                 }
+                this._retileWorkspace(ws);
             }
         }
 
+        this._hideDropPreview();
         this._stopLiveResizeLoop();
         this._grabOp = null;
         this._grabInitRect = null;
@@ -1438,23 +1433,9 @@ export default class TilingWMExtension extends Extension {
                     lastWidth = frame.width;
                     lastHeight = frame.height;
                 }
-            }
-
-            this._checkSwapTarget(metaWindow);
-
-            if (mode === 'move') {
-                const target = this._swapTarget;
-                if (target !== this._lastSwapTarget) {
-                    if (this._lastSwapTarget)
-                        this._swapInLayout(metaWindow, this._lastSwapTarget);
-                    if (target)
-                        this._swapInLayout(metaWindow, target);
-                    this._lastSwapTarget = target;
-                }
-                if (this._lastSwapTarget) {
-                    this._moveTiledExcept(metaWindow);
-                    this._doUpdateBorders();
-                }
+                this._updateMoveDragPreview(metaWindow);
+                this._moveTiledExcept(metaWindow);
+                this._doUpdateBorders();
             }
 
             return GLib.SOURCE_CONTINUE;
@@ -1642,5 +1623,197 @@ export default class TilingWMExtension extends Extension {
             this._settings.set_string('pick-mode-title', title);
             this._settings.set_boolean('pick-mode', false);
         });
+    }
+
+    // --- Drag & Drop Repositioning ---
+
+    _updateMoveDragPreview(metaWindow) {
+        if (!metaWindow || !this._settings) return;
+        const ws = metaWindow.get_workspace();
+        if (!ws) return;
+
+        const [px, py] = global.get_pointer();
+        const layout = this._settings.get_string('layout');
+        const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+        if (tiledWindows.length <= 1) {
+            this._hideDropPreview();
+            return;
+        }
+
+        let targetRect = null;
+        if (layout === 'master-stack') {
+            const target = this._computeMasterStackDropTarget(ws, px, py);
+            if (target) {
+                targetRect = this._getTargetRect(ws, target);
+            }
+        } else if (layout === 'dwindle') {
+            const leaf = this._computeDwindleDropTarget(ws, px, py);
+            if (leaf && leaf.type === 'leaf') {
+                targetRect = { x: leaf._x, y: leaf._y, width: leaf._w, height: leaf._h };
+            }
+        }
+
+        if (targetRect) {
+            this._showDropPreview(targetRect.x, targetRect.y, targetRect.width, targetRect.height);
+        } else {
+            this._hideDropPreview();
+        }
+    }
+
+    _computeMasterStackDropTarget(ws, px, py) {
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return null;
+
+        if (px < workArea.x || px > workArea.x + workArea.width ||
+            py < workArea.y || py > workArea.y + workArea.height)
+            return null;
+
+        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+        if (tiled.length === 0) return null;
+
+        const areaX = workArea.x + gap;
+        const areaY = workArea.y + gap;
+        const areaW = workArea.width - gap * 2;
+        const areaH = workArea.height - gap * 2;
+        const numStack = tiled.length - 1;
+
+        if (numStack === 0) return { index: 0 };
+
+        const masterRatio = this._getMasterRatio(ws);
+        const masterW = Math.floor((areaW - gap) * masterRatio);
+        const stackW = areaW - masterW - gap;
+        const stackX = areaX + masterW + gap;
+
+        if (px >= areaX && px <= areaX + masterW)
+            return { index: 0 };
+
+        if (px >= stackX && px <= stackX + stackW && py >= areaY) {
+            let y = areaY;
+            const totalStackH = areaH - gap * (numStack - 1);
+            for (let i = 0; i < numStack; i++) {
+                const h = Math.floor(totalStackH / numStack);
+                const slotEnd = y + h + (i < numStack - 1 ? gap / 2 : totalStackH);
+                if (py <= slotEnd)
+                    return { index: i + 1 };
+                y += h + gap;
+            }
+            return { index: tiled.length - 1 };
+        }
+
+        return null;
+    }
+
+    _computeDwindleDropTarget(ws, px, py) {
+        const tree = this._bspGetTree(ws);
+        if (!tree) return null;
+
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return null;
+
+        if (px < workArea.x || px > workArea.x + workArea.width ||
+            py < workArea.y || py > workArea.y + workArea.height)
+            return null;
+
+        const ax = workArea.x + gap;
+        const ay = workArea.y + gap;
+        const aw = workArea.width - gap * 2;
+        const ah = workArea.height - gap * 2;
+
+        this._bspTagGeometry(tree, ax, ay, aw, ah, gap);
+        return this._bspFindLeafAtPoint(tree, ax, ay, aw, ah, px, py, gap);
+    }
+
+    _getTargetRect(ws, target) {
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return null;
+
+        const areaX = workArea.x + gap;
+        const areaY = workArea.y + gap;
+        const areaW = workArea.width - gap * 2;
+        const areaH = workArea.height - gap * 2;
+        const numStack = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w)).length - 1;
+
+        if (numStack === 0)
+            return { x: areaX, y: areaY, width: areaW, height: areaH };
+
+        const masterRatio = this._getMasterRatio(ws);
+        const masterW = Math.floor((areaW - gap) * masterRatio);
+
+        if (target.index === 0)
+            return { x: areaX, y: areaY, width: masterW, height: areaH };
+
+        const stackX = areaX + masterW + gap;
+        const stackW = areaW - masterW - gap;
+        let y = areaY;
+        const slotH = Math.floor((areaH - gap * (numStack - 1)) / numStack);
+        for (let i = 0; i < target.index - 1; i++)
+            y += slotH + gap;
+
+        return { x: stackX, y, width: stackW, height: slotH };
+    }
+
+    _showDropPreview(x, y, w, h) {
+        if (w <= 0 || h <= 0) {
+            this._hideDropPreview();
+            return;
+        }
+        if (!this._dropPreview) {
+            this._dropPreview = new St.Widget({
+                style: 'background-color: rgba(53, 132, 228, 0.15); border: 2px solid #3584e4;',
+                reactive: false,
+                visible: true,
+            });
+            this._borderContainer.add_child(this._dropPreview);
+        }
+        this._dropPreview.set_position(x, y);
+        this._dropPreview.set_size(w, h);
+    }
+
+    _hideDropPreview() {
+        if (this._dropPreview) {
+            this._dropPreview.destroy();
+            this._dropPreview = null;
+        }
+    }
+
+    _repositionWindow(window, ws) {
+        if (!window || !ws || !this._settings) return;
+        const layout = this._settings.get_string('layout');
+        const [px, py] = global.get_pointer();
+        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+        if (tiled.length <= 1) return;
+
+        if (layout === 'master-stack') {
+            const target = this._computeMasterStackDropTarget(ws, px, py);
+            if (!target) return;
+            const order = this._getWorkspaceOrder(ws);
+            const currentIdx = order.indexOf(window);
+            if (currentIdx === -1 || currentIdx === target.index) return;
+
+            order.splice(currentIdx, 1);
+            const adjusted = target.index > currentIdx ? target.index - 1 : target.index;
+            order.splice(adjusted, 0, window);
+        } else if (layout === 'dwindle') {
+            const targetLeaf = this._computeDwindleDropTarget(ws, px, py);
+            if (!targetLeaf || targetLeaf.type !== 'leaf') return;
+
+            const tree = this._bspGetTree(ws);
+            if (!tree) return;
+
+            const gap = this._settings.get_int('gap');
+            let newTree = this._bspRemove(tree, window);
+            if (newTree.type === 'empty') newTree = null;
+
+            if (newTree && targetLeaf.window !== window) {
+                newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, gap);
+                this._bspTrees.set(ws, newTree);
+            }
+        }
     }
 }
