@@ -159,6 +159,12 @@
     </key>
 
     <!-- Pick mode: used to capture a window click for float rules -->
+    <key name="follow-focus" type="b">
+      <default>false</default>
+      <summary>Move cursor to focused window</summary>
+      <description>When true, the mouse cursor warps to the center of the focused window</description>
+    </key>
+
     <key name="pick-mode" type="b">
       <default>false</default>
       <summary>Pick mode active</summary>

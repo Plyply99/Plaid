@@ -132,6 +132,10 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.display, global.display.connect('notify::focus-window', () => {
             this._updateBorders();
+            if (this._settings.get_boolean('follow-focus')) {
+                const win = global.display.focus_window;
+                if (win) this._moveCursorToWindow(win);
+            }
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
             this._updateBorderContainer();
@@ -178,6 +182,12 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::pick-mode', () => {
             if (this._settings.get_boolean('pick-mode')) {
                 this._startPickMode();
+            }
+        }));
+        this._addSignal(this._settings, this._settings.connect('changed::follow-focus', () => {
+            if (this._settings.get_boolean('follow-focus')) {
+                const win = global.display.focus_window;
+                if (win) this._moveCursorToWindow(win);
             }
         }));
     }

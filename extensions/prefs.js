@@ -33,6 +33,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(enableRow);
         settings.bind('enabled', enableRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const followRow = new Adw.SwitchRow({
+            title: _('Cursor Follows Focus'),
+            subtitle: _('Move mouse cursor to the center of the focused window'),
+        });
+        group.add(followRow);
+        settings.bind('follow-focus', followRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const gapRow = new Adw.SpinRow({
             title: _('Window Gap'),
             subtitle: _('Gap between windows in pixels'),
