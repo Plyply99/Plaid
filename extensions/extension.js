@@ -723,7 +723,9 @@ export default class TilingWMExtension extends Extension {
 
         let tree = this._bspGetTree(workspace);
         const treeWins = this._bspCollectWindows(tree);
-        const needsRebuild = !tree || tiledWindows.some(w => !treeWins.includes(w));
+        const needsRebuild = !tree ||
+            tiledWindows.length !== treeWins.length ||
+            tiledWindows.some(w => !treeWins.includes(w));
         if (needsRebuild) {
             tree = this._bspBuildTree(tiledWindows, workArea, gap);
             this._bspTrees.set(workspace, tree);
