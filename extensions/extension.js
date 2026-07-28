@@ -1707,8 +1707,8 @@ export default class TilingWMExtension extends Extension {
         }
 
         if (this._isResizeGrab(grabOp)) {
-            const onEdge = px < buffer.x || px > buffer.x + buffer.width ||
-                           py < buffer.y || py > buffer.y + buffer.height;
+            const onEdge = px < buffer.x || px >= buffer.x + buffer.width ||
+                           py < buffer.y || py >= buffer.y + buffer.height;
             if (!onEdge) return;
         }
 
