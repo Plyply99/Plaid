@@ -678,12 +678,26 @@ export default class TilingWMExtension extends Extension {
         const rightCount = numStack - leftCount;
 
         let masterX, masterW;
-        if (skipWindow && tiledWindows[0] === skipWindow && numStack > 0) {
-            const frame = skipWindow.get_frame_rect();
-            masterX = frame.x;
-            masterW = frame.width;
-            const effectiveRatio = masterW / (areaW - gap * 2);
-            this._masterRatios.set(workspace, Math.max(0.15, Math.min(0.85, effectiveRatio)));
+        if (skipWindow && numStack > 0) {
+            if (tiledWindows[0] === skipWindow) {
+                const frame = skipWindow.get_frame_rect();
+                masterX = frame.x;
+                masterW = frame.width;
+                const effectiveRatio = masterW / (areaW - gap * 2);
+                this._masterRatios.set(workspace, Math.max(0.15, Math.min(0.85, effectiveRatio)));
+            } else {
+                const masterRatio = this._getMasterRatio(workspace);
+                masterW = Math.floor((areaW - gap * 2) * masterRatio);
+                const leftWins = tiledWindows.slice(1, 1 + leftCount);
+                const isLeftDrag = leftWins.includes(skipWindow);
+                const curFrame = tiledWindows[0].get_frame_rect();
+                if (isLeftDrag) {
+                    const rightEdge = curFrame.x + curFrame.width;
+                    masterX = rightEdge - masterW;
+                } else {
+                    masterX = curFrame.x;
+                }
+            }
         } else {
             const masterRatio = this._getMasterRatio(workspace);
             masterW = Math.floor((areaW - gap * 2) * masterRatio);
