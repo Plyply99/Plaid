@@ -75,9 +75,29 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(singleGapRow);
         settings.bind('single-gap', singleGapRow, 'value', Gio.SettingsBindFlags.DEFAULT);
 
-        const ratioRow = new Adw.SpinRow({
+        const layoutModel = new Gtk.StringList({
+            strings: ['dwindle', 'master-stack', 'centered-master-stack'],
+        });
+        const layoutRow = new Adw.ComboRow({
+            title: _('Layout'),
+            subtitle: _('Window tiling layout'),
+            model: layoutModel,
+        });
+        group.add(layoutRow);
+        const layoutBinding = settings.bind('layout', layoutRow, 'selected-item', Gio.SettingsBindFlags.DEFAULT);
+        const layoutIdx = ['dwindle', 'master-stack', 'centered-master-stack'].indexOf(settings.get_string('layout'));
+        if (layoutIdx >= 0)
+            layoutRow.set_selected(layoutIdx);
+        layoutRow.connect('notify::selected', () => {
+            const idx = layoutRow.get_selected();
+            const layouts = ['dwindle', 'master-stack', 'centered-master-stack'];
+            if (idx >= 0 && idx < layouts.length)
+                settings.set_string('layout', layouts[idx]);
+        });
+
+        const dwindleRatioRow = new Adw.SpinRow({
             title: _('Dwindle Split Ratio'),
-            subtitle: _('Ratio for dwindle splits. Default 0.618 is the golden ratio (1/φ)'),
+            subtitle: _('Ratio for dwindle splits. Default 0.618 (golden ratio)'),
             digits: 4,
             adjustment: new Gtk.Adjustment({
                 lower: 0.0,
@@ -87,8 +107,31 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 value: settings.get_double('dwindle-ratio'),
             }),
         });
-        group.add(ratioRow);
-        settings.bind('dwindle-ratio', ratioRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        group.add(dwindleRatioRow);
+        settings.bind('dwindle-ratio', dwindleRatioRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
+        const masterRatioRow = new Adw.SpinRow({
+            title: _('Master Ratio'),
+            subtitle: _('Ratio of the screen allocated to the master window'),
+            digits: 4,
+            adjustment: new Gtk.Adjustment({
+                lower: 0.15,
+                upper: 0.85,
+                step_increment: 0.05,
+                page_increment: 0.1,
+                value: settings.get_double('master-ratio'),
+            }),
+        });
+        group.add(masterRatioRow);
+        settings.bind('master-ratio', masterRatioRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
+        const updateRatioVisibility = () => {
+            const layout = settings.get_string('layout');
+            dwindleRatioRow.set_visible(layout === 'dwindle');
+            masterRatioRow.set_visible(layout !== 'dwindle');
+        };
+        updateRatioVisibility();
+        settings.connect('changed::layout', () => updateRatioVisibility());
 
         const resizeAmountRow = new Adw.SpinRow({
             title: _('Resize Step'),

@@ -3,7 +3,7 @@
   "name": "Plaid",
   "description": "A tiling window manager for GNOME with configurable borders, keybinds, and float rules",
   "shell-version": ["50"],
-  "version": 5011,
+  "version": 5012,
   "url": "",
   "settings-schema": "org.gnome.shell.extensions.plaid"
 }

@@ -21,10 +21,22 @@
       <description>Gap between a single tiled window and the screen edge (0 = no gap)</description>
     </key>
 
+    <key name="layout" type="s">
+      <default>'dwindle'</default>
+      <summary>Layout mode</summary>
+      <description>dwindle, master-stack, or centered-master-stack</description>
+    </key>
+
     <key name="dwindle-ratio" type="d">
       <default>0.618</default>
       <summary>Dwindle split ratio</summary>
       <description>Ratio for dwindle splits (0.3 to 0.7). Default 0.618 is the golden ratio (1/φ)</description>
+    </key>
+
+    <key name="master-ratio" type="d">
+      <default>0.5</default>
+      <summary>Master area ratio</summary>
+      <description>Ratio of the screen allocated to the master window (0.15 to 0.85)</description>
     </key>
 
     <key name="active-border-width" type="i">
