@@ -1289,16 +1289,30 @@ export default class TilingWMExtension extends Extension {
                 const gap = this._settings.get_int('gap');
                 const monitor = global.display.get_primary_monitor();
                 const workArea = ws.get_work_area_for_monitor(monitor);
+                if (!workArea) return GLib.SOURCE_CONTINUE;
 
-                if (this._grabResizeNodeW && workArea) {
-                    const axisSize = workArea.width - gap * 2;
-                    this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85,
-                        this._grabInitialRatioW + (dx * this._grabWidthSign) / (axisSize - gap)));
+                const tree = this._bspGetTree(ws);
+                if (!tree) return GLib.SOURCE_CONTINUE;
+
+                const areaX = workArea.x + gap;
+                const areaY = workArea.y + gap;
+                const areaW = workArea.width - gap * 2;
+                const areaH = workArea.height - gap * 2;
+                this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
+
+                if (this._grabResizeNodeW) {
+                    const axis = this._grabResizeNodeW._w;
+                    if (axis > 0) {
+                        this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85,
+                            this._grabInitialRatioW + (dx * this._grabWidthSign) / (axis - gap)));
+                    }
                 }
-                if (this._grabResizeNodeH && workArea) {
-                    const axisSize = workArea.height - gap * 2;
-                    this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85,
-                        this._grabInitialRatioH + (dy * this._grabHeightSign) / (axisSize - gap)));
+                if (this._grabResizeNodeH) {
+                    const axis = this._grabResizeNodeH._h;
+                    if (axis > 0) {
+                        this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85,
+                            this._grabInitialRatioH + (dy * this._grabHeightSign) / (axis - gap)));
+                    }
                 }
 
                 this._moveTiledExcept(metaWindow);
