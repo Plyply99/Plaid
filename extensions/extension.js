@@ -337,6 +337,22 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _warpCursor(win, winX, winY, relX, relY) {
+        try {
+            const frame = win.get_frame_rect();
+            if (frame.width === 0 || frame.height === 0) return;
+            const clampedRelX = Math.max(0, Math.min(frame.width - 1, relX));
+            const clampedRelY = Math.max(0, Math.min(frame.height - 1, relY));
+            const warpX = winX + clampedRelX;
+            const warpY = winY + clampedRelY;
+            const backend = Clutter.get_default_backend();
+            const seat = backend.get_default_seat();
+            seat.warp_pointer(warpX, warpY);
+        } catch (e) {
+            log(`[plaid] _warpCursor failed: ${e.message}`);
+        }
+    }
+
     _cursorWarpDeferred(win) {
         if (this._destroyed) return;
         let prevFrame = null;
@@ -1552,6 +1568,11 @@ export default class TilingWMExtension extends Extension {
         const amount = this._settings.get_int('resize-amount');
         const frame = win.get_frame_rect();
         if (frame.width === 0 || frame.height === 0) return;
+
+        const [curX, curY] = global.get_pointer();
+        const relX = curX - frame.x;
+        const relY = curY - frame.y;
+
         let x = frame.x;
         let y = frame.y;
         switch (direction) {
@@ -1561,6 +1582,7 @@ export default class TilingWMExtension extends Extension {
             case 'down': y += amount; break;
         }
         this._moveWindow(win, x, y, frame.width, frame.height);
+        this._warpCursor(win, x, y, relX, relY);
     }
 
     _resizeDwindle(focused, workspace, axis, delta) {
