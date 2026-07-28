@@ -558,7 +558,7 @@ export default class TilingWMExtension extends Extension {
         return this._stackRatios.get(ws);
     }
 
-    _retileMasterStack(workspace, tiledWindows) {
+    _retileMasterStack(workspace, tiledWindows, skipWindow = null) {
         const gap = this._settings.get_int('gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
@@ -583,7 +583,8 @@ export default class TilingWMExtension extends Extension {
         const stackW = areaW - masterW - gap;
         const numStack = numWindows - 1;
 
-        this._moveWindow(tiledWindows[0], areaX, areaY, masterW, areaH);
+        if (tiledWindows[0] !== skipWindow)
+            this._moveWindow(tiledWindows[0], areaX, areaY, masterW, areaH);
 
         const stackRatios = this._getStackRatios(workspace);
         const weights = [];
@@ -600,12 +601,14 @@ export default class TilingWMExtension extends Extension {
             const h = isLast
                 ? (areaY + areaH - y)
                 : Math.floor((areaH - gap * (numStack - 1)) * weights[i] / totalWeight);
-            this._moveWindow(tiledWindows[i + 1], areaX + masterW + gap, y, stackW, h);
+            const win = tiledWindows[i + 1];
+            if (win !== skipWindow)
+                this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
             if (!isLast) y += h + gap;
         }
     }
 
-    _retileCenteredMasterStack(workspace, tiledWindows) {
+    _retileCenteredMasterStack(workspace, tiledWindows, skipWindow = null) {
         const gap = this._settings.get_int('gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
@@ -635,7 +638,8 @@ export default class TilingWMExtension extends Extension {
         const leftCount = Math.ceil(numStack / 2);
         const rightCount = numStack - leftCount;
 
-        this._moveWindow(tiledWindows[0], masterX, areaY, masterW, areaH);
+        if (tiledWindows[0] !== skipWindow)
+            this._moveWindow(tiledWindows[0], masterX, areaY, masterW, areaH);
 
         const stackRatios = this._getStackRatios(workspace);
         const leftWeights = [];
@@ -660,7 +664,9 @@ export default class TilingWMExtension extends Extension {
                 const h = isLast
                     ? (areaY + areaH - y)
                     : Math.floor((areaH - gap * (leftCount - 1)) * leftWeights[i] / leftTotal);
-                this._moveWindow(tiledWindows[1 + i], areaX, y, leftStackW, h);
+                const win = tiledWindows[1 + i];
+                if (win !== skipWindow)
+                    this._moveWindow(win, areaX, y, leftStackW, h);
                 if (!isLast) y += h + gap;
             }
         }
@@ -672,7 +678,9 @@ export default class TilingWMExtension extends Extension {
                 const h = isLast
                     ? (areaY + areaH - y)
                     : Math.floor((areaH - gap * (rightCount - 1)) * rightWeights[i] / rightTotal);
-                this._moveWindow(tiledWindows[1 + leftCount + i], rightStackX, y, rightStackW, h);
+                const win = tiledWindows[1 + leftCount + i];
+                if (win !== skipWindow)
+                    this._moveWindow(win, rightStackX, y, rightStackW, h);
                 if (!isLast) y += h + gap;
             }
         }
@@ -1118,6 +1126,8 @@ export default class TilingWMExtension extends Extension {
         const rect = win.get_frame_rect();
         if (rect.width === 0 || rect.height === 0) return;
         try {
+            const actor = win.get_compositor_private();
+            if (actor) actor.remove_all_transitions();
             win.move_resize_frame(false, x, y, w, h);
         } catch (e) {
             log(`[plaid] _moveWindow failed: ${e.message}`);
@@ -1179,6 +1189,30 @@ export default class TilingWMExtension extends Extension {
         }
 
         this._raiseFloatingWindows(ws);
+    }
+
+    _updateBordersDuringGrab() {
+        if (!this._settings || !this._settings.get_boolean('enabled')) return;
+        const ws = global.workspace_manager.get_active_workspace();
+        if (!ws) return;
+        const focusWindow = global.display.focus_window;
+        const activeWidth = this._settings.get_int('active-border-width');
+        const inactiveWidth = this._settings.get_int('inactive-border-width');
+
+        for (const [win, border] of this._windowBorders.entries()) {
+            if (!win.get_compositor_private()) {
+                this._removeBorder(win);
+                continue;
+            }
+            const frame = win.get_frame_rect();
+            if (frame.width === 0 || frame.height === 0) continue;
+            const buffer = win.get_buffer_rect();
+            const offsetX = frame.x - buffer.x;
+            const offsetY = frame.y - buffer.y;
+            const bw = win === focusWindow ? activeWidth : inactiveWidth;
+            border.set_position(offsetX - bw, offsetY - bw);
+            border.set_size(frame.width + bw * 2, frame.height + bw * 2);
+        }
     }
 
     _removeAllBorders() {
@@ -1696,7 +1730,7 @@ export default class TilingWMExtension extends Extension {
                 }
 
                 this._moveTiledExcept(metaWindow);
-                this._doUpdateBorders();
+                this._updateBordersDuringGrab();
             } else if (mode === 'move') {
                 this._updateMoveDragPreview(metaWindow);
             }
@@ -1731,9 +1765,9 @@ export default class TilingWMExtension extends Extension {
             const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
             if (tiled.length <= 1) return;
             if (layout === 'centered-master-stack')
-                this._retileCenteredMasterStack(ws, tiled);
+                this._retileCenteredMasterStack(ws, tiled, skipWindow);
             else
-                this._retileMasterStack(ws, tiled);
+                this._retileMasterStack(ws, tiled, skipWindow);
         }
     }
 
