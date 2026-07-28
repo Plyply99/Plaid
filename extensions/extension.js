@@ -595,12 +595,46 @@ export default class TilingWMExtension extends Extension {
             totalWeight += w;
         }
 
+        const totalStackH = areaH - gap * (numStack - 1);
+
+        if (skipWindow && numStack > 1) {
+            const draggedIdx = tiledWindows.indexOf(skipWindow) - 1;
+            if (draggedIdx >= 0) {
+                const draggedH = skipWindow.get_frame_rect().height;
+                const availableForOthers = areaH - draggedH - gap * (numStack - 1);
+                if (availableForOthers > 0) {
+                    let otherWeightSum = 0;
+                    for (let i = 0; i < numStack; i++) {
+                        if (i !== draggedIdx) otherWeightSum += weights[i];
+                    }
+                    const scale = otherWeightSum > 0 ? availableForOthers / otherWeightSum : 1;
+                    let y = areaY;
+                    for (let i = 0; i < numStack; i++) {
+                        const isLast = i === numStack - 1;
+                        const win = tiledWindows[i + 1];
+                        let h;
+                        if (i === draggedIdx) {
+                            h = draggedH;
+                        } else if (isLast) {
+                            h = areaY + areaH - y;
+                        } else {
+                            h = Math.floor(weights[i] * scale);
+                        }
+                        if (win !== skipWindow)
+                            this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
+                        if (!isLast) y += h + gap;
+                    }
+                    return;
+                }
+            }
+        }
+
         let y = areaY;
         for (let i = 0; i < numStack; i++) {
             const isLast = i === numStack - 1;
             const h = isLast
                 ? (areaY + areaH - y)
-                : Math.floor((areaH - gap * (numStack - 1)) * weights[i] / totalWeight);
+                : Math.floor(totalStackH * weights[i] / totalWeight);
             const win = tiledWindows[i + 1];
             if (win !== skipWindow)
                 this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
@@ -664,16 +698,48 @@ export default class TilingWMExtension extends Extension {
             rightTotal += w;
         }
 
-        if (leftStackW > 0 && leftCount > 0) {
+        const _layoutStack = (stackWindows, stackWeights, stackTotal, x, w) => {
+            if (stackWindows.length === 0) return;
+            const count = stackWindows.length;
+            const totalStackH = areaH - gap * (count - 1);
+            if (skipWindow && stackWindows.includes(skipWindow) && count > 1) {
+                const draggedIdx = stackWindows.indexOf(skipWindow);
+                const draggedH = skipWindow.get_frame_rect().height;
+                const availableForOthers = areaH - draggedH - gap * (count - 1);
+                if (availableForOthers > 0) {
+                    let otherWeightSum = 0;
+                    for (let i = 0; i < count; i++) {
+                        if (i !== draggedIdx) otherWeightSum += stackWeights[i];
+                    }
+                    const scale = otherWeightSum > 0 ? availableForOthers / otherWeightSum : 1;
+                    let y = areaY;
+                    for (let i = 0; i < count; i++) {
+                        const isLast = i === count - 1;
+                        const win = stackWindows[i];
+                        let h;
+                        if (i === draggedIdx) {
+                            h = draggedH;
+                        } else if (isLast) {
+                            h = areaY + areaH - y;
+                        } else {
+                            h = Math.floor(stackWeights[i] * scale);
+                        }
+                        if (win !== skipWindow)
+                            this._moveWindow(win, x, y, w, h);
+                        if (!isLast) y += h + gap;
+                    }
+                    return;
+                }
+            }
             let y = areaY;
-            for (let i = 0; i < leftCount; i++) {
-                const isLast = i === leftCount - 1;
+            for (let i = 0; i < count; i++) {
+                const isLast = i === count - 1;
                 const h = isLast
                     ? (areaY + areaH - y)
-                    : Math.floor((areaH - gap * (leftCount - 1)) * leftWeights[i] / leftTotal);
-                const win = tiledWindows[1 + i];
+                    : Math.floor(totalStackH * stackWeights[i] / stackTotal);
+                const win = stackWindows[i];
                 if (win !== skipWindow)
-                    this._moveWindow(win, areaX, y, leftStackW, h);
+                    this._moveWindow(win, x, y, w, h);
                 if (!isLast) {
                     if (win === skipWindow) {
                         const frame = win.get_frame_rect();
@@ -683,27 +749,16 @@ export default class TilingWMExtension extends Extension {
                     }
                 }
             }
+        };
+
+        if (leftStackW > 0 && leftCount > 0) {
+            const leftWins = tiledWindows.slice(1, 1 + leftCount);
+            _layoutStack(leftWins, leftWeights, leftTotal, areaX, leftStackW);
         }
 
         if (rightStackW > 0 && rightCount > 0) {
-            let y = areaY;
-            for (let i = 0; i < rightCount; i++) {
-                const isLast = i === rightCount - 1;
-                const h = isLast
-                    ? (areaY + areaH - y)
-                    : Math.floor((areaH - gap * (rightCount - 1)) * rightWeights[i] / rightTotal);
-                const win = tiledWindows[1 + leftCount + i];
-                if (win !== skipWindow)
-                    this._moveWindow(win, rightStackX, y, rightStackW, h);
-                if (!isLast) {
-                    if (win === skipWindow) {
-                        const frame = win.get_frame_rect();
-                        y += frame.height + gap;
-                    } else {
-                        y += h + gap;
-                    }
-                }
-            }
+            const rightWins = tiledWindows.slice(1 + leftCount);
+            _layoutStack(rightWins, rightWeights, rightTotal, rightStackX, rightStackW);
         }
     }
 
@@ -1734,13 +1789,37 @@ export default class TilingWMExtension extends Extension {
                     if (this._grabHeightSign !== 0) {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
-                        if (idx > 0) {
+                        if (idx > 0 && this._grabInitialStackRatios) {
                             const numStack = tiled.length - 1;
                             const gapTotal = gap * (numStack - 1);
                             const totalStackH = areaH - gapTotal;
-                            const initialWeight = this._grabInitialStackRatios
-                                ? (this._grabInitialStackRatios.get(idx - 1) || 1.0) : 1.0;
-                            if (totalStackH > 0) {
+                            if (totalStackH > 0 && numStack > 1) {
+                                const stackRatios = this._getStackRatios(ws);
+                                const draggedStackIdx = idx - 1;
+                                const pixelDelta = dy * this._grabHeightSign;
+                                const otherDelta = -pixelDelta / (numStack - 1);
+                                let initTotal = 0;
+                                for (let j = 0; j < numStack; j++)
+                                    initTotal += this._grabInitialStackRatios.has(j)
+                                        ? this._grabInitialStackRatios.get(j) : 1.0;
+                                const newHeights = [];
+                                for (let j = 0; j < numStack; j++) {
+                                    const initW = this._grabInitialStackRatios.has(j)
+                                        ? this._grabInitialStackRatios.get(j) : 1.0;
+                                    const initH = totalStackH * initW / initTotal;
+                                    const delta = j === draggedStackIdx ? pixelDelta : otherDelta;
+                                    newHeights.push(Math.max(10, initH + delta));
+                                }
+                                const newTotalH = newHeights.reduce((a, b) => a + b, 0);
+                                if (newTotalH > 0) {
+                                    for (let j = 0; j < numStack; j++) {
+                                        const newW = newHeights[j] / newTotalH * numStack;
+                                        stackRatios.set(j, Math.max(0.1, newW));
+                                    }
+                                }
+                            } else if (totalStackH > 0) {
+                                const initialWeight = this._grabInitialStackRatios.has(idx - 1)
+                                    ? this._grabInitialStackRatios.get(idx - 1) : 1.0;
                                 const newWeight = Math.max(0.1,
                                     initialWeight + (dy * this._grabHeightSign) / totalStackH * numStack);
                                 const stackRatios = this._getStackRatios(ws);
