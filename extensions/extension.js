@@ -376,6 +376,8 @@ export default class TilingWMExtension extends Extension {
     _removeWindow(win) {
         if (!this._settings) return;
         const ws = this._windowWorkspaces.get(win) || win.get_workspace();
+        const wmClass = win.get_wm_class_instance() || '?';
+        log(`[plaid] REMOVE_WINDOW: ${wmClass} ws=${ws}`);
         this._windowWorkspaces.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
@@ -691,6 +693,7 @@ export default class TilingWMExtension extends Extension {
                 return true;
             }
         }
+        log(`[plaid] bspUpdateRatioFromFrame FAILED: win=${win.get_wm_class_instance() || '?'} at ${x},${y} ${w}x${h}`);
         return false;
     }
 
@@ -761,11 +764,14 @@ export default class TilingWMExtension extends Extension {
         }
 
         let tree = this._bspGetTree(workspace);
+        let removedAny = false;
         if (tree) {
             const treeWins = this._bspCollectWindows(tree);
             for (const tw of treeWins) {
                 if (!tiledWindows.includes(tw)) {
+                    log(`[plaid] RETILE: removing ${tw.get_wm_class_instance() || '?'} from tree (not in tiled)`);
                     tree = this._bspRemove(tree, tw);
+                    removedAny = true;
                 }
             }
             this._bspTrees.set(workspace, tree);
@@ -775,6 +781,10 @@ export default class TilingWMExtension extends Extension {
             tiledWindows.length !== treeWins.length ||
             tiledWindows.some(w => !treeWins.includes(w));
         if (needsRebuild) {
+            const tiledClasses = tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',');
+            const treeClasses = treeWins.map(w => w.get_wm_class_instance() || '?').join(',');
+            const missing = tiledWindows.filter(w => !treeWins.includes(w)).map(w => w.get_wm_class_instance() || '?').join(',');
+            log(`[plaid] RETILE: rebuild needed! tiled=[${tiledClasses}] tree=[${treeClasses}] missing=[${missing}]`);
             const [px, py] = global.get_pointer();
             const areaX = workArea.x + gap;
             const areaY = workArea.y + gap;
@@ -1183,6 +1193,9 @@ export default class TilingWMExtension extends Extension {
         this._grabInitRect = metaWindow.get_frame_rect();
         this._swapTarget = null;
 
+        const wmClass = metaWindow.get_wm_class_instance() || '?';
+        log(`[plaid] GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(metaWindow.get_frame_rect())} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
+
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
             this._startGrabLoop(metaWindow, 'resize');
         } else if (this._isMoveGrab(grabOp) && !this._isFloating(metaWindow)) {
@@ -1206,6 +1219,17 @@ export default class TilingWMExtension extends Extension {
                 }
                 this._retileWorkspace(ws);
                 try { metaWindow.raise(); } catch (_e) {}
+            }
+        }
+
+        if (wasTracking && metaWindow) {
+            const wmClass = metaWindow.get_wm_class_instance() || '?';
+            const ws = metaWindow.get_workspace();
+            if (ws) {
+                const tree = this._bspGetTree(ws);
+                const treeWins = tree ? this._bspCollectWindows(tree) : [];
+                const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+                log(`[plaid] GRAB_END win=${wmClass} treeWins=[${treeWins.map(w => w.get_wm_class_instance() || '?').join(',')}] tiled=[${tiled.map(w => w.get_wm_class_instance() || '?').join(',')}]`);
             }
         }
 
@@ -1297,27 +1321,44 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
 
         const tree = this._bspGetTree(ws);
-        if (!tree) return;
+        if (!tree) {
+            log(`[plaid] LIVE: no tree for ws ${ws}`);
+            return;
+        }
+
+        const treeWinsBefore = this._bspCollectWindows(tree);
 
         const isGrab = this._grabOp !== null;
+        let ratioOk = false;
         if (isGrab) {
             const frame = skipWindow.get_frame_rect();
             const ax = workArea.x + gap;
             const ay = workArea.y + gap;
             const aw = workArea.width - gap * 2;
             const ah = workArea.height - gap * 2;
-            this._bspUpdateRatioFromFrame(tree, skipWindow, frame, ax, ay, aw, ah, gap);
+            ratioOk = this._bspUpdateRatioFromFrame(tree, skipWindow, frame, ax, ay, aw, ah, gap);
         }
+
+        this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
+
+        if (!ratioOk) {
+            const skipClass = skipWindow.get_wm_class_instance() || '?';
+            log(`[plaid] LIVE: _bspUpdateRatioFromFrame FAILED for ${skipClass}`);
+        }
+    }
         this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
     }
 
     _safeMove(win, x, y, w, h) {
         if (!win || win.is_fullscreen() || !win.get_workspace()) return;
+        const frame = win.get_frame_rect();
         try {
             const actor = win.get_compositor_private();
             if (actor) actor.remove_all_transitions();
             win.move_resize_frame(false, x, y, w, h);
-        } catch (_e) {}
+        } catch (e) {
+            log(`[plaid] _safeMove FAILED: ${win.get_wm_class_instance() || '?'} to ${x},${y} ${w}x${h}: ${e.message}`);
+        }
     }
 
     _swapInLayout(winA, winB) {
