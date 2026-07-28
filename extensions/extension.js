@@ -1013,8 +1013,12 @@ export default class TilingWMExtension extends Extension {
         if (!node) return;
         if (node.type === 'empty') return;
         if (node.type === 'leaf') {
-            if (node.window !== skipWindow)
+            if (node.window !== skipWindow) {
                 this._safeMove(node.window, x, y, w, h);
+            } else {
+                const frame = node.window.get_frame_rect();
+                this._safeMove(node.window, x, y, frame.width, frame.height);
+            }
             return;
         }
         const isH = node.direction === 'h';
@@ -1775,26 +1779,26 @@ export default class TilingWMExtension extends Extension {
                 const layout = this._settings.get_string('layout');
                 if (layout === 'dwindle') {
                     const tree = this._bspGetTree(ws);
-                    if (!tree) return GLib.SOURCE_CONTINUE;
+                    if (tree) {
+                        const areaX = workArea.x + gap;
+                        const areaY = workArea.y + gap;
+                        const areaW = workArea.width - gap * 2;
+                        const areaH = workArea.height - gap * 2;
+                        this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
 
-                    const areaX = workArea.x + gap;
-                    const areaY = workArea.y + gap;
-                    const areaW = workArea.width - gap * 2;
-                    const areaH = workArea.height - gap * 2;
-                    this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
-
-                    if (this._grabResizeNodeW) {
-                        const axis = this._grabResizeNodeW._w;
-                        if (axis > 0) {
-                            this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85,
-                                this._grabInitialRatioW + (dx * this._grabWidthSign) / (axis - gap)));
+                        if (this._grabResizeNodeW) {
+                            const axis = this._grabResizeNodeW._w;
+                            if (axis > 0) {
+                                this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85,
+                                    this._grabInitialRatioW + (dx * this._grabWidthSign) / (axis - gap)));
+                            }
                         }
-                    }
-                    if (this._grabResizeNodeH) {
-                        const axis = this._grabResizeNodeH._h;
-                        if (axis > 0) {
-                            this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85,
-                                this._grabInitialRatioH + (dy * this._grabHeightSign) / (axis - gap)));
+                        if (this._grabResizeNodeH) {
+                            const axis = this._grabResizeNodeH._h;
+                            if (axis > 0) {
+                                this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85,
+                                    this._grabInitialRatioH + (dy * this._grabHeightSign) / (axis - gap)));
+                            }
                         }
                     }
                 } else {
