@@ -24,6 +24,14 @@ export default class TilingWMExtension extends Extension {
         this._keyboardFocusChange = false;
         this._grabOp = null;
         this._grabInitRect = null;
+        this._grabStartX = 0;
+        this._grabStartY = 0;
+        this._grabWidthSign = 0;
+        this._grabHeightSign = 0;
+        this._grabResizeNodeW = null;
+        this._grabResizeNodeH = null;
+        this._grabInitialRatioW = 0;
+        this._grabInitialRatioH = 0;
         this._liveResizeId = 0;
         this._swapTarget = null;
         this._lastSwapTarget = null;
@@ -661,48 +669,6 @@ export default class TilingWMExtension extends Extension {
         return node;
     }
 
-    _bspUpdateRatioFromFrame(node, win, frame, x, y, w, h, gap) {
-        const path = [];
-        const found = this._bspFindPath(node, win, path);
-        if (!found || path.length === 0) return;
-
-        this._bspTagGeometry(node, x, y, w, h, gap);
-
-        let foundH = false;
-        let foundV = false;
-
-        for (let i = path.length - 1; i >= 0; i--) {
-            const splitNode = path[i];
-            const isH = splitNode.direction === 'h';
-            if ((isH && foundH) || (!isH && foundV)) continue;
-
-            const gx = splitNode._x, gy = splitNode._y;
-            const gw = splitNode._w, gh = splitNode._h;
-            const inFirst = this._bspCollectWindows(splitNode.first).includes(win);
-            const child = inFirst ? splitNode.first : splitNode.second;
-
-            if (isH) {
-                let edge;
-                if (child.type === 'leaf') {
-                    edge = inFirst ? frame.x + frame.width : frame.x;
-                } else {
-                    edge = inFirst ? child._x + child._w : child._x;
-                }
-                splitNode.ratio = Math.max(0.15, Math.min(0.85, (edge - gap - gx) / (gw - gap)));
-                foundH = true;
-            } else {
-                let edge;
-                if (child.type === 'leaf') {
-                    edge = inFirst ? frame.y + frame.height : frame.y;
-                } else {
-                    edge = inFirst ? child._y + child._h : child._y;
-                }
-                splitNode.ratio = Math.max(0.15, Math.min(0.85, (edge - gap - gy) / (gh - gap)));
-                foundV = true;
-            }
-        }
-    }
-
     _bspTagGeometry(node, x, y, w, h, gap) {
         if (!node) return;
         node._x = x;
@@ -1215,6 +1181,35 @@ export default class TilingWMExtension extends Extension {
         log(`[plaid] GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(metaWindow.get_frame_rect())} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
 
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
+            const [startX, startY] = global.get_pointer();
+            this._grabStartX = startX;
+            this._grabStartY = startY;
+
+            const direction = (grabOp >> 12) & 0xF;
+            this._grabWidthSign = (direction & 1) ? -1 : (direction & 2) ? 1 : 0;
+            this._grabHeightSign = (direction & 8) ? -1 : (direction & 4) ? 1 : 0;
+
+            const tree = this._bspGetTree(ws);
+            this._grabResizeNodeW = null;
+            this._grabResizeNodeH = null;
+            this._grabInitialRatioW = 0;
+            this._grabInitialRatioH = 0;
+
+            if (tree) {
+                const path = [];
+                this._bspFindPath(tree, metaWindow, path);
+                for (let i = path.length - 1; i >= 0; i--) {
+                    if (path[i].direction === 'h' && this._grabWidthSign !== 0 && !this._grabResizeNodeW) {
+                        this._grabResizeNodeW = path[i];
+                        this._grabInitialRatioW = path[i].ratio;
+                    }
+                    if (path[i].direction === 'v' && this._grabHeightSign !== 0 && !this._grabResizeNodeH) {
+                        this._grabResizeNodeH = path[i];
+                        this._grabInitialRatioH = path[i].ratio;
+                    }
+                }
+            }
+
             this._startGrabLoop(metaWindow, 'resize');
         } else if (this._isMoveGrab(grabOp) && !this._isFloating(metaWindow)) {
             this._startGrabLoop(metaWindow, 'move');
@@ -1257,21 +1252,6 @@ export default class TilingWMExtension extends Extension {
         this._lastSwapTarget = null;
     }
 
-    _updateRatiosAtGrabEnd(win, ws) {
-        const tree = this._bspGetTree(ws);
-        if (!tree) return;
-        const gap = this._settings.get_int('gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
-        if (!workArea) return;
-        const ax = workArea.x + gap;
-        const ay = workArea.y + gap;
-        const aw = workArea.width - gap * 2;
-        const ah = workArea.height - gap * 2;
-        const frame = win.get_frame_rect();
-        this._bspUpdateRatioFromFrame(tree, win, frame, ax, ay, aw, ah, gap);
-    }
-
     _isResizeGrab(grabOp) {
         // GNOME 50: MetaGrabOp is bitfield-encoded.
         // WINDOW_BASE=1, direction in bits 12-15 (W=1,E=2,S=4,N=8).
@@ -1304,20 +1284,25 @@ export default class TilingWMExtension extends Extension {
             if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
 
             if (mode === 'resize') {
-                const tree = this._bspGetTree(ws);
-                if (tree) {
-                    const gap = this._settings.get_int('gap');
-                    const monitor = global.display.get_primary_monitor();
-                    const workArea = ws.get_work_area_for_monitor(monitor);
-                    if (workArea) {
-                        this._bspUpdateRatioFromFrame(
-                            tree, metaWindow, frame,
-                            workArea.x + gap, workArea.y + gap,
-                            workArea.width - gap * 2, workArea.height - gap * 2,
-                            gap
-                        );
-                    }
+                const [curX, curY] = global.get_pointer();
+                const dx = curX - this._grabStartX;
+                const dy = curY - this._grabStartY;
+
+                const gap = this._settings.get_int('gap');
+                const monitor = global.display.get_primary_monitor();
+                const workArea = ws.get_work_area_for_monitor(monitor);
+
+                if (this._grabResizeNodeW && workArea) {
+                    const axisSize = workArea.width - gap * 2;
+                    this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85,
+                        this._grabInitialRatioW + (dx * this._grabWidthSign) / axisSize));
                 }
+                if (this._grabResizeNodeH && workArea) {
+                    const axisSize = workArea.height - gap * 2;
+                    this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85,
+                        this._grabInitialRatioH + (dy * this._grabHeightSign) / axisSize));
+                }
+
                 this._moveTiledExcept(metaWindow);
                 this._doUpdateBorders();
             } else if (mode === 'move') {
