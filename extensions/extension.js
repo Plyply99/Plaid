@@ -681,14 +681,15 @@ export default class TilingWMExtension extends Extension {
         if (skipWindow && numStack > 0) {
             if (tiledWindows[0] === skipWindow) {
                 const frame = skipWindow.get_frame_rect();
+                masterX = frame.x;
                 masterW = frame.width;
                 const effectiveRatio = masterW / (areaW - gap * 2);
                 this._masterRatios.set(workspace, Math.max(0.15, Math.min(0.85, effectiveRatio)));
             } else {
                 const masterRatio = this._getMasterRatio(workspace);
                 masterW = Math.floor((areaW - gap * 2) * masterRatio);
+                masterX = areaX + Math.floor((areaW - masterW) / 2);
             }
-            masterX = areaX + Math.floor((areaW - masterW) / 2);
         } else {
             const masterRatio = this._getMasterRatio(workspace);
             masterW = Math.floor((areaW - gap * 2) * masterRatio);
@@ -1808,7 +1809,10 @@ export default class TilingWMExtension extends Extension {
                         if (idx > 0) sign = -sign;
                         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
                         if (masterDenom > 0) {
-                            const newRatio = this._grabInitialMasterRatio + (dx * sign) / masterDenom;
+                            let ratioDelta = (dx * sign) / masterDenom;
+                            if (layout === 'centered-master-stack' && idx > 0)
+                                ratioDelta *= 2;
+                            const newRatio = this._grabInitialMasterRatio + ratioDelta;
                             this._masterRatios.set(ws, Math.max(0.15, Math.min(0.85, newRatio)));
                         }
                     }
