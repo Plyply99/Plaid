@@ -811,16 +811,18 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
         const gap = this._settings.get_int('gap');
         const areaW = workArea.width - gap * 2;
+        const layout = this._settings.get_string('layout');
+        const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
 
         if (axis === 'width') {
             const currentRatio = this._getMasterRatio(workspace);
-            const currentMasterW = (areaW - gap) * currentRatio;
+            const currentMasterW = masterDenom * currentRatio;
             const newMasterW = currentMasterW + delta;
             const minMaster = 100;
-            const maxMaster = areaW - gap - numStack * 100;
+            const maxMaster = masterDenom - numStack * 100;
             if (maxMaster >= minMaster) {
                 const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-                this._masterRatios.set(workspace, clamped / (areaW - gap));
+                this._masterRatios.set(workspace, clamped / masterDenom);
             }
         } else {
             const idx = tiledWindows.indexOf(focused);
@@ -1799,9 +1801,9 @@ export default class TilingWMExtension extends Extension {
                         log(`[plaid] MS_RESIZE dx=${dx} dy=${dy} wSign=${this._grabWidthSign} hSign=${this._grabHeightSign} idx=${idx} numTiled=${tiled.length} initMasterRatio=${this._grabInitialMasterRatio.toFixed(3)}`);
                         let sign = this._grabWidthSign;
                         if (idx > 0) sign = -sign;
-                        const denom = areaW - gap;
-                        if (denom > 0) {
-                            const newRatio = this._grabInitialMasterRatio + (dx * sign) / denom;
+                        const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
+                        if (masterDenom > 0) {
+                            const newRatio = this._grabInitialMasterRatio + (dx * sign) / masterDenom;
                             this._masterRatios.set(ws, Math.max(0.15, Math.min(0.85, newRatio)));
                         }
                     }
