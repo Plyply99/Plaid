@@ -16,9 +16,7 @@ export default class TilingWMExtension extends Extension {
         this._windowBorders = new Map();
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
-        this._masterRatios = new Map();
         this._bspTrees = new Map();
-        this._stackRatios = new Map();
         this._lastFocusedPerWorkspace = new Map();
         this._signals = [];
         this._pendingRetileIds = new Map();
@@ -81,9 +79,7 @@ export default class TilingWMExtension extends Extension {
         this._windowBorders = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
-        this._masterRatios = null;
         this._bspTrees = null;
-        this._stackRatios = null;
         this._lastFocusedPerWorkspace = null;
         this._signals = null;
         this._swapTarget = null;
@@ -191,9 +187,7 @@ export default class TilingWMExtension extends Extension {
                 }
                 if (!valid) {
                     this._workspaceOrders.delete(workspace);
-                    this._masterRatios.delete(workspace);
                     this._bspTrees.delete(workspace);
-                    this._stackRatios.delete(workspace);
                     this._lastFocusedPerWorkspace.delete(workspace);
                 }
             }
@@ -226,7 +220,7 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::single-gap', () => this._retileAll()));
-        this._addSignal(this._settings, this._settings.connect('changed::layout', () => this._retileAll()));
+
         this._addSignal(this._settings, this._settings.connect('changed::dwindle-ratio', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-width', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-color', () => this._updateBorders()));
@@ -373,8 +367,7 @@ export default class TilingWMExtension extends Extension {
             if (!order.includes(win)) {
                 order.push(win);
             }
-            const layout = this._settings.get_string('layout');
-            if (layout === 'dwindle' && !this._isFloating(win)) {
+            if (!this._isFloating(win)) {
                 this._bspInsertForWorkspace(ws, win);
             }
         }
@@ -393,11 +386,8 @@ export default class TilingWMExtension extends Extension {
             const order = this._getWorkspaceOrder(ws);
             const idx = order.indexOf(win);
             if (idx !== -1) order.splice(idx, 1);
-            const layout = this._settings.get_string('layout');
-            if (layout === 'dwindle') {
-                const tree = this._bspGetTree(ws);
-                if (tree) this._bspTrees.set(ws, this._bspRemove(tree, win));
-            }
+            const tree = this._bspGetTree(ws);
+            if (tree) this._bspTrees.set(ws, this._bspRemove(tree, win));
             this._retileWorkspace(ws);
         }
     }
@@ -480,6 +470,9 @@ export default class TilingWMExtension extends Extension {
                 try { win.make_above(); } catch (_e) {}
             }
         }
+        for (const win of tiled) {
+            try { win.unmake_above(); } catch (_e) {}
+        }
     }
 
     _retileAll() {
@@ -509,81 +502,10 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const layout = this._settings.get_string('layout');
-        if (layout === 'dwindle') {
-            this._retileDwindle(workspace, tiledWindows);
-        } else {
-            this._retileMasterStack(workspace, tiledWindows);
-        }
+        this._retileDwindle(workspace, tiledWindows);
 
         this._doUpdateBorders();
         this._raiseFloatingWindows(workspace);
-    }
-
-    _getMasterRatio(workspace) {
-        if (!this._masterRatios.has(workspace))
-            this._masterRatios.set(workspace, 0.5);
-        return this._masterRatios.get(workspace);
-    }
-
-    _getStackRatios(workspace) {
-        if (!this._stackRatios.has(workspace))
-            this._stackRatios.set(workspace, new Map());
-        return this._stackRatios.get(workspace);
-    }
-
-    _retileMasterStack(workspace, tiledWindows) {
-        const gap = this._settings.get_int('gap');
-        const numWindows = tiledWindows.length;
-
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
-        if (!workArea) return;
-
-        const singleGap = this._settings.get_int('single-gap');
-        if (numWindows === 1) {
-            this._moveWindow(
-                tiledWindows[0],
-                workArea.x + singleGap,
-                workArea.y + singleGap,
-                workArea.width - singleGap * 2,
-                workArea.height - singleGap * 2
-            );
-        } else {
-            const areaX = workArea.x + gap;
-            const areaY = workArea.y + gap;
-            const areaW = workArea.width - gap * 2;
-            const areaH = workArea.height - gap * 2;
-            const masterRatio = this._getMasterRatio(workspace);
-            const masterW = Math.floor((areaW - gap) * masterRatio);
-            const stackW = areaW - masterW - gap;
-            const numStack = numWindows - 1;
-
-            this._moveWindow(tiledWindows[0], areaX, areaY, masterW, areaH);
-
-            const stackRatios = this._getStackRatios(workspace);
-            const weights = [];
-            let totalWeight = 0;
-            for (let i = 0; i < numStack; i++) {
-                const w = stackRatios.has(i) ? stackRatios.get(i) : 1.0;
-                weights.push(w);
-                totalWeight += w;
-            }
-
-            let y = areaY;
-            for (let i = 0; i < numStack; i++) {
-                const isLast = i === numStack - 1;
-                const h = isLast
-                    ? (areaY + areaH - y)
-                    : Math.floor((areaH - gap * (numStack - 1)) * weights[i] / totalWeight);
-                this._moveWindow(
-                    tiledWindows[i + 1],
-                    areaX + masterW + gap, y,
-                    stackW, h
-                );
-                if (!isLast) y += h + gap;
-            }
-        }
     }
 
     // --- BSP Tree ---
@@ -818,17 +740,6 @@ export default class TilingWMExtension extends Extension {
             tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
         }
         this._bspTrees.set(ws, tree);
-    }
-
-    _bspBuildTree(windows, workArea, gap) {
-        let tree = null;
-        const x = workArea.x + gap;
-        const y = workArea.y + gap;
-        const w = workArea.width - gap * 2;
-        const h = workArea.height - gap * 2;
-        for (const win of windows)
-            tree = this._bspInsert(tree, win, x, y, w, h, gap);
-        return tree;
     }
 
     _retileDwindle(workspace, tiledWindows) {
@@ -1130,36 +1041,11 @@ export default class TilingWMExtension extends Extension {
 
         if (!bestWindow) return;
 
-        const layout = this._settings.get_string('layout');
-        if (layout === 'dwindle') {
-            const tree = this._bspGetTree(ws);
-            if (tree) {
-                this._bspSwapWindows(tree, focused, bestWindow);
-            }
-            this._retileWorkspace(ws);
-        } else {
-            const frameA = focused.get_frame_rect();
-            const frameB = bestWindow.get_frame_rect();
-            try {
-                focused.move_resize_frame(
-                    false, frameB.x, frameB.y, frameB.width, frameB.height
-                );
-                bestWindow.move_resize_frame(
-                    false, frameA.x, frameA.y, frameA.width, frameA.height
-                );
-            } catch (e) {
-                log(`[plaid] swap move_resize failed: ${e.message}`);
-            }
-
-            const order = this._getWorkspaceOrder(ws);
-            const idxA = order.indexOf(focused);
-            const idxB = order.indexOf(bestWindow);
-            if (idxA !== -1 && idxB !== -1) {
-                order[idxA] = bestWindow;
-                order[idxB] = focused;
-            }
-            this._updateBorders();
+        const tree = this._bspGetTree(ws);
+        if (tree) {
+            this._bspSwapWindows(tree, focused, bestWindow);
         }
+        this._retileWorkspace(ws);
     }
 
     _resizeWindow(action, axis) {
@@ -1182,13 +1068,7 @@ export default class TilingWMExtension extends Extension {
         const idx = tiledWindows.indexOf(focused);
         if (idx === -1 || tiledWindows.length <= 1) return;
 
-        const layout = this._settings.get_string('layout');
-
-        if (layout === 'dwindle') {
-            this._resizeDwindle(focused, ws, tiledWindows, idx, axis, delta);
-        } else {
-            this._resizeMasterStack(focused, ws, tiledWindows, idx, axis, delta);
-        }
+        this._resizeDwindle(focused, ws, tiledWindows, idx, axis, delta);
 
         this._retileWorkspace(ws);
     }
@@ -1206,42 +1086,6 @@ export default class TilingWMExtension extends Extension {
             h = Math.max(100, h + delta);
         }
         this._moveWindow(win, x, y, w, h);
-    }
-
-    _resizeMasterStack(focused, workspace, tiledWindows, idx, axis, delta) {
-        const numStack = tiledWindows.length - 1;
-        if (numStack === 0) return;
-
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
-        if (!workArea) return;
-        const gap = this._settings.get_int('gap');
-        const areaW = workArea.width - gap * 2;
-
-        if (axis === 'width') {
-            const currentRatio = this._getMasterRatio(workspace);
-            const currentMasterW = (areaW - gap) * currentRatio;
-            const newMasterW = currentMasterW + delta;
-            const minMaster = 100;
-            const maxMaster = areaW - gap - numStack * 100;
-            if (maxMaster < minMaster) return;
-            const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-            this._masterRatios.set(workspace, clamped / (areaW - gap));
-        } else {
-            if (idx === 0) return;
-            const stackIdx = idx - 1;
-            const stackRatios = this._getStackRatios(workspace);
-            const currentWeight = stackRatios.has(stackIdx) ? stackRatios.get(stackIdx) : 1.0;
-            const deltaWeight = delta * 0.005;
-            const newWeight = Math.max(0.1, currentWeight + deltaWeight);
-            stackRatios.set(stackIdx, newWeight);
-
-            const neighborIdx = stackIdx + 1 < numStack ? stackIdx + 1 : stackIdx - 1;
-            if (neighborIdx >= 0 && neighborIdx < numStack) {
-                const neighborWeight = stackRatios.has(neighborIdx) ? stackRatios.get(neighborIdx) : 1.0;
-                stackRatios.set(neighborIdx, Math.max(0.1, neighborWeight - deltaWeight));
-            }
-        }
     }
 
     _resizeDwindle(focused, workspace, tiledWindows, idx, axis, delta) {
@@ -1302,8 +1146,6 @@ export default class TilingWMExtension extends Extension {
         if (enabled) {
             this._removeAllBorders();
             this._bspTrees.clear();
-            this._masterRatios.clear();
-            this._stackRatios.clear();
         } else {
             this._keyboardFocusChange = true;
             this._retileAll();
@@ -1375,45 +1217,18 @@ export default class TilingWMExtension extends Extension {
     }
 
     _updateRatiosAtGrabEnd(win, ws) {
-        const layout = this._settings.get_string('layout');
-        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
-        if (tiled.length <= 1) return;
-
-        if (layout === 'master-stack') {
-            const gap = this._settings.get_int('gap');
-            const monitor = global.display.get_primary_monitor();
-            const workArea = ws.get_work_area_for_monitor(monitor);
-            if (!workArea) return;
-            const areaW = workArea.width - gap * 2;
-            const numStack = tiled.length - 1;
-
-            const frame = win.get_frame_rect();
-            const idx = tiled.indexOf(win);
-            if (idx === 0) {
-                this._masterRatios.set(ws, frame.width / (areaW - gap));
-            } else if (idx > 0) {
-                const areaH = workArea.height - gap * 2;
-                const gapTotal = gap * (numStack - 1);
-                const totalStackH = areaH - gapTotal;
-                if (totalStackH > 0) {
-                    const stackRatios = this._getStackRatios(ws);
-                    stackRatios.set(idx - 1, frame.height / totalStackH);
-                }
-            }
-        } else if (layout === 'dwindle') {
-            const tree = this._bspGetTree(ws);
-            if (!tree) return;
-            const gap = this._settings.get_int('gap');
-            const monitor = global.display.get_primary_monitor();
-            const workArea = ws.get_work_area_for_monitor(monitor);
-            if (!workArea) return;
-            const ax = workArea.x + gap;
-            const ay = workArea.y + gap;
-            const aw = workArea.width - gap * 2;
-            const ah = workArea.height - gap * 2;
-            const frame = win.get_frame_rect();
-            this._bspUpdateRatioFromFrame(tree, win, frame, ax, ay, aw, ah, gap);
-        }
+        const tree = this._bspGetTree(ws);
+        if (!tree) return;
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+        const ax = workArea.x + gap;
+        const ay = workArea.y + gap;
+        const aw = workArea.width - gap * 2;
+        const ah = workArea.height - gap * 2;
+        const frame = win.get_frame_rect();
+        this._bspUpdateRatioFromFrame(tree, win, frame, ax, ay, aw, ah, gap);
     }
 
     _isResizeGrab(grabOp) {
@@ -1475,98 +1290,24 @@ export default class TilingWMExtension extends Extension {
     _moveTiledExcept(skipWindow) {
         const ws = skipWindow.get_workspace();
         if (!ws) return;
-        const layout = this._settings.get_string('layout');
-        const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         const gap = this._settings.get_int('gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
 
+        const tree = this._bspGetTree(ws);
+        if (!tree) return;
+
         const isGrab = this._grabOp !== null;
-        const draggedIdx = isGrab ? tiledWindows.indexOf(skipWindow) : -1;
-
-        if (layout === 'master-stack') {
-            if (tiledWindows.length === 1) return;
-
-            const numStack = tiledWindows.length - 1;
-
-            if (isGrab) {
-                const frame = skipWindow.get_frame_rect();
-                const grabDir = (this._grabOp >> 12) & 0xF;
-                const isHoriz = (grabDir & 0x3) !== 0;
-                const isVert = (grabDir & 0xC) !== 0;
-
-                if (isHoriz) {
-                    const areaW_total = workArea.width - gap * 2;
-                    const denom = areaW_total - gap;
-                    if (denom > 0) {
-                        const masterWidth = draggedIdx === 0
-                            ? frame.width
-                            : frame.x - (workArea.x + gap) - gap;
-                        if (masterWidth > 0) {
-                            const ratio = masterWidth / denom;
-                            this._masterRatios.set(ws, Math.max(0.1, Math.min(0.9, ratio)));
-                        }
-                    }
-                }
-                if (isVert && draggedIdx > 0) {
-                    const areaH_total = workArea.height - gap * 2;
-                    const totalStackH = areaH_total - gap * (numStack - 1);
-                    if (totalStackH > 0) {
-                        const stackRatios = this._getStackRatios(ws);
-                        stackRatios.set(draggedIdx - 1,
-                            Math.max(0.05, frame.height / totalStackH));
-                    }
-                }
-            }
-
-            const areaX = workArea.x + gap;
-            const areaY = workArea.y + gap;
-            const areaW = workArea.width - gap * 2;
-            const areaH = workArea.height - gap * 2;
-
-            const masterW = Math.floor((areaW - gap) * this._getMasterRatio(ws));
-            const stackW = areaW - masterW - gap;
-
-            if (tiledWindows[0] !== skipWindow)
-                this._safeMove(tiledWindows[0], areaX, areaY, masterW, areaH);
-
-            const stackRatios = this._getStackRatios(ws);
-            let totalStackWeight = 0;
-            for (let i = 0; i < numStack; i++)
-                totalStackWeight += stackRatios.has(i) ? stackRatios.get(i) : 1.0;
-
-            let y = areaY;
-            for (let i = 0; i < numStack; i++) {
-                const win = tiledWindows[i + 1];
-                const isSkipped = win === skipWindow;
-                const isLast = i === numStack - 1;
-                let h;
-                if (isLast) {
-                    h = areaY + areaH - y;
-                } else if (isSkipped) {
-                    h = win.get_frame_rect().height;
-                } else {
-                    const weight = stackRatios.has(i) ? stackRatios.get(i) : 1.0;
-                    h = Math.floor((areaH - gap * (numStack - 1)) * weight / totalStackWeight);
-                }
-                if (!isSkipped)
-                    this._safeMove(win, areaX + masterW + gap, y, stackW, h);
-                if (!isLast) y += h + gap;
-            }
-        } else if (layout === 'dwindle') {
-            const tree = this._bspGetTree(ws);
-            if (!tree) return;
-            if (isGrab) {
-                const frame = skipWindow.get_frame_rect();
-                const ax = workArea.x + gap;
-                const ay = workArea.y + gap;
-                const aw = workArea.width - gap * 2;
-                const ah = workArea.height - gap * 2;
-                this._bspUpdateRatioFromFrame(tree, skipWindow, frame, ax, ay, aw, ah, gap);
-            }
-            this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
+        if (isGrab) {
+            const frame = skipWindow.get_frame_rect();
+            const ax = workArea.x + gap;
+            const ay = workArea.y + gap;
+            const aw = workArea.width - gap * 2;
+            const ah = workArea.height - gap * 2;
+            this._bspUpdateRatioFromFrame(tree, skipWindow, frame, ax, ay, aw, ah, gap);
         }
+        this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
     }
 
     _safeMove(win, x, y, w, h) {
@@ -1582,37 +1323,12 @@ export default class TilingWMExtension extends Extension {
         if (!winA || !winB) return;
         const ws = winA.get_workspace();
         if (!ws) return;
-        const layout = this._settings.get_string('layout');
-        if (layout === 'dwindle') {
-            const tree = this._bspGetTree(ws);
-            if (tree) this._bspSwapWindows(tree, winA, winB);
-        } else {
-            const order = this._getWorkspaceOrder(ws);
-            const idxA = order.indexOf(winA);
-            const idxB = order.indexOf(winB);
-            if (idxA !== -1 && idxB !== -1) {
-                order[idxA] = winB;
-                order[idxB] = winA;
-            }
-        }
+        const tree = this._bspGetTree(ws);
+        if (tree) this._bspSwapWindows(tree, winA, winB);
     }
 
     _performSwap(winA, winB) {
         this._swapInLayout(winA, winB);
-        const ws = winA.get_workspace();
-        if (!ws) return;
-
-        const layout = this._settings.get_string('layout');
-        if (layout !== 'dwindle') {
-            const frameA = winA.get_frame_rect();
-            const frameB = winB.get_frame_rect();
-            try {
-                winA.move_resize_frame(false, frameB.x, frameB.y, frameB.width, frameB.height);
-                winB.move_resize_frame(false, frameA.x, frameA.y, frameA.width, frameA.height);
-            } catch (e) {
-                log(`[plaid] swap move_resize failed: ${e.message}`);
-            }
-        }
     }
 
     _checkSwapTarget(metaWindow) {
@@ -1658,87 +1374,18 @@ export default class TilingWMExtension extends Extension {
         if (!ws) return;
 
         const [px, py] = global.get_pointer();
-        const layout = this._settings.get_string('layout');
         const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiledWindows.length <= 1) {
             this._hideDropPreview();
             return;
         }
 
-        let targetRect = null;
-        if (layout === 'master-stack') {
-            const target = this._computeMasterStackDropTarget(ws, px, py);
-            if (target) {
-                targetRect = this._getTargetRect(ws, target);
-            }
-        } else if (layout === 'dwindle') {
-            const leaf = this._computeDwindleDropTarget(ws, px, py);
-            if (leaf && leaf.type === 'leaf') {
-                targetRect = { x: leaf._x, y: leaf._y, width: leaf._w, height: leaf._h };
-            }
-        }
-
-        if (targetRect) {
-            this._showDropPreview(targetRect.x, targetRect.y, targetRect.width, targetRect.height);
+        const leaf = this._computeDwindleDropTarget(ws, px, py);
+        if (leaf && leaf.type === 'leaf') {
+            this._showDropPreview(leaf._x, leaf._y, leaf._w, leaf._h);
         } else {
             this._hideDropPreview();
         }
-    }
-
-    _computeMasterStackDropTarget(ws, px, py) {
-        const gap = this._settings.get_int('gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
-        if (!workArea) return null;
-
-        if (px < workArea.x || px > workArea.x + workArea.width ||
-            py < workArea.y || py > workArea.y + workArea.height)
-            return null;
-
-        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
-        if (tiled.length === 0) return null;
-
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
-        const numStack = tiled.length - 1;
-
-        if (numStack === 0) return { index: 0 };
-
-        const masterRatio = this._getMasterRatio(ws);
-        const masterW = Math.floor((areaW - gap) * masterRatio);
-        const stackW = areaW - masterW - gap;
-        const stackX = areaX + masterW + gap;
-
-        if (px >= areaX && px <= areaX + masterW)
-            return { index: 0 };
-
-        if (px >= stackX && px <= stackX + stackW && py >= areaY) {
-            const stackRatios = this._getStackRatios(ws);
-            const weights = [];
-            let totalWeight = 0;
-            for (let i = 0; i < numStack; i++) {
-                const w = stackRatios.has(i) ? stackRatios.get(i) : 1.0;
-                weights.push(w);
-                totalWeight += w;
-            }
-
-            let y = areaY;
-            for (let i = 0; i < numStack; i++) {
-                const isLast = i === numStack - 1;
-                const h = isLast
-                    ? (areaY + areaH - y)
-                    : Math.floor((areaH - gap * (numStack - 1)) * weights[i] / totalWeight);
-                const slotEnd = y + h + (isLast ? 0 : gap / 2);
-                if (py <= slotEnd)
-                    return { index: i + 1 };
-                y += h + gap;
-            }
-            return { index: tiled.length - 1 };
-        }
-
-        return null;
     }
 
     _computeDwindleDropTarget(ws, px, py) {
@@ -1761,54 +1408,6 @@ export default class TilingWMExtension extends Extension {
 
         this._bspTagGeometry(tree, ax, ay, aw, ah, gap);
         return this._bspFindLeafAtPoint(tree, ax, ay, aw, ah, px, py, gap);
-    }
-
-    _getTargetRect(ws, target) {
-        const gap = this._settings.get_int('gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
-        if (!workArea) return null;
-
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
-        const numStack = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w)).length - 1;
-
-        if (numStack === 0)
-            return { x: areaX, y: areaY, width: areaW, height: areaH };
-
-        const masterRatio = this._getMasterRatio(ws);
-        const masterW = Math.floor((areaW - gap) * masterRatio);
-
-        if (target.index === 0)
-            return { x: areaX, y: areaY, width: masterW, height: areaH };
-
-        const stackX = areaX + masterW + gap;
-        const stackW = areaW - masterW - gap;
-
-        const stackRatios = this._getStackRatios(ws);
-        const weights = [];
-        let totalWeight = 0;
-        for (let i = 0; i < numStack; i++) {
-            const w = stackRatios.has(i) ? stackRatios.get(i) : 1.0;
-            weights.push(w);
-            totalWeight += w;
-        }
-
-        let y = areaY;
-        for (let i = 0; i < numStack; i++) {
-            const isTarget = i === target.index - 1;
-            const isLast = i === numStack - 1;
-            const h = isLast
-                ? (areaY + areaH - y)
-                : Math.floor((areaH - gap * (numStack - 1)) * weights[i] / totalWeight);
-            if (isTarget)
-                return { x: stackX, y, width: stackW, height: h };
-            y += h + gap;
-        }
-
-        return null;
     }
 
     _showDropPreview(x, y, w, h) {
@@ -1837,36 +1436,23 @@ export default class TilingWMExtension extends Extension {
 
     _repositionWindow(window, ws) {
         if (!window || !ws || !this._settings) return;
-        const layout = this._settings.get_string('layout');
         const [px, py] = global.get_pointer();
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiled.length <= 1) return;
 
-        if (layout === 'master-stack') {
-            const target = this._computeMasterStackDropTarget(ws, px, py);
-            if (!target) return;
-            const order = this._getWorkspaceOrder(ws);
-            const currentIdx = order.indexOf(window);
-            if (currentIdx === -1 || currentIdx === target.index) return;
+        const targetLeaf = this._computeDwindleDropTarget(ws, px, py);
+        if (!targetLeaf || targetLeaf.type !== 'leaf') return;
 
-            order.splice(currentIdx, 1);
-            const adjusted = target.index > currentIdx ? target.index - 1 : target.index;
-            order.splice(adjusted, 0, window);
-        } else if (layout === 'dwindle') {
-            const targetLeaf = this._computeDwindleDropTarget(ws, px, py);
-            if (!targetLeaf || targetLeaf.type !== 'leaf') return;
+        const tree = this._bspGetTree(ws);
+        if (!tree) return;
 
-            const tree = this._bspGetTree(ws);
-            if (!tree) return;
+        const gap = this._settings.get_int('gap');
+        let newTree = this._bspRemove(tree, window);
+        if (newTree.type === 'empty') newTree = null;
 
-            const gap = this._settings.get_int('gap');
-            let newTree = this._bspRemove(tree, window);
-            if (newTree.type === 'empty') newTree = null;
-
-            if (newTree && targetLeaf.window !== window) {
-                newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, gap);
-                this._bspTrees.set(ws, newTree);
-            }
+        if (newTree && targetLeaf.window !== window) {
+            newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, gap);
+            this._bspTrees.set(ws, newTree);
         }
     }
 

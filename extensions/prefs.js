@@ -75,23 +75,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(singleGapRow);
         settings.bind('single-gap', singleGapRow, 'value', Gio.SettingsBindFlags.DEFAULT);
 
-        const layoutModel = new Gtk.StringList();
-        layoutModel.append(_('Master Stack'));
-        layoutModel.append(_('Dwindle'));
-        const layoutRow = new Adw.ComboRow({
-            title: _('Tiling Layout'),
-            subtitle: _('Choose the layout algorithm'),
-            model: layoutModel,
-        });
-        group.add(layoutRow);
-
-        const layoutMap = { 'master-stack': 0, 'dwindle': 1 };
-        const reverseLayoutMap = { 0: 'master-stack', 1: 'dwindle' };
-        layoutRow.set_selected(layoutMap[settings.get_string('layout')] ?? 0);
-        layoutRow.connect('notify::selected', () => {
-            settings.set_string('layout', reverseLayoutMap[layoutRow.get_selected()]);
-        });
-
         const ratioRow = new Adw.SpinRow({
             title: _('Dwindle Split Ratio'),
             subtitle: _('Ratio for dwindle splits. Default 0.618 is the golden ratio (1/φ)'),
