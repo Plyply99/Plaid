@@ -1346,8 +1346,6 @@ export default class TilingWMExtension extends Extension {
             log(`[plaid] LIVE: _bspUpdateRatioFromFrame FAILED for ${skipClass}`);
         }
     }
-        this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
-    }
 
     _safeMove(win, x, y, w, h) {
         if (!win || win.is_fullscreen() || !win.get_workspace()) return;
