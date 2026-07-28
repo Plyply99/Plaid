@@ -725,6 +725,12 @@ export default class TilingWMExtension extends Extension {
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
         let tree = this._bspGetTree(ws);
+
+        if (tree) {
+            const existing = this._bspCollectWindows(tree);
+            if (existing.includes(win)) return;
+        }
+
         const areaX = workArea.x + gap;
         const areaY = workArea.y + gap;
         const areaW = workArea.width - gap * 2;
@@ -764,45 +770,39 @@ export default class TilingWMExtension extends Extension {
         }
 
         let tree = this._bspGetTree(workspace);
-        let removedAny = false;
         if (tree) {
             const treeWins = this._bspCollectWindows(tree);
-            for (const tw of treeWins) {
-                if (!tiledWindows.includes(tw)) {
-                    log(`[plaid] RETILE: removing ${tw.get_wm_class_instance() || '?'} from tree (not in tiled)`);
-                    tree = this._bspRemove(tree, tw);
-                    removedAny = true;
+            const needsRebuild = tiledWindows.length !== treeWins.length ||
+                tiledWindows.some(w => !treeWins.includes(w));
+            if (!needsRebuild) {
+                for (const tw of treeWins) {
+                    if (!tiledWindows.includes(tw)) {
+                        tree = this._bspRemove(tree, tw);
+                    }
                 }
+                this._bspTrees.set(workspace, tree);
+            } else {
+                tree = null;
             }
-            this._bspTrees.set(workspace, tree);
         }
-        const treeWins = this._bspCollectWindows(tree);
-        const needsRebuild = !tree ||
-            tiledWindows.length !== treeWins.length ||
-            tiledWindows.some(w => !treeWins.includes(w));
-        if (needsRebuild) {
-            const tiledClasses = tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',');
-            const treeClasses = treeWins.map(w => w.get_wm_class_instance() || '?').join(',');
-            const missing = tiledWindows.filter(w => !treeWins.includes(w)).map(w => w.get_wm_class_instance() || '?').join(',');
-            log(`[plaid] RETILE: rebuild needed! tiled=[${tiledClasses}] tree=[${treeClasses}] missing=[${missing}]`);
+        if (!tree) {
             const [px, py] = global.get_pointer();
             const areaX = workArea.x + gap;
             const areaY = workArea.y + gap;
             const areaW = workArea.width - gap * 2;
             const areaH = workArea.height - gap * 2;
+            tree = null;
             for (const win of tiledWindows) {
-                if (!treeWins.includes(win)) {
-                    if (tree) {
-                        this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
-                        const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
-                        if (target) {
-                            tree = this._bspReplaceLeaf(tree, target, win, gap);
-                        } else {
-                            tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
-                        }
+                if (tree) {
+                    this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
+                    const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
+                    if (target) {
+                        tree = this._bspReplaceLeaf(tree, target, win, gap);
                     } else {
-                        tree = this._bspMakeLeaf(win);
+                        tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
                     }
+                } else {
+                    tree = this._bspMakeLeaf(win);
                 }
             }
             this._bspTrees.set(workspace, tree);
@@ -1321,30 +1321,22 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
 
         const tree = this._bspGetTree(ws);
-        if (!tree) {
-            log(`[plaid] LIVE: no tree for ws ${ws}`);
-            return;
-        }
+        if (!tree) return;
 
-        const treeWinsBefore = this._bspCollectWindows(tree);
+        const treeWins = this._bspCollectWindows(tree);
+        if (!treeWins.includes(skipWindow)) return;
 
         const isGrab = this._grabOp !== null;
-        let ratioOk = false;
         if (isGrab) {
             const frame = skipWindow.get_frame_rect();
             const ax = workArea.x + gap;
             const ay = workArea.y + gap;
             const aw = workArea.width - gap * 2;
             const ah = workArea.height - gap * 2;
-            ratioOk = this._bspUpdateRatioFromFrame(tree, skipWindow, frame, ax, ay, aw, ah, gap);
+            this._bspUpdateRatioFromFrame(tree, skipWindow, frame, ax, ay, aw, ah, gap);
         }
 
         this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
-
-        if (!ratioOk) {
-            const skipClass = skipWindow.get_wm_class_instance() || '?';
-            log(`[plaid] LIVE: _bspUpdateRatioFromFrame FAILED for ${skipClass}`);
-        }
     }
 
     _safeMove(win, x, y, w, h) {
@@ -1492,8 +1484,8 @@ export default class TilingWMExtension extends Extension {
 
         if (newTree && targetLeaf.window !== window) {
             newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, gap);
-            this._bspTrees.set(ws, newTree);
         }
+        this._bspTrees.set(ws, newTree);
     }
 
 }
