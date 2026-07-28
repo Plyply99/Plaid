@@ -1460,7 +1460,10 @@ export default class TilingWMExtension extends Extension {
     _swapWindow(direction) {
         const focused = this._getActiveWindow();
         if (!focused) return;
-        if (this._isFloating(focused)) return;
+        if (this._isFloating(focused)) {
+            this._moveFloating(focused, direction);
+            return;
+        }
         const ws = focused.get_workspace();
         if (!ws) return;
 
@@ -1546,6 +1549,21 @@ export default class TilingWMExtension extends Extension {
             h = Math.max(100, h + delta);
         }
         this._moveWindow(win, x, y, w, h);
+    }
+
+    _moveFloating(win, direction) {
+        const amount = this._settings.get_int('resize-amount');
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) return;
+        let x = frame.x;
+        let y = frame.y;
+        switch (direction) {
+            case 'left': x -= amount; break;
+            case 'right': x += amount; break;
+            case 'up': y -= amount; break;
+            case 'down': y += amount; break;
+        }
+        this._moveWindow(win, x, y, frame.width, frame.height);
     }
 
     _resizeDwindle(focused, workspace, axis, delta) {
