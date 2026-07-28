@@ -1701,11 +1701,6 @@ export default class TilingWMExtension extends Extension {
         const buffer = metaWindow.get_buffer_rect();
         if (!frame || !buffer) return;
 
-        if (this._isMoveGrab(grabOp)) {
-            const inTitleBar = py < buffer.y;
-            if (!inTitleBar) return;
-        }
-
         this._grabOp = grabOp;
         this._swapTarget = null;
 
