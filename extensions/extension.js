@@ -1487,69 +1487,54 @@ export default class TilingWMExtension extends Extension {
 
         if (layout === 'master-stack') {
             if (tiledWindows.length === 1) return;
+
+            const numStack = tiledWindows.length - 1;
+
+            if (isGrab) {
+                const frame = skipWindow.get_frame_rect();
+                if (draggedIdx === 0) {
+                    const areaW = workArea.width - gap * 2;
+                    const denom = areaW - gap;
+                    if (denom > 0) {
+                        const ratio = frame.width / denom;
+                        this._masterRatios.set(ws, Math.max(0.1, Math.min(0.9, ratio)));
+                    }
+                } else if (draggedIdx > 0) {
+                    const areaH = workArea.height - gap * 2;
+                    const totalStackH = areaH - gap * (numStack - 1);
+                    if (totalStackH > 0) {
+                        const stackIdx = draggedIdx - 1;
+                        const stackRatios = this._getStackRatios(ws);
+                        stackRatios.set(stackIdx, Math.max(0.05, frame.height / totalStackH));
+                    }
+                }
+            }
+
             const areaX = workArea.x + gap;
             const areaY = workArea.y + gap;
             const areaW = workArea.width - gap * 2;
             const areaH = workArea.height - gap * 2;
-            const numStack = tiledWindows.length - 1;
 
-            let masterW;
-            if (draggedIdx === 0) {
-                masterW = skipWindow.get_frame_rect().width;
-            } else {
-                masterW = Math.floor((areaW - gap) * this._getMasterRatio(ws));
-            }
-            const minMaster = 100;
-            const maxMaster = areaW - gap - numStack * 100;
-            if (maxMaster >= minMaster)
-                masterW = Math.max(minMaster, Math.min(maxMaster, masterW));
+            const masterW = Math.floor((areaW - gap) * this._getMasterRatio(ws));
             const stackW = areaW - masterW - gap;
 
             if (tiledWindows[0] !== skipWindow)
                 this._safeMove(tiledWindows[0], areaX, areaY, masterW, areaH);
 
             const stackRatios = this._getStackRatios(ws);
-            const resizeStackIdx = draggedIdx > 0 ? draggedIdx - 1 : -1;
-            const resizeStackH = resizeStackIdx >= 0 ? skipWindow.get_frame_rect().height : 0;
+            let totalStackWeight = 0;
+            for (let i = 0; i < numStack; i++)
+                totalStackWeight += stackRatios.has(i) ? stackRatios.get(i) : 1.0;
 
             let y = areaY;
-            for (let j = 0; j < numStack; j++) {
-                const isLast = j === numStack - 1;
-                let h;
-                if (j === resizeStackIdx) {
-                    h = resizeStackH;
-                } else if (resizeStackIdx >= 0) {
-                    const otherWeights = [];
-                    let otherTotal = 0;
-                    for (let k = 0; k < numStack; k++) {
-                        if (k === resizeStackIdx) continue;
-                        const w = stackRatios.has(k) ? stackRatios.get(k) : 1.0;
-                        otherWeights.push({ idx: k, weight: w });
-                        otherTotal += w;
-                    }
-                    const remainingH = areaH - resizeStackH - gap * (numStack - 1);
-                    const oIdx = otherWeights.findIndex(o => o.idx === j);
-                    if (oIdx >= 0 && otherTotal > 0) {
-                        h = oIdx < otherWeights.length - 1
-                            ? Math.floor(remainingH * otherWeights[oIdx].weight / otherTotal)
-                            : Math.max(0, areaY + areaH - y);
-                    } else {
-                        h = isLast ? Math.max(0, areaY + areaH - y) : 100;
-                    }
-                } else {
-                    const weights = [];
-                    let totalWeight = 0;
-                    for (let k = 0; k < numStack; k++) {
-                        const w = stackRatios.has(k) ? stackRatios.get(k) : 1.0;
-                        weights.push(w);
-                        totalWeight += w;
-                    }
-                    h = isLast
-                        ? (areaY + areaH - y)
-                        : Math.floor((areaH - gap * (numStack - 1)) * weights[j] / totalWeight);
-                }
-                if (tiledWindows[j + 1] !== skipWindow)
-                    this._safeMove(tiledWindows[j + 1], areaX + masterW + gap, y, stackW, h);
+            for (let i = 0; i < numStack; i++) {
+                const isLast = i === numStack - 1;
+                const weight = stackRatios.has(i) ? stackRatios.get(i) : 1.0;
+                const h = isLast
+                    ? (areaY + areaH - y)
+                    : Math.floor((areaH - gap * (numStack - 1)) * weight / totalStackWeight);
+                if (tiledWindows[i + 1] !== skipWindow)
+                    this._safeMove(tiledWindows[i + 1], areaX + masterW + gap, y, stackW, h);
                 if (!isLast) y += h + gap;
             }
         } else if (layout === 'dwindle') {
