@@ -1205,6 +1205,7 @@ export default class TilingWMExtension extends Extension {
                     this._updateRatiosAtGrabEnd(metaWindow, ws);
                 }
                 this._retileWorkspace(ws);
+                try { metaWindow.raise(); } catch (_e) {}
             }
         }
 
@@ -1315,7 +1316,7 @@ export default class TilingWMExtension extends Extension {
         try {
             const actor = win.get_compositor_private();
             if (actor) actor.remove_all_transitions();
-            win.move_resize_frame(true, x, y, w, h);
+            win.move_resize_frame(false, x, y, w, h);
         } catch (_e) {}
     }
 
