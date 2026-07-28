@@ -1288,19 +1288,7 @@ export default class TilingWMExtension extends Extension {
     _startGrabLoop(metaWindow, mode) {
         this._stopLiveResizeLoop();
 
-        const initRect = this._grabInitRect;
         const ws = metaWindow.get_workspace();
-
-        let axes = [];
-        if (mode === 'resize' && this._grabOp) {
-            const direction = (this._grabOp >> 12) & 0xF;
-            if (direction & 3) axes.push('width');
-            if (direction & 12) axes.push('height');
-            if (axes.length === 0) axes.push('width');
-        }
-
-        let lastDw = 0;
-        let lastDh = 0;
 
         this._liveResizeId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
             if (this._destroyed || !metaWindow || !this._grabOp) {
@@ -1312,23 +1300,22 @@ export default class TilingWMExtension extends Extension {
             if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
 
             if (mode === 'resize') {
-                const dw = frame.width - initRect.width;
-                const dh = frame.height - initRect.height;
-                const incDw = dw - lastDw;
-                const incDh = dh - lastDh;
-
-                if (incDw !== 0 || incDh !== 0) {
-                    lastDw = dw;
-                    lastDh = dh;
-                    for (const axis of axes) {
-                        const inc = axis === 'width' ? incDw : incDh;
-                        if (inc !== 0) {
-                            this._resizeDwindle(metaWindow, ws, axis, inc);
-                        }
+                const tree = this._bspGetTree(ws);
+                if (tree) {
+                    const gap = this._settings.get_int('gap');
+                    const monitor = global.display.get_primary_monitor();
+                    const workArea = ws.get_work_area_for_monitor(monitor);
+                    if (workArea) {
+                        this._bspUpdateRatioFromFrame(
+                            tree, metaWindow, frame,
+                            workArea.x + gap, workArea.y + gap,
+                            workArea.width - gap * 2, workArea.height - gap * 2,
+                            gap
+                        );
                     }
-                    this._moveTiledExcept(metaWindow);
-                    this._doUpdateBorders();
                 }
+                this._moveTiledExcept(metaWindow);
+                this._doUpdateBorders();
             } else if (mode === 'move') {
                 this._updateMoveDragPreview(metaWindow);
             }
