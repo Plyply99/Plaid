@@ -1078,7 +1078,7 @@ export default class TilingWMExtension extends Extension {
         const idx = tiledWindows.indexOf(focused);
         if (idx === -1 || tiledWindows.length <= 1) return;
 
-        this._resizeDwindle(focused, ws, tiledWindows, idx, axis, delta);
+        this._resizeDwindle(focused, ws, axis, delta);
 
         this._retileWorkspace(ws);
     }
@@ -1098,7 +1098,7 @@ export default class TilingWMExtension extends Extension {
         this._moveWindow(win, x, y, w, h);
     }
 
-    _resizeDwindle(focused, workspace, tiledWindows, idx, axis, delta) {
+    _resizeDwindle(focused, workspace, axis, delta) {
         const tree = this._bspGetTree(workspace);
         if (!tree) return;
 
@@ -1111,11 +1111,8 @@ export default class TilingWMExtension extends Extension {
                 const monitor = global.display.get_primary_monitor();
                 const workArea = workspace.get_work_area_for_monitor(monitor);
                 if (!workArea) return;
-                const minR = 0.15;
-                const maxR = 0.85;
                 const axisSize = targetIsHorizontal ? workArea.width : workArea.height;
-                const normalizedDelta = delta / axisSize;
-                path[i].ratio = Math.max(minR, Math.min(maxR, path[i].ratio + normalizedDelta));
+                path[i].ratio = Math.max(0.15, Math.min(0.85, path[i].ratio + delta / axisSize));
                 return;
             }
         }
@@ -1214,8 +1211,6 @@ export default class TilingWMExtension extends Extension {
             if (ws) {
                 if (this._isMoveGrab(grabOp)) {
                     this._repositionWindow(metaWindow, ws);
-                } else {
-                    this._updateRatiosAtGrabEnd(metaWindow, ws);
                 }
                 this._retileWorkspace(ws);
                 try { metaWindow.raise(); } catch (_e) {}
@@ -1275,8 +1270,20 @@ export default class TilingWMExtension extends Extension {
 
     _startGrabLoop(metaWindow, mode) {
         this._stopLiveResizeLoop();
-        let lastWidth = this._grabInitRect?.width || 0;
-        let lastHeight = this._grabInitRect?.height || 0;
+
+        const initRect = this._grabInitRect;
+        const ws = metaWindow.get_workspace();
+
+        let axes = [];
+        if (mode === 'resize' && this._grabOp) {
+            const direction = (this._grabOp >> 12) & 0xF;
+            if (direction & 3) axes.push('width');
+            if (direction & 12) axes.push('height');
+            if (axes.length === 0) axes.push('width');
+        }
+
+        let lastDw = 0;
+        let lastDh = 0;
 
         this._liveResizeId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
             if (this._destroyed || !metaWindow || !this._grabOp) {
@@ -1288,15 +1295,23 @@ export default class TilingWMExtension extends Extension {
             if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
 
             if (mode === 'resize') {
-                if (frame.width === lastWidth && frame.height === lastHeight) {
-                    this._checkSwapTarget(metaWindow);
-                    return GLib.SOURCE_CONTINUE;
-                }
-                lastWidth = frame.width;
-                lastHeight = frame.height;
+                const dw = frame.width - initRect.width;
+                const dh = frame.height - initRect.height;
+                const incDw = dw - lastDw;
+                const incDh = dh - lastDh;
 
-                this._moveTiledExcept(metaWindow);
-                this._doUpdateBorders();
+                if (incDw !== 0 || incDh !== 0) {
+                    lastDw = dw;
+                    lastDh = dh;
+                    for (const axis of axes) {
+                        const inc = axis === 'width' ? incDw : incDh;
+                        if (inc !== 0) {
+                            this._resizeDwindle(metaWindow, ws, axis, inc);
+                        }
+                    }
+                    this._moveTiledExcept(metaWindow);
+                    this._doUpdateBorders();
+                }
             } else if (mode === 'move') {
                 this._updateMoveDragPreview(metaWindow);
             }
@@ -1325,16 +1340,6 @@ export default class TilingWMExtension extends Extension {
 
         const treeWins = this._bspCollectWindows(tree);
         if (!treeWins.includes(skipWindow)) return;
-
-        const isGrab = this._grabOp !== null;
-        if (isGrab) {
-            const frame = skipWindow.get_frame_rect();
-            const ax = workArea.x + gap;
-            const ay = workArea.y + gap;
-            const aw = workArea.width - gap * 2;
-            const ah = workArea.height - gap * 2;
-            this._bspUpdateRatioFromFrame(tree, skipWindow, frame, ax, ay, aw, ah, gap);
-        }
 
         this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
     }
