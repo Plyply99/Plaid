@@ -770,27 +770,34 @@ export default class TilingWMExtension extends Extension {
         }
 
         let tree = this._bspGetTree(workspace);
+        const areaX = workArea.x + gap;
+        const areaY = workArea.y + gap;
+        const areaW = workArea.width - gap * 2;
+        const areaH = workArea.height - gap * 2;
+
         if (tree) {
             const treeWins = this._bspCollectWindows(tree);
-            const needsRebuild = tiledWindows.length !== treeWins.length ||
-                tiledWindows.some(w => !treeWins.includes(w));
-            if (!needsRebuild) {
-                for (const tw of treeWins) {
-                    if (!tiledWindows.includes(tw)) {
-                        tree = this._bspRemove(tree, tw);
+            for (const tw of treeWins) {
+                if (!tiledWindows.includes(tw)) {
+                    tree = this._bspRemove(tree, tw);
+                }
+            }
+            const [px, py] = global.get_pointer();
+            for (const win of tiledWindows) {
+                const currentWins = this._bspCollectWindows(tree);
+                if (!currentWins.includes(win)) {
+                    this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
+                    const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
+                    if (target) {
+                        tree = this._bspReplaceLeaf(tree, target, win, gap);
+                    } else {
+                        tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
                     }
                 }
-                this._bspTrees.set(workspace, tree);
-            } else {
-                tree = null;
             }
-        }
-        if (!tree) {
+            this._bspTrees.set(workspace, tree);
+        } else {
             const [px, py] = global.get_pointer();
-            const areaX = workArea.x + gap;
-            const areaY = workArea.y + gap;
-            const areaW = workArea.width - gap * 2;
-            const areaH = workArea.height - gap * 2;
             tree = null;
             for (const win of tiledWindows) {
                 if (tree) {
@@ -1127,8 +1134,9 @@ export default class TilingWMExtension extends Extension {
 
         const lower = wms.toLowerCase();
         const current = new Set(this._settings.get_strv('float-windows'));
+        const wasFloating = current.has(lower);
 
-        if (current.has(lower)) {
+        if (wasFloating) {
             current.delete(lower);
         } else {
             current.add(lower);
@@ -1136,14 +1144,23 @@ export default class TilingWMExtension extends Extension {
 
         this._settings.set_strv('float-windows', [...current]);
         const ws = focused.get_workspace();
-        if (ws) {
-            this._keyboardFocusChange = true;
-            this._retileWorkspace(ws);
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._keyboardFocusChange = false;
-                return false;
-            });
+        if (!ws) return;
+
+        if (wasFloating) {
+            this._bspInsertForWorkspace(ws, focused);
+        } else {
+            const tree = this._bspGetTree(ws);
+            if (tree) {
+                this._bspTrees.set(ws, this._bspRemove(tree, focused));
+            }
         }
+
+        this._keyboardFocusChange = true;
+        this._retileWorkspace(ws);
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._keyboardFocusChange = false;
+            return false;
+        });
     }
 
     _toggleTiling() {
