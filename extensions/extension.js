@@ -66,9 +66,9 @@ export default class TilingWMExtension extends Extension {
 
     disable() {
         this._destroyed = true;
-        if (this._pickClickId) {
-            try { global.stage.disconnect(this._pickClickId); } catch (_e) {}
-            this._pickClickId = null;
+        if (this._pickFocusId) {
+            try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+            this._pickFocusId = null;
         }
         for (const id of (this._pendingRetileIds || new Map()).values())
             GLib.source_remove(id);
@@ -2011,26 +2011,22 @@ export default class TilingWMExtension extends Extension {
     // --- Pick Mode ---
 
     _startPickMode() {
-        if (this._pickClickId) {
-            try { global.stage.disconnect(this._pickClickId); } catch (_e) {}
-            this._pickClickId = null;
+        if (this._pickFocusId) {
+            try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+            this._pickFocusId = null;
         }
-        this._pickClickId = global.stage.connect('button-press-event', (actor, event) => {
-            const [px, py] = [Math.floor(event.x), Math.floor(event.y)];
-            const win = global.display.get_window_at_position(px, py);
-            if (!win) return Clutter.EVENT_PROPAGATE;
-
-            if (this._pickClickId) {
-                try { global.stage.disconnect(this._pickClickId); } catch (_e) {}
-                this._pickClickId = null;
+        this._pickFocusId = global.display.connect('notify::focus-window', () => {
+            const win = global.display.focus_window;
+            if (!win) return;
+            if (this._pickFocusId) {
+                try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+                this._pickFocusId = null;
             }
             const cls = win.get_wm_class_instance() || '';
             const title = win.get_title() || '';
             this._settings.set_string('pick-mode-class', cls);
             this._settings.set_string('pick-mode-title', title);
             this._settings.set_boolean('pick-mode', false);
-
-            return Clutter.EVENT_PROPAGATE;
         });
     }
 
