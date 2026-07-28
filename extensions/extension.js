@@ -1689,11 +1689,27 @@ export default class TilingWMExtension extends Extension {
         const ws = metaWindow.get_workspace();
         if (!ws || ws !== global.workspace_manager.get_active_workspace()) return;
 
+        const [px, py] = global.get_pointer();
+        const frame = metaWindow.get_frame_rect();
+        const buffer = metaWindow.get_buffer_rect();
+        if (!frame || !buffer) return;
+
+        if (this._isMoveGrab(grabOp)) {
+            const inTitleBar = py < buffer.y;
+            if (!inTitleBar) return;
+        }
+
+        if (this._isResizeGrab(grabOp)) {
+            const onEdge = px < buffer.x || px > buffer.x + buffer.width ||
+                           py < buffer.y || py > buffer.y + buffer.height;
+            if (!onEdge) return;
+        }
+
         this._grabOp = grabOp;
         this._swapTarget = null;
 
         const wmClass = metaWindow.get_wm_class_instance() || '?';
-        log(`[plaid] GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(metaWindow.get_frame_rect())} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
+        log(`[plaid] GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(frame)} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
 
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
             const [startX, startY] = global.get_pointer();
