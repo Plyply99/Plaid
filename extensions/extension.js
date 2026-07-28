@@ -1202,10 +1202,14 @@ export default class TilingWMExtension extends Extension {
                     if (path[i].direction === 'h' && this._grabWidthSign !== 0 && !this._grabResizeNodeW) {
                         this._grabResizeNodeW = path[i];
                         this._grabInitialRatioW = path[i].ratio;
+                        if (!this._bspFindPath(path[i].first, metaWindow, []))
+                            this._grabWidthSign = -this._grabWidthSign;
                     }
                     if (path[i].direction === 'v' && this._grabHeightSign !== 0 && !this._grabResizeNodeH) {
                         this._grabResizeNodeH = path[i];
                         this._grabInitialRatioH = path[i].ratio;
+                        if (!this._bspFindPath(path[i].first, metaWindow, []))
+                            this._grabHeightSign = -this._grabHeightSign;
                     }
                 }
             }
