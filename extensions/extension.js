@@ -1520,6 +1520,7 @@ export default class TilingWMExtension extends Extension {
         this._retileWorkspace(ws);
         this._keyboardFocusChange = true;
         focused.activate(global.get_current_time());
+        this._cursorWarpDeferred(focused);
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._keyboardFocusChange = false;
             return false;
