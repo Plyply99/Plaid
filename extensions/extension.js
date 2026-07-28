@@ -662,50 +662,54 @@ export default class TilingWMExtension extends Extension {
     }
 
     _bspUpdateRatioFromFrame(node, win, frame, x, y, w, h, gap) {
-        if (!node || node.type === 'empty') return false;
-        if (node.type === 'leaf') return node.window === win;
+        const path = [];
+        const found = this._bspFindPath(node, win, path);
+        if (!found || path.length === 0) return;
 
-        const isH = node.direction === 'h';
-        const axisSize = isH ? w : h;
-        const split = Math.floor((axisSize - gap) * node.ratio);
-        const secondSize = axisSize - split - gap;
+        this._bspTagGeometry(node, x, y, w, h, gap);
 
-        if (isH) {
-            if (this._bspUpdateRatioFromFrame(node.first, win, frame, x, y, split, h, gap)) {
-                const newRatio = (frame.x + frame.width - x) / (w - gap);
-                node.ratio = Math.max(0.15, Math.min(0.85, newRatio));
-                return true;
-            }
-            if (this._bspUpdateRatioFromFrame(node.second, win, frame, x + split + gap, y, secondSize, h, gap)) {
-                const newRatio = (frame.x - gap - x) / (w - gap);
-                node.ratio = Math.max(0.15, Math.min(0.85, newRatio));
-                return true;
-            }
-        } else {
-            if (this._bspUpdateRatioFromFrame(node.first, win, frame, x, y, w, split, gap)) {
-                const newRatio = (frame.y + frame.height - y) / (h - gap);
-                node.ratio = Math.max(0.15, Math.min(0.85, newRatio));
-                return true;
-            }
-            if (this._bspUpdateRatioFromFrame(node.second, win, frame, x, y + split + gap, w, secondSize, gap)) {
-                const newRatio = (frame.y - gap - y) / (h - gap);
-                node.ratio = Math.max(0.15, Math.min(0.85, newRatio));
-                return true;
+        let foundH = false;
+        let foundV = false;
+
+        for (let i = path.length - 1; i >= 0; i--) {
+            const splitNode = path[i];
+            const isH = splitNode.direction === 'h';
+            if ((isH && foundH) || (!isH && foundV)) continue;
+
+            const gx = splitNode._x, gy = splitNode._y;
+            const gw = splitNode._w, gh = splitNode._h;
+            const inFirst = this._bspCollectWindows(splitNode.first).includes(win);
+            const child = inFirst ? splitNode.first : splitNode.second;
+
+            if (isH) {
+                let edge;
+                if (child.type === 'leaf') {
+                    edge = inFirst ? frame.x + frame.width : frame.x;
+                } else {
+                    edge = inFirst ? child._x + child._w : child._x;
+                }
+                splitNode.ratio = Math.max(0.15, Math.min(0.85, (edge - gap - gx) / (gw - gap)));
+                foundH = true;
+            } else {
+                let edge;
+                if (child.type === 'leaf') {
+                    edge = inFirst ? frame.y + frame.height : frame.y;
+                } else {
+                    edge = inFirst ? child._y + child._h : child._y;
+                }
+                splitNode.ratio = Math.max(0.15, Math.min(0.85, (edge - gap - gy) / (gh - gap)));
+                foundV = true;
             }
         }
-        log(`[plaid] bspUpdateRatioFromFrame FAILED: win=${win.get_wm_class_instance() || '?'} at ${x},${y} ${w}x${h}`);
-        return false;
     }
 
     _bspTagGeometry(node, x, y, w, h, gap) {
         if (!node) return;
-        if (node.type === 'empty' || node.type === 'leaf') {
-            node._x = x;
-            node._y = y;
-            node._w = w;
-            node._h = h;
-            return;
-        }
+        node._x = x;
+        node._y = y;
+        node._w = w;
+        node._h = h;
+        if (node.type === 'empty' || node.type === 'leaf') return;
         const isH = node.direction === 'h';
         const axisSize = isH ? w : h;
         const split = Math.floor((axisSize - gap) * node.ratio);
