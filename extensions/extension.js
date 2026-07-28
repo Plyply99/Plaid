@@ -622,6 +622,8 @@ export default class TilingWMExtension extends Extension {
                         }
                         if (win !== skipWindow)
                             this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
+                        else
+                            this._moveWindow(win, areaX + masterW + gap, y, stackW, draggedH);
                         if (!isLast) y += h + gap;
                     }
                     return;
@@ -638,6 +640,8 @@ export default class TilingWMExtension extends Extension {
             const win = tiledWindows[i + 1];
             if (win !== skipWindow)
                 this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
+            else
+                this._moveWindow(win, areaX + masterW + gap, y, stackW, win.get_frame_rect().height);
             if (!isLast) {
                 if (win === skipWindow) {
                     const frame = win.get_frame_rect();
@@ -726,6 +730,8 @@ export default class TilingWMExtension extends Extension {
                         }
                         if (win !== skipWindow)
                             this._moveWindow(win, x, y, w, h);
+                        else
+                            this._moveWindow(win, x, y, w, draggedH);
                         if (!isLast) y += h + gap;
                     }
                     return;
@@ -740,6 +746,8 @@ export default class TilingWMExtension extends Extension {
                 const win = stackWindows[i];
                 if (win !== skipWindow)
                     this._moveWindow(win, x, y, w, h);
+                else
+                    this._moveWindow(win, x, y, w, win.get_frame_rect().height);
                 if (!isLast) {
                     if (win === skipWindow) {
                         const frame = win.get_frame_rect();
@@ -1778,6 +1786,7 @@ export default class TilingWMExtension extends Extension {
                     if (this._grabWidthSign !== 0) {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
+                        log(`[plaid] MS_RESIZE dx=${dx} dy=${dy} wSign=${this._grabWidthSign} hSign=${this._grabHeightSign} idx=${idx} numTiled=${tiled.length} initMasterRatio=${this._grabInitialMasterRatio.toFixed(3)}`);
                         let sign = this._grabWidthSign;
                         if (idx > 0) sign = -sign;
                         const denom = areaW - gap;
@@ -1790,6 +1799,7 @@ export default class TilingWMExtension extends Extension {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
                         if (idx > 0 && this._grabInitialStackRatios) {
+                            log(`[plaid] MS_HEIGHT idx=${idx} dy=${dy} hSign=${this._grabHeightSign} initStackRatios=[${[...this._grabInitialStackRatios.entries()].map(([k,v])=>`${k}:${v.toFixed(2)}`).join(',')}]`);
                             const numStack = tiled.length - 1;
                             const gapTotal = gap * (numStack - 1);
                             const totalStackH = areaH - gapTotal;
