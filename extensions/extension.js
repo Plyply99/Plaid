@@ -1706,12 +1706,6 @@ export default class TilingWMExtension extends Extension {
             if (!inTitleBar) return;
         }
 
-        if (this._isResizeGrab(grabOp)) {
-            const onEdge = px < buffer.x || px >= buffer.x + buffer.width ||
-                           py < buffer.y || py >= buffer.y + buffer.height;
-            if (!onEdge) return;
-        }
-
         this._grabOp = grabOp;
         this._swapTarget = null;
 
