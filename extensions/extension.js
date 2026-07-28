@@ -24,10 +24,10 @@ export default class TilingWMExtension extends Extension {
         this._keyboardFocusChange = false;
         this._grabOp = null;
         this._grabInitRect = null;
-        this._grabStartX = 0;
-        this._grabStartY = 0;
         this._grabWidthSign = 0;
         this._grabHeightSign = 0;
+        this._grabOrigWidthSign = 0;
+        this._grabOrigHeightSign = 0;
         this._grabResizeNodeW = null;
         this._grabResizeNodeH = null;
         this._grabInitialRatioW = 0;
@@ -1181,13 +1181,11 @@ export default class TilingWMExtension extends Extension {
         log(`[plaid] GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(metaWindow.get_frame_rect())} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
 
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
-            const [startX, startY] = global.get_pointer();
-            this._grabStartX = startX;
-            this._grabStartY = startY;
-
             const direction = (grabOp >> 12) & 0xF;
             this._grabWidthSign = (direction & 1) ? -1 : (direction & 2) ? 1 : 0;
             this._grabHeightSign = (direction & 8) ? -1 : (direction & 4) ? 1 : 0;
+            this._grabOrigWidthSign = this._grabWidthSign;
+            this._grabOrigHeightSign = this._grabHeightSign;
 
             const tree = this._bspGetTree(ws);
             this._grabResizeNodeW = null;
@@ -1288,23 +1286,30 @@ export default class TilingWMExtension extends Extension {
             if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
 
             if (mode === 'resize') {
-                const [curX, curY] = global.get_pointer();
-                const dx = curX - this._grabStartX;
-                const dy = curY - this._grabStartY;
-
                 const gap = this._settings.get_int('gap');
                 const monitor = global.display.get_primary_monitor();
                 const workArea = ws.get_work_area_for_monitor(monitor);
 
+                const init = this._grabInitRect;
+                let wEdgeDelta = 0, hEdgeDelta = 0;
+                if (this._grabOrigWidthSign > 0)
+                    wEdgeDelta = (frame.x + frame.width) - (init.x + init.width);
+                else if (this._grabOrigWidthSign < 0)
+                    wEdgeDelta = frame.x - init.x;
+                if (this._grabOrigHeightSign > 0)
+                    hEdgeDelta = (frame.y + frame.height) - (init.y + init.height);
+                else if (this._grabOrigHeightSign < 0)
+                    hEdgeDelta = frame.y - init.y;
+
                 if (this._grabResizeNodeW && workArea) {
                     const axisSize = workArea.width - gap * 2;
                     this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85,
-                        this._grabInitialRatioW + (dx * this._grabWidthSign) / axisSize));
+                        this._grabInitialRatioW + wEdgeDelta / (axisSize - gap)));
                 }
                 if (this._grabResizeNodeH && workArea) {
                     const axisSize = workArea.height - gap * 2;
                     this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85,
-                        this._grabInitialRatioH + (dy * this._grabHeightSign) / axisSize));
+                        this._grabInitialRatioH + hEdgeDelta / (axisSize - gap)));
                 }
 
                 this._moveTiledExcept(metaWindow);
