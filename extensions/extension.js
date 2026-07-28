@@ -1518,6 +1518,12 @@ export default class TilingWMExtension extends Extension {
             this._swapMasterStackWindows(focused, bestWindow);
         }
         this._retileWorkspace(ws);
+        this._keyboardFocusChange = true;
+        focused.activate(global.get_current_time());
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._keyboardFocusChange = false;
+            return false;
+        });
     }
 
     _resizeWindow(action, axis) {
