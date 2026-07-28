@@ -604,7 +604,14 @@ export default class TilingWMExtension extends Extension {
             const win = tiledWindows[i + 1];
             if (win !== skipWindow)
                 this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
-            if (!isLast) y += h + gap;
+            if (!isLast) {
+                if (win === skipWindow) {
+                    const frame = win.get_frame_rect();
+                    y += frame.height + gap;
+                } else {
+                    y += h + gap;
+                }
+            }
         }
     }
 
@@ -667,7 +674,14 @@ export default class TilingWMExtension extends Extension {
                 const win = tiledWindows[1 + i];
                 if (win !== skipWindow)
                     this._moveWindow(win, areaX, y, leftStackW, h);
-                if (!isLast) y += h + gap;
+                if (!isLast) {
+                    if (win === skipWindow) {
+                        const frame = win.get_frame_rect();
+                        y += frame.height + gap;
+                    } else {
+                        y += h + gap;
+                    }
+                }
             }
         }
 
@@ -681,7 +695,14 @@ export default class TilingWMExtension extends Extension {
                 const win = tiledWindows[1 + leftCount + i];
                 if (win !== skipWindow)
                     this._moveWindow(win, rightStackX, y, rightStackW, h);
-                if (!isLast) y += h + gap;
+                if (!isLast) {
+                    if (win === skipWindow) {
+                        const frame = win.get_frame_rect();
+                        y += frame.height + gap;
+                    } else {
+                        y += h + gap;
+                    }
+                }
             }
         }
     }
