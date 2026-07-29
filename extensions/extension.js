@@ -655,14 +655,11 @@ export default class TilingWMExtension extends Extension {
                 });
             } else {
                 actor.remove_all_transitions();
-                actor.set_position(frame.x, frame.y);
-                actor.set_size(frame.width, frame.height);
+                actor.set_translation(frame.x - target.x, frame.y - target.y, 0);
                 actor.show();
                 actor.ease({
-                    x: target.x,
-                    y: target.y,
-                    width: target.w,
-                    height: target.h,
+                    translation_x: 0,
+                    translation_y: 0,
                     duration,
                     mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
                     onComplete: () => {
@@ -702,14 +699,13 @@ export default class TilingWMExtension extends Extension {
         const frame = win.get_frame_rect();
         try { win.move_resize_frame(false, x, y, w, h); } catch (_e) {}
         actor.remove_all_transitions();
-        actor.set_position(frame.x, frame.y);
-        actor.set_size(frame.width, frame.height);
+        actor.set_translation(frame.x - x, frame.y - y, 0);
         actor.show();
         actor.ease({
-            x, y, width: w, height: h,
+            translation_x: 0,
+            translation_y: 0,
             duration: animTime * 1000,
             mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-            onComplete: () => {},
         });
     }
 
