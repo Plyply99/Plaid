@@ -1739,16 +1739,13 @@ export default class TilingWMExtension extends Extension {
             h = Math.max(100, h + delta);
         }
         this._animFloat(win, x, y, w, h);
+        this._moveCursorToWindow(win);
     }
 
     _moveFloating(win, direction) {
         const amount = this._settings.get_int('resize-amount');
         const frame = win.get_frame_rect();
         if (frame.width === 0 || frame.height === 0) return;
-
-        const [curX, curY] = global.get_pointer();
-        const relX = curX - frame.x;
-        const relY = curY - frame.y;
 
         let x = frame.x;
         let y = frame.y;
@@ -1759,7 +1756,7 @@ export default class TilingWMExtension extends Extension {
             case 'down': y += amount; break;
         }
         this._animFloat(win, x, y, frame.width, frame.height);
-        this._warpCursor(win, x, y, relX, relY);
+        this._moveCursorToWindow(win);
     }
 
     _resizeDwindle(focused, workspace, axis, delta) {
@@ -1887,6 +1884,8 @@ export default class TilingWMExtension extends Extension {
         if (!wasFloating) {
             this._retileWorkspace(ws);
         }
+
+        this._moveCursorToWindow(win);
 
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._keyboardFocusChange = false;
