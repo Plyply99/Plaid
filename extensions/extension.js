@@ -583,7 +583,7 @@ export default class TilingWMExtension extends Extension {
     _getAnimationTime() {
         const stSettings = St.Settings.get();
         if (!stSettings.enable_animations) return 0;
-        return 0.15 * stSettings.slow_down_factor;
+        return 0.05 * stSettings.slow_down_factor;
     }
 
     _cancelAnimation() {
@@ -699,14 +699,19 @@ export default class TilingWMExtension extends Extension {
         const frame = win.get_frame_rect();
         try { win.move_resize_frame(false, x, y, w, h); } catch (_e) {}
         actor.remove_all_transitions();
+        const scaleX = frame.width > 0 ? frame.width / w : 1;
+        const scaleY = frame.height > 0 ? frame.height / h : 1;
         actor.set_translation(frame.x - x, frame.y - y, 0);
+        actor.set_scale(scaleX, scaleY);
         actor.show();
-        actor.ease({
-            translation_x: 0,
-            translation_y: 0,
-            duration: animTime * 1000,
-            mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-        });
+        const props = { duration: animTime * 1000, mode: Clutter.AnimationMode.EASE_OUT_CUBIC };
+        props.translation_x = 0;
+        props.translation_y = 0;
+        if (Math.abs(scaleX - 1) > 0.01 || Math.abs(scaleY - 1) > 0.01) {
+            props.scale_x = 1;
+            props.scale_y = 1;
+        }
+        actor.ease(props);
     }
 
     // --- Master-Stack Helpers ---
