@@ -1552,6 +1552,7 @@ export default class TilingWMExtension extends Extension {
             { key: 'resize-grow-height', fn: () => this._resizeWindow('grow', 'height') },
             { key: 'toggle-float', fn: () => this._toggleFloat() },
             { key: 'toggle-tiling', fn: () => this._toggleTiling() },
+            { key: 'center-window', fn: () => this._centerWindow() },
             { key: 'pick-float-window', fn: () => this._handlePickFloat() },
         ];
 
@@ -1571,7 +1572,7 @@ export default class TilingWMExtension extends Extension {
             'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
-            'toggle-float', 'toggle-tiling', 'pick-float-window',
+            'toggle-float', 'toggle-tiling', 'center-window', 'pick-float-window',
         ];
         for (const key of keys) {
             Main.wm.removeKeybinding(key);
@@ -1840,6 +1841,57 @@ export default class TilingWMExtension extends Extension {
                 return false;
             });
         }
+    }
+
+    _centerWindow() {
+        const win = this._getActiveWindow();
+        if (!win) return;
+
+        const ws = win.get_workspace();
+        if (!ws) return;
+
+        const wasFloating = this._isFloating(win);
+
+        if (!wasFloating) {
+            const wms = win.get_wm_class_instance();
+            if (!wms) return;
+            const lower = wms.toLowerCase();
+            const current = new Set(this._settings.get_strv('float-windows'));
+            current.add(lower);
+            this._settings.set_strv('float-windows', [...current]);
+
+            const layout = this._settings.get_string('layout');
+            if (layout === 'dwindle') {
+                const tree = this._bspGetTree(ws);
+                if (tree)
+                    this._bspTrees.set(ws, this._bspRemove(tree, win));
+            }
+        }
+
+        const frame = win.get_frame_rect();
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+
+        const x = workArea.x + Math.floor((workArea.width - frame.width) / 2);
+        const y = workArea.y + Math.floor((workArea.height - frame.height) / 2);
+
+        const actor = win.get_compositor_private();
+        if (actor) actor.remove_all_transitions();
+
+        win.move_resize_frame(false, x, y, frame.width, frame.height);
+
+        this._keyboardFocusChange = true;
+        win.activate(global.get_current_time());
+
+        if (!wasFloating) {
+            this._retileWorkspace(ws);
+        }
+
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._keyboardFocusChange = false;
+            return false;
+        });
     }
 
     // --- Grab-Based Mouse Resize & Swap ---

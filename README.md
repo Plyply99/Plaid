@@ -7,7 +7,7 @@ A tiling window manager extension for GNOME Shell 50. Tiles windows automaticall
 - **Two layouts:** Master-Stack and Dwindle (BSP tree)
 - **Configurable gaps** between windows and around single windows
 - **Window borders** with active/inactive colors, widths, and corner radius
-- **14 vim-style keybindings** (Super+hjkl) for focus, swap, resize
+- **15 vim-style keybindings** (Super+hjkl) for focus, swap, resize, center
 - **Float rules** by WM_CLASS or window title, with click-to-capture pick mode
 - **Toggle tiling** on/off with Super+T
 - **Cursor warp** to focused/created windows
@@ -21,6 +21,7 @@ A tiling window manager extension for GNOME Shell 50. Tiles windows automaticall
 | Shrink/grow width | `Super+Ctrl+h` / `Super+Ctrl+l` |
 | Shrink/grow height | `Super+Ctrl+j` / `Super+Ctrl+k` |
 | Toggle float | `Super+Shift+Space` |
+| Center window | `Super+Shift+C` |
 | Toggle tiling | `Super+T` |
 
 ## Install
