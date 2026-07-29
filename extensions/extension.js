@@ -21,6 +21,7 @@ export default class TilingWMExtension extends Extension {
         this._stackRatios = new Map();
         this._bspTrees = new Map();
         this._lastFocusedPerWorkspace = new Map();
+        this._fillScreenRects = new Map();
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
@@ -103,6 +104,7 @@ export default class TilingWMExtension extends Extension {
         this._stackRatios = null;
         this._bspTrees = null;
         this._lastFocusedPerWorkspace = null;
+        this._fillScreenRects = null;
         this._signals = null;
         this._swapTarget = null;
         this._lastSwapTarget = null;
@@ -119,12 +121,6 @@ export default class TilingWMExtension extends Extension {
         this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
         this._mutterSettings.set_boolean('auto-maximize', false);
         this._mutterSettings.set_boolean('edge-tiling', false);
-
-        this._mutterKeybindings = new Gio.Settings({ schema_id: 'org.gnome.mutter.keybindings' });
-        this._savedToggleTiledLeft = this._mutterKeybindings.get_value('toggle-tiled-left');
-        this._savedToggleTiledRight = this._mutterKeybindings.get_value('toggle-tiled-right');
-        this._mutterKeybindings.set_value('toggle-tiled-left', new GLib.Variant('as', []));
-        this._mutterKeybindings.set_value('toggle-tiled-right', new GLib.Variant('as', []));
     }
 
     _restoreMutterDefaults() {
@@ -132,11 +128,6 @@ export default class TilingWMExtension extends Extension {
             this._mutterSettings.set_boolean('auto-maximize', this._savedAutoMaximize);
             this._mutterSettings.set_boolean('edge-tiling', this._savedEdgeTiling);
             this._mutterSettings = null;
-        }
-        if (this._mutterKeybindings) {
-            this._mutterKeybindings.set_value('toggle-tiled-left', this._savedToggleTiledLeft);
-            this._mutterKeybindings.set_value('toggle-tiled-right', this._savedToggleTiledRight);
-            this._mutterKeybindings = null;
         }
     }
 
@@ -435,6 +426,7 @@ export default class TilingWMExtension extends Extension {
         log(`[plaid] REMOVE_WINDOW: ${wmClass} ws=${ws}`);
         this._windowWorkspaces.delete(win);
         this._toggleFloatWindows.delete(win);
+        this._fillScreenRects.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
         for (const [workspace, lastWin] of this._lastFocusedPerWorkspace) {
@@ -485,17 +477,6 @@ export default class TilingWMExtension extends Extension {
         sigIds.push({ emitter: win, id: win.connect('notify::minimized', () => {
             const ws = win.get_workspace();
             if (ws) this._retileWorkspace(ws);
-        }) });
-        sigIds.push({ emitter: win, id: win.connect('notify::maximized-horizontally', () => {
-            if (win.maximized_horizontally) {
-                win.unmaximize(Meta.MaximizeFlags.BOTH);
-                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                    if (this._destroyed) return false;
-                    const ws = win.get_workspace();
-                    if (ws) this._retileWorkspace(ws);
-                    return false;
-                });
-            }
         }) });
         this._actorSignals.set(actor, sigIds);
     }
@@ -1557,6 +1538,7 @@ export default class TilingWMExtension extends Extension {
             { key: 'toggle-float', fn: () => this._toggleFloat() },
             { key: 'toggle-tiling', fn: () => this._toggleTiling() },
             { key: 'center-window', fn: () => this._centerWindow() },
+            { key: 'fill-screen', fn: () => this._toggleFillScreen() },
             { key: 'pick-float-window', fn: () => this._handlePickFloat() },
         ];
 
@@ -1576,7 +1558,7 @@ export default class TilingWMExtension extends Extension {
             'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
-            'toggle-float', 'toggle-tiling', 'center-window', 'pick-float-window',
+            'toggle-float', 'toggle-tiling', 'center-window', 'fill-screen', 'pick-float-window',
         ];
         for (const key of keys) {
             Main.wm.removeKeybinding(key);
@@ -1866,6 +1848,52 @@ export default class TilingWMExtension extends Extension {
             this._keyboardFocusChange = false;
             return false;
         });
+    }
+
+    _toggleFillScreen() {
+        const win = this._getActiveWindow();
+        if (!win) return;
+        const ws = win.get_workspace();
+        if (!ws) return;
+        const monitor = global.display.get_primary_monitor();
+        const workArea = ws.get_work_area_for_monitor(monitor);
+        if (!workArea) return;
+        const singleGap = this._settings.get_int('single-gap');
+        const fillRect = {
+            x: workArea.x + singleGap,
+            y: workArea.y + singleGap,
+            w: workArea.width - singleGap * 2,
+            h: workArea.height - singleGap * 2,
+        };
+        if (fillRect.w <= 0 || fillRect.h <= 0) return;
+
+        if (this._isFloating(win)) {
+            if (this._fillScreenRects.has(win)) {
+                const saved = this._fillScreenRects.get(win);
+                this._fillScreenRects.delete(win);
+                this._moveWindow(win, saved.x, saved.y, saved.w, saved.h);
+            } else {
+                const frame = win.get_frame_rect();
+                this._fillScreenRects.set(win, { x: frame.x, y: frame.y, w: frame.width, h: frame.height });
+                this._moveWindow(win, fillRect.x, fillRect.y, fillRect.w, fillRect.h);
+                this._raiseFloatingWindows(ws);
+            }
+        } else {
+            const windows = ws.list_windows().filter(w =>
+                w.get_window_type() === Meta.WindowType.NORMAL &&
+                !w.is_skip_taskbar() &&
+                !w.minimized
+            );
+            if (windows.length > 1) return;
+            const frame = win.get_frame_rect();
+            if (frame.x === fillRect.x && frame.y === fillRect.y &&
+                frame.width === fillRect.w && frame.height === fillRect.h) {
+                this._retileWorkspace(ws);
+            } else {
+                this._moveWindow(win, fillRect.x, fillRect.y, fillRect.w, fillRect.h);
+                this._raiseFloatingWindows(ws);
+            }
+        }
     }
 
     // --- Grab-Based Mouse Resize & Swap ---

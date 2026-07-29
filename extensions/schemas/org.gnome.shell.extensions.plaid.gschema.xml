@@ -210,5 +210,12 @@
       <description>Press to enter pick mode; click a window to add it to the float list by class or title</description>
     </key>
 
+    <!-- Keybinding: Fill Screen -->
+    <key name="fill-screen" type="as">
+      <default><![CDATA[['<Super><Shift>m']]]></default>
+      <summary>Fill screen</summary>
+      <description>Fill the focused window to the work area (single-window gap). If floating, stores position for restore. If tiled and alone, fills/unfills.</description>
+    </key>
+
   </schema>
 </schemalist>

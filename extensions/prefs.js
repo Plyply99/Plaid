@@ -322,6 +322,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         this._addShortcutRow(miscGroup, settings, 'toggle-float', _('Toggle Float'));
         this._addShortcutRow(miscGroup, settings, 'toggle-tiling', _('Toggle Tiling'));
+        this._addShortcutRow(miscGroup, settings, 'fill-screen', _('Fill Screen'));
         this._addShortcutRow(miscGroup, settings, 'center-window', _('Center Window'));
         this._addShortcutRow(miscGroup, settings, 'pick-float-window', _('Pick Window to Float'));
     }
