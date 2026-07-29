@@ -583,7 +583,7 @@ export default class TilingWMExtension extends Extension {
     _getAnimationTime() {
         const stSettings = St.Settings.get();
         if (!stSettings.enable_animations) return 0;
-        return 0.05 * stSettings.slow_down_factor;
+        return 0.1 * stSettings.slow_down_factor;
     }
 
     _cancelAnimation() {
@@ -655,9 +655,13 @@ export default class TilingWMExtension extends Extension {
                 });
             } else {
                 actor.remove_all_transitions();
+                const scaleX = frame.width > 0 ? frame.width / target.w : 1;
+                const scaleY = frame.height > 0 ? frame.height / target.h : 1;
+                actor.set_pivot_point(0, 0);
                 actor.set_translation(frame.x - target.x, frame.y - target.y, 0);
+                actor.set_scale(scaleX, scaleY);
                 actor.show();
-                actor.ease({
+                const params = {
                     translation_x: 0,
                     translation_y: 0,
                     duration,
@@ -666,7 +670,12 @@ export default class TilingWMExtension extends Extension {
                         remaining--;
                         if (remaining <= 0) this._finishAnimation(workspace, tiledWindows);
                     },
-                });
+                };
+                if (Math.abs(scaleX - 1) > 0.01 || Math.abs(scaleY - 1) > 0.01) {
+                    params.scale_x = 1;
+                    params.scale_y = 1;
+                }
+                actor.ease(params);
             }
         }
 
@@ -701,6 +710,7 @@ export default class TilingWMExtension extends Extension {
         actor.remove_all_transitions();
         const scaleX = frame.width > 0 ? frame.width / w : 1;
         const scaleY = frame.height > 0 ? frame.height / h : 1;
+        actor.set_pivot_point(0, 0);
         actor.set_translation(frame.x - x, frame.y - y, 0);
         actor.set_scale(scaleX, scaleY);
         actor.show();
