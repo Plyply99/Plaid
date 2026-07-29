@@ -5,6 +5,7 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 export default class TilingWMExtension extends Extension {
@@ -83,6 +84,7 @@ export default class TilingWMExtension extends Extension {
             this._dropOverlay = null;
         }
         this._disconnectSignals();
+        this._destroyFloatPickDialog();
         this._removeKeybindings();
         this._settings = null;
         this._floatingClasses = null;
@@ -1384,6 +1386,7 @@ export default class TilingWMExtension extends Extension {
             { key: 'resize-grow-height', fn: () => this._resizeWindow('grow', 'height') },
             { key: 'toggle-float', fn: () => this._toggleFloat() },
             { key: 'toggle-tiling', fn: () => this._toggleTiling() },
+            { key: 'pick-float-window', fn: () => this._handlePickFloat() },
         ];
 
         for (const { key, fn } of bindings) {
@@ -1402,7 +1405,7 @@ export default class TilingWMExtension extends Extension {
             'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
-            'toggle-float', 'toggle-tiling',
+            'toggle-float', 'toggle-tiling', 'pick-float-window',
         ];
         for (const key of keys) {
             Main.wm.removeKeybinding(key);
@@ -2017,6 +2020,101 @@ export default class TilingWMExtension extends Extension {
             this._settings.set_string('pick-mode-title', title);
             this._settings.set_boolean('pick-mode', false);
         });
+    }
+
+    _handlePickFloat() {
+        const win = global.display.focus_window;
+        if (!win) {
+            Main.notify(_('No window is focused'));
+            return;
+        }
+
+        const cls = win.get_wm_class_instance() || '';
+        const title = win.get_title() || '';
+
+        if (!cls && !title) {
+            Main.notify(_('Could not identify the focused window'));
+            return;
+        }
+
+        this._showFloatPickDialog(cls, title);
+    }
+
+    _showFloatPickDialog(cls, title) {
+        this._destroyFloatPickDialog();
+        const dialog = new ModalDialog();
+        this._pickDialog = dialog;
+
+        const content = new St.BoxLayout({ vertical: true, style: 'spacing: 12px;' });
+
+        const header = new St.Label({
+            text: _('Add Floating Window'),
+            style: 'font-weight: bold; font-size: 14px;',
+        });
+        content.add_child(header);
+
+        const subtitle = new St.Label({
+            text: _('How should this window be identified?'),
+        });
+        content.add_child(subtitle);
+
+        dialog.contentLayout.add_child(content);
+
+        const buttons = [];
+
+        if (cls) {
+            buttons.push({
+                label: _('By class: %s').replace('%s', cls),
+                action: () => {
+                    this._addFloatEntry('float-windows', cls.toLowerCase());
+                    dialog.close();
+                },
+                key: Clutter.KEY_c,
+            });
+        }
+
+        if (title) {
+            buttons.push({
+                label: _('By title: %s').replace('%s', title),
+                action: () => {
+                    this._addFloatEntry('float-titles', title);
+                    dialog.close();
+                },
+                key: Clutter.KEY_t,
+            });
+        }
+
+        buttons.push({
+            label: _('Cancel'),
+            action: () => dialog.close(),
+            key: Clutter.KEY_Escape,
+        });
+
+        dialog.setButtons(buttons);
+        dialog.open();
+    }
+
+    _addFloatEntry(key, value) {
+        const current = new Set(this._settings.get_strv(key));
+        current.add(value);
+        this._settings.set_strv(key, [...current]);
+
+        if (key === 'float-windows') {
+            this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
+        } else {
+            this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
+        }
+
+        if (value.length > 40)
+            value = value.substring(0, 37) + '...';
+        Main.notify(_('Added "%s" to float list').replace('%s', value));
+    }
+
+    _destroyFloatPickDialog() {
+        if (this._pickDialog) {
+            try { this._pickDialog.close(); } catch (_e) {}
+            this._pickDialog = null;
+        }
     }
 
     // --- Drag & Drop Repositioning ---

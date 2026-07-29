@@ -198,5 +198,12 @@
       <description>Window title of the picked window</description>
     </key>
 
+    <!-- Keybinding: Pick Window to Float -->
+    <key name="pick-float-window" type="as">
+      <default><![CDATA[['<Super><Control><Shift>f']]]></default>
+      <summary>Pick window to float</summary>
+      <description>Press to enter pick mode; click a window to add it to the float list by class or title</description>
+    </key>
+
   </schema>
 </schemalist>
