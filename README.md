@@ -4,50 +4,45 @@ A tiling window manager extension for GNOME Shell 50. Tiles windows automaticall
 
 ## Features
 
-- **Two layouts:** Master-Stack and Dwindle (BSP tree)
+- **Three layouts:** Dwindle (BSP tree), Master-Stack, and Centered Master-Stack
 - **Configurable gaps** between windows and around single windows
 - **Window borders** with active/inactive colors, widths, and corner radius
-- **15 vim-style keybindings** (Super+hjkl) for focus, swap, resize, center
+- **Full keybind support** for tiling — focus, swap, resize, toggle float, center, fill screen, and more
 - **Float rules** by WM_CLASS or window title, with click-to-capture pick mode
+- **Mouse resize and swap** — drag edges to resize split ratios, drag title bar to swap windows
 - **Toggle tiling** on/off with Super+T
 - **Cursor warp** to focused/created windows
 
 ## Default Keybindings
 
-| Action | Shortcut |
-|--------|----------|
-| Focus left/right/up/down | `Super+h` / `Super+l` / `Super+k` / `Super+j` |
-| Swap left/right/up/down | `Super+Shift+h` / `Super+Shift+l` / `Super+Shift+k` / `Super+Shift+j` |
-| Shrink/grow width | `Super+Ctrl+h` / `Super+Ctrl+l` |
-| Shrink/grow height | `Super+Ctrl+j` / `Super+Ctrl+k` |
-| Toggle float | `Super+Shift+Space` |
-| Center window | `Super+Shift+C` |
-| Toggle tiling | `Super+T` |
+All keybinds use `Super` as the primary modifier with vim-style `hjkl` for directional actions:
+
+- **Window movement:** `Super+h/j/k/l` to focus, `Super+Shift+h/j/k/l` to swap
+- **Resizing:** `Super+Ctrl+h/j/k/l` to shrink/grow width and height
+- **Toggles:** `Super+T` for tiling, `Super+Shift+Space` for float, `Super+Shift+M` for fill screen
+- **Other:** `Super+Shift+C` to center a floating window, `Super+Ctrl+Shift+F` to pick a window to float
+
+All keybinds are configurable through the preferences UI.
 
 ## Install
 
+Download the extension and install it with:
+
 ```bash
-# Copy to GNOME Shell extensions directory
-cp -r extensions/* ~/.local/share/gnome-shell/extensions/plaid@gnome/
-
-# Recompile schemas (if editing the schema)
-glib-compile-schemas ~/.local/share/gnome-shell/extensions/plaid@gnome/schemas/
-
-# Enable the extension
-gnome-extensions enable plaid@gnome
-
-# Reload GNOME Shell (X11 only, Alt+F2 then r) or log out/in (Wayland)
+gnome-extensions install plaid@gnome.zip
 ```
+
+Then reload GNOME Shell (`Alt+F2` then `r` on X11) or log out and back in (Wayland).
 
 ## Configuration
 
 Open the preferences UI with:
 
 ```bash
-gnome-extensions prefs tiling-wm@gnome
+gnome-extensions prefs plaid@gnome
 ```
 
-Settings are stored via GSettings under `org.gnome.shell.extensions.tiling-wm`.
+Settings are stored via GSettings under `org.gnome.shell.extensions.plaid`.
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 {
   "uuid": "plaid@gnome",
   "name": "Plaid",
-  "description": "A tiling window manager for GNOME with configurable borders, keybinds, and float rules",
+  "description": "A tiling window manager for GNOME with three layouts, configurable gaps, borders, keybinds, float rules, mouse resize/swap, and cursor warp",
   "shell-version": ["50"],
   "version": 5014,
   "url": "",
