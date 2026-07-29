@@ -24,6 +24,7 @@ export default class TilingWMExtension extends Extension {
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
+        this._queuedAnimWorkspaces = new Set();
         this._keyboardFocusChange = false;
         this._grabOp = null;
         this._grabStartX = 0;
@@ -114,6 +115,7 @@ export default class TilingWMExtension extends Extension {
         this._grabInitialStackRatios = null;
         this._animTargets = null;
         this._newWindowSet = null;
+        this._queuedAnimWorkspaces = null;
     }
 
     _disableMutterDefaults() {
@@ -593,15 +595,14 @@ export default class TilingWMExtension extends Extension {
     _createClone(win) {
         const actor = win.get_compositor_private();
         if (!actor) return null;
-        const [ax, ay] = actor.get_position();
-        const [aw, ah] = actor.get_size();
-        if (aw === 0 || ah === 0) return null;
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) return null;
         const clone = new Clutter.Clone({
             source: actor,
             reactive: false,
         });
-        clone.set_position(ax, ay);
-        clone.set_size(aw, ah);
+        clone.set_position(frame.x, frame.y);
+        clone.set_size(frame.width, frame.height);
         this._animContainer.add_child(clone);
         return clone;
     }
@@ -634,7 +635,10 @@ export default class TilingWMExtension extends Extension {
     }
 
     _animRetile(workspace, tiledWindows) {
-        if (this._animating) this._cancelAnimation();
+        if (this._animating) {
+            this._queuedAnimWorkspaces.add(workspace);
+            return;
+        }
 
         this._animTargets = new Map();
 
@@ -658,9 +662,18 @@ export default class TilingWMExtension extends Extension {
         if (this._windowClones.size === 0) {
             this._animTargets = null;
             for (const win of tiledWindows) this._newWindowSet.delete(win);
-            this._doUpdateBorders();
+            this._scheduleBorders();
             this._raiseFloatingWindows(workspace);
             return;
+        }
+
+        for (const [win, target] of this._animTargets) {
+            if (!win || win.is_fullscreen() || !win.get_workspace()) continue;
+            try {
+                const actor = win.get_compositor_private();
+                if (actor) actor.remove_all_transitions();
+                win.move_resize_frame(false, target.x, target.y, target.w, target.h);
+            } catch (_e) {}
         }
 
         this._animating = true;
@@ -691,13 +704,9 @@ export default class TilingWMExtension extends Extension {
                     this._moveWindow(win, target.x, target.y, target.w, target.h);
                     const actor = win.get_compositor_private();
                     if (actor) {
-                        actor.set_opacity(0);
+                        actor.remove_all_transitions();
+                        actor.set_opacity(255);
                         actor.show();
-                        actor.ease({
-                            opacity: 255,
-                            duration: Math.min(duration, 100),
-                            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                        });
                     }
                     this._destroyClone(win);
                     remaining--;
@@ -731,8 +740,13 @@ export default class TilingWMExtension extends Extension {
     _finishAnimation(workspace, tiledWindows) {
         this._animating = false;
         for (const w of tiledWindows) this._newWindowSet.delete(w);
-        this._doUpdateBorders();
+        this._scheduleBorders();
         this._raiseFloatingWindows(workspace);
+        if (this._queuedAnimWorkspaces.size > 0) {
+            const pending = [...this._queuedAnimWorkspaces];
+            this._queuedAnimWorkspaces.clear();
+            for (const ws of pending) this._scheduleRetile(ws);
+        }
     }
 
     _animFloat(win, x, y, w, h) {
@@ -753,6 +767,7 @@ export default class TilingWMExtension extends Extension {
         }
         actor.hide();
         this._windowClones.set(win, clone);
+        try { win.move_resize_frame(false, x, y, w, h); } catch (_e) {}
         clone.ease({
             x, y, width: w, height: h,
             duration: animTime * 1000,
@@ -762,13 +777,9 @@ export default class TilingWMExtension extends Extension {
                 this._moveWindow(win, x, y, w, h);
                 const a = win.get_compositor_private();
                 if (a) {
-                    a.set_opacity(0);
+                    a.remove_all_transitions();
+                    a.set_opacity(255);
                     a.show();
-                    a.ease({
-                        opacity: 255,
-                        duration: Math.min(animTime * 1000, 100),
-                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                    });
                 }
                 this._destroyClone(win);
             },
