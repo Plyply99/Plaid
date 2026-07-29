@@ -717,15 +717,14 @@ export default class TilingWMExtension extends Extension {
             if (isNew) {
                 clone.set_position(target.x, target.y);
                 clone.set_size(target.w, target.h);
-                clone.set_scale(0.8, 0.8);
                 clone.set_opacity(0);
-                params.scale_x = 1.0;
-                params.scale_y = 1.0;
                 params.opacity = 255;
-                params.mode = Clutter.AnimationMode.EASE_OUT_BACK;
+                params.mode = Clutter.AnimationMode.EASE_OUT_CUBIC;
             } else {
                 params.x = target.x;
                 params.y = target.y;
+                params.width = target.w;
+                params.height = target.h;
                 params.mode = Clutter.AnimationMode.EASE_OUT_CUBIC;
             }
 
