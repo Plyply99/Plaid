@@ -25,6 +25,7 @@ export default class TilingWMExtension extends Extension {
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
         this._queuedAnimWorkspaces = new Set();
+        this._toggleFloatWindows = new Set();
         this._keyboardFocusChange = false;
         this._grabOp = null;
         this._grabStartX = 0;
@@ -94,6 +95,7 @@ export default class TilingWMExtension extends Extension {
         this._settings = null;
         this._floatingClasses = null;
         this._floatingTitles = null;
+        this._toggleFloatWindows = null;
         this._windowBorders = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
@@ -388,6 +390,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _isFloating(win) {
+        if (this._toggleFloatWindows && this._toggleFloatWindows.has(win)) return true;
         const wms = win.get_wm_class_instance();
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return true;
         const title = win.get_title();
@@ -431,6 +434,7 @@ export default class TilingWMExtension extends Extension {
         const wmClass = win.get_wm_class_instance() || '?';
         log(`[plaid] REMOVE_WINDOW: ${wmClass} ws=${ws}`);
         this._windowWorkspaces.delete(win);
+        this._toggleFloatWindows.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
         for (const [workspace, lastWin] of this._lastFocusedPerWorkspace) {
@@ -1783,20 +1787,12 @@ export default class TilingWMExtension extends Extension {
         const focused = this._getActiveWindow();
         if (!focused) return;
 
-        const wms = focused.get_wm_class_instance();
-        if (!wms) return;
-
-        const lower = wms.toLowerCase();
-        const current = new Set(this._settings.get_strv('float-windows'));
-        const wasFloating = current.has(lower);
-
+        const wasFloating = this._toggleFloatWindows.has(focused);
         if (wasFloating) {
-            current.delete(lower);
+            this._toggleFloatWindows.delete(focused);
         } else {
-            current.add(lower);
+            this._toggleFloatWindows.add(focused);
         }
-
-        this._settings.set_strv('float-windows', [...current]);
         const ws = focused.get_workspace();
         if (!ws) return;
 
@@ -1843,27 +1839,10 @@ export default class TilingWMExtension extends Extension {
     _centerWindow() {
         const win = this._getActiveWindow();
         if (!win) return;
+        if (!this._isFloating(win)) return;
 
         const ws = win.get_workspace();
         if (!ws) return;
-
-        const wasFloating = this._isFloating(win);
-
-        if (!wasFloating) {
-            const wms = win.get_wm_class_instance();
-            if (!wms) return;
-            const lower = wms.toLowerCase();
-            const current = new Set(this._settings.get_strv('float-windows'));
-            current.add(lower);
-            this._settings.set_strv('float-windows', [...current]);
-
-            const layout = this._settings.get_string('layout');
-            if (layout === 'dwindle') {
-                const tree = this._bspGetTree(ws);
-                if (tree)
-                    this._bspTrees.set(ws, this._bspRemove(tree, win));
-            }
-        }
 
         const frame = win.get_frame_rect();
         const monitor = global.display.get_primary_monitor();
@@ -1880,10 +1859,6 @@ export default class TilingWMExtension extends Extension {
 
         this._keyboardFocusChange = true;
         win.activate(global.get_current_time());
-
-        if (!wasFloating) {
-            this._retileWorkspace(ws);
-        }
 
         this._moveCursorToWindow(win);
 
