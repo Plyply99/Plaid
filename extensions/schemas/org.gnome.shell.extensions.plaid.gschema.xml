@@ -166,6 +166,13 @@
     </key>
 
     <!-- Pick mode: used to capture a window click for float rules -->
+    <key name="animation-time" type="d">
+      <default>0.2</default>
+      <range min="0" max="2.0"/>
+      <summary>Animation duration in seconds</summary>
+      <description>Duration of layout animations in seconds. Set to 0 to disable animations. Default 0.2 (200ms).</description>
+    </key>
+
     <key name="follow-focus" type="b">
       <default>true</default>
       <summary>Move cursor to focused window</summary>

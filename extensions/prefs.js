@@ -47,6 +47,28 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(mouseResizeRow);
         settings.bind('mouse-resize', mouseResizeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const animRow = new Adw.SpinRow({
+            title: _('Animation Duration'),
+            subtitle: _('Duration of layout animations in milliseconds (0 = off)'),
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 2000,
+                step_increment: 25,
+                page_increment: 100,
+                value: Math.round(settings.get_double('animation-time') * 1000),
+            }),
+        });
+        group.add(animRow);
+        const animSignal = settings.connect('changed::animation-time', () => {
+            animRow.get_adjustment().set_value(Math.round(settings.get_double('animation-time') * 1000));
+        });
+        animRow.connect('notify::value', () => {
+            settings.set_double('animation-time', animRow.get_adjustment().get_value() / 1000);
+        });
+        animRow.connect('destroy', () => {
+            try { settings.disconnect(animSignal); } catch (_e) {}
+        });
+
         const gapRow = new Adw.SpinRow({
             title: _('Window Gap'),
             subtitle: _('Gap between windows in pixels'),

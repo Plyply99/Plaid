@@ -47,6 +47,11 @@ export default class TilingWMExtension extends Extension {
             visible: true,
         });
         Main.layoutManager.uiGroup.add_child(this._dropOverlay);
+        this._animContainer = new St.Widget({ reactive: false, visible: true });
+        Main.layoutManager.uiGroup.add_child(this._animContainer);
+        this._windowClones = new Map();
+        this._animating = false;
+        this._newWindowSet = new Set();
         this._connectSignals();
         this._registerKeybindings();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
@@ -83,6 +88,11 @@ export default class TilingWMExtension extends Extension {
             this._dropOverlay.destroy();
             this._dropOverlay = null;
         }
+        this._cancelAnimation();
+        if (this._animContainer) {
+            this._animContainer.destroy();
+            this._animContainer = null;
+        }
         this._disconnectSignals();
         this._destroyFloatPickDialog();
         this._removeKeybindings();
@@ -101,6 +111,7 @@ export default class TilingWMExtension extends Extension {
         this._lastSwapTarget = null;
         this._grabInitialMasterRatio = 0;
         this._grabInitialStackRatios = null;
+        this._newWindowSet = null;
     }
 
     _disableMutterDefaults() {
@@ -400,6 +411,7 @@ export default class TilingWMExtension extends Extension {
     _addWindow(win) {
         if (!this._settings) return;
         if (this._windowWorkspaces.has(win)) return;
+        this._newWindowSet.add(win);
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
         this._connectWindowSignals(win);
@@ -550,6 +562,11 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
+        if (this._getAnimationTime() > 0 && !this._grabOp) {
+            this._animRetile(workspace, tiledWindows);
+            return;
+        }
+
         const layout = this._settings.get_string('layout');
         if (layout === 'dwindle')
             this._retileDwindle(workspace, tiledWindows);
@@ -560,6 +577,157 @@ export default class TilingWMExtension extends Extension {
 
         this._doUpdateBorders();
         this._raiseFloatingWindows(workspace);
+        for (const win of tiledWindows)
+            this._newWindowSet.delete(win);
+    }
+
+    // --- Animation ---
+
+    _getAnimationTime() {
+        if (!this._settings) return 0;
+        return this._settings.get_double('animation-time');
+    }
+
+    _createClone(win) {
+        const actor = win.get_compositor_private();
+        if (!actor) return null;
+        const frame = win.get_frame_rect();
+        const clone = new Clutter.Clone({
+            source: actor,
+            reactive: false,
+        });
+        clone.set_position(frame.x, frame.y);
+        clone.set_size(frame.width, frame.height);
+        this._animContainer.add_child(clone);
+        return clone;
+    }
+
+    _destroyClone(win) {
+        const clone = this._windowClones.get(win);
+        if (clone) {
+            clone.remove_all_transitions();
+            clone.destroy();
+            this._windowClones.delete(win);
+        }
+    }
+
+    _cancelAnimation() {
+        for (const [win, clone] of this._windowClones || []) {
+            clone.remove_all_transitions();
+            const [cx, cy] = clone.get_position();
+            const [cw, ch] = clone.get_size();
+            try { win.move_resize_frame(false, cx, cy, cw, ch); } catch (_e) {}
+            const actor = win.get_compositor_private();
+            if (actor) actor.show();
+            clone.destroy();
+        }
+        if (this._windowClones) this._windowClones.clear();
+        this._animating = false;
+    }
+
+    _animRetile(workspace, tiledWindows) {
+        if (this._animating) this._cancelAnimation();
+
+        for (const win of tiledWindows) {
+            const clone = this._createClone(win);
+            if (clone) {
+                this._windowClones.set(win, clone);
+                const actor = win.get_compositor_private();
+                if (actor) actor.hide();
+            }
+        }
+
+        const layout = this._settings.get_string('layout');
+        if (layout === 'dwindle')
+            this._retileDwindle(workspace, tiledWindows);
+        else if (layout === 'centered-master-stack')
+            this._retileCenteredMasterStack(workspace, tiledWindows);
+        else
+            this._retileMasterStack(workspace, tiledWindows);
+
+        if (this._windowClones.size === 0) {
+            for (const win of tiledWindows) this._newWindowSet.delete(win);
+            this._doUpdateBorders();
+            this._raiseFloatingWindows(workspace);
+            return;
+        }
+
+        this._animating = true;
+        const animTime = this._getAnimationTime();
+        const duration = animTime * 1000;
+        let remaining = this._windowClones.size;
+
+        for (const [win, clone] of this._windowClones) {
+            const frame = win.get_frame_rect();
+            const isNew = this._newWindowSet.has(win);
+
+            const params = {
+                duration,
+                mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
+                onComplete: () => {
+                    if (!this._windowClones || !this._windowClones.has(win)) return;
+                    const actor = win.get_compositor_private();
+                    if (actor) actor.show();
+                    this._destroyClone(win);
+                    remaining--;
+                    if (remaining <= 0) {
+                        this._animating = false;
+                        for (const w of tiledWindows) this._newWindowSet.delete(w);
+                        this._doUpdateBorders();
+                        this._raiseFloatingWindows(workspace);
+                    }
+                },
+            };
+
+            if (isNew) {
+                clone.set_position(frame.x, frame.y);
+                clone.set_size(frame.width, frame.height);
+                clone.set_scale(0.8, 0.8);
+                clone.set_opacity(0);
+                params.scale_x = 1.0;
+                params.scale_y = 1.0;
+                params.opacity = 255;
+            } else {
+                params.x = frame.x;
+                params.y = frame.y;
+                params.width = frame.width;
+                params.height = frame.height;
+            }
+
+            clone.ease(params);
+        }
+    }
+
+    _animFloat(win, x, y, w, h) {
+        const animTime = this._getAnimationTime();
+        if (animTime <= 0) {
+            this._moveWindow(win, x, y, w, h);
+            return;
+        }
+        const actor = win.get_compositor_private();
+        if (!actor || this._windowClones.has(win)) {
+            this._moveWindow(win, x, y, w, h);
+            return;
+        }
+        const clone = this._createClone(win);
+        if (!clone) {
+            this._moveWindow(win, x, y, w, h);
+            return;
+        }
+        actor.hide();
+        try { win.move_resize_frame(false, x, y, w, h); } catch (_e) {}
+        this._windowClones.set(win, clone);
+        clone.ease({
+            x, y, width: w, height: h,
+            duration: animTime * 1000,
+            mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
+            onComplete: () => {
+                if (!this._windowClones || !this._windowClones.has(win)) return;
+                const a = win.get_compositor_private();
+                if (a) a.show();
+                this._destroyClone(win);
+            },
+        });
     }
 
     // --- Master-Stack Helpers ---
@@ -1571,7 +1739,7 @@ export default class TilingWMExtension extends Extension {
         } else {
             h = Math.max(100, h + delta);
         }
-        this._moveWindow(win, x, y, w, h);
+        this._animFloat(win, x, y, w, h);
     }
 
     _moveFloating(win, direction) {
@@ -1591,7 +1759,7 @@ export default class TilingWMExtension extends Extension {
             case 'up': y -= amount; break;
             case 'down': y += amount; break;
         }
-        this._moveWindow(win, x, y, frame.width, frame.height);
+        this._animFloat(win, x, y, frame.width, frame.height);
         this._warpCursor(win, x, y, relX, relY);
     }
 
