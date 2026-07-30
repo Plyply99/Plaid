@@ -17,6 +17,8 @@ export default class TilingWMExtension extends Extension {
         this._windowBorders = new Map();
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
+        this._windowWSIndices = new Map();
+        this._lastRetileTimes = new Map();
         this._masterRatios = new Map();
         this._stackRatios = new Map();
         this._bspTrees = new Map();
@@ -52,6 +54,9 @@ export default class TilingWMExtension extends Extension {
         Main.layoutManager.uiGroup.add_child(this._dropOverlay);
         this._animating = false;
         this._animTargets = null;
+        this._animStates = null;
+        this._animStartTime = 0;
+        this._animTickId = 0;
         this._newWindowSet = new Set();
         this._connectSignals();
         this._registerKeybindings();
@@ -69,6 +74,17 @@ export default class TilingWMExtension extends Extension {
             this._retileAll();
             return false;
         });
+    }
+
+    _wsIndex(ws) {
+        if (!ws) return -1;
+        try { return typeof ws.index === 'number' ? ws.index : ws.get_index(); } catch (_e) {}
+        try {
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                if (global.workspace_manager.get_workspace_by_index(i) === ws) return i;
+            }
+        } catch (_e) {}
+        return -1;
     }
 
     disable() {
@@ -100,9 +116,11 @@ export default class TilingWMExtension extends Extension {
         this._windowBorders = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
+        this._windowWSIndices = null;
         this._masterRatios = null;
         this._stackRatios = null;
         this._bspTrees = null;
+        this._lastRetileTimes = null;
         this._lastFocusedPerWorkspace = null;
         this._fillScreenRects = null;
         this._signals = null;
@@ -293,13 +311,17 @@ export default class TilingWMExtension extends Extension {
         if (this._destroyed || !workspace) return;
         if (this._pendingRetileIds.has(workspace))
             GLib.source_remove(this._pendingRetileIds.get(workspace));
-        const id = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        const now = Date.now();
+        const last = this._lastRetileTimes?.get(workspace) || 0;
+        const delay = Math.max(0, 50 - (now - last));
+        const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             this._pendingRetileIds.delete(workspace);
             if (this._destroyed) return false;
             this._doRetileWorkspace(workspace);
             return false;
         });
         this._pendingRetileIds.set(workspace, id);
+        this._lastRetileTimes?.set(workspace, now);
     }
 
     _scheduleBorders() {
@@ -319,6 +341,7 @@ export default class TilingWMExtension extends Extension {
         const title = win.get_title();
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
         if (win.is_skip_taskbar()) return false;
+        if (win.get_transient_for()) return false;
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         if (title && this._floatingTitles.has(title)) return false;
         return true;
@@ -405,6 +428,7 @@ export default class TilingWMExtension extends Extension {
         this._newWindowSet.add(win);
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
+        this._windowWSIndices.set(win, this._wsIndex(ws));
         this._connectWindowSignals(win);
         if (ws) {
             const order = this._getWorkspaceOrder(ws);
@@ -423,8 +447,9 @@ export default class TilingWMExtension extends Extension {
         if (!this._settings) return;
         const ws = this._windowWorkspaces.get(win) || win.get_workspace();
         const wmClass = win.get_wm_class_instance() || '?';
-        log(`[plaid] REMOVE_WINDOW: ${wmClass} ws=${ws}`);
+        log(`[plaid] REMOVE_WINDOW: ${wmClass} ws=${this._wsIndex(ws)}`);
         this._windowWorkspaces.delete(win);
+        this._windowWSIndices.delete(win);
         this._toggleFloatWindows.delete(win);
         this._fillScreenRects.delete(win);
         this._disconnectWindowSignals(win);
@@ -460,17 +485,18 @@ export default class TilingWMExtension extends Extension {
         sigIds.push({ emitter: actor, id: actor.connect('destroy', () => this._removeWindow(win)) });
         sigIds.push({ emitter: win, id: win.connect('workspace-changed', () => {
             const oldWs = this._windowWorkspaces.get(win);
+            const newWs = win.get_workspace();
             if (oldWs) {
                 const order = this._getWorkspaceOrder(oldWs);
                 const idx = order.indexOf(win);
                 if (idx !== -1) order.splice(idx, 1);
                 this._retileWorkspace(oldWs);
             }
-            const newWs = win.get_workspace();
             if (newWs) {
                 const order = this._getWorkspaceOrder(newWs);
                 if (!order.includes(win)) order.push(win);
                 this._windowWorkspaces.set(win, newWs);
+                this._windowWSIndices.set(win, this._wsIndex(newWs));
                 this._retileWorkspace(newWs);
             }
         }) });
@@ -498,7 +524,8 @@ export default class TilingWMExtension extends Extension {
         return order.filter(w =>
             w.get_window_type() === Meta.WindowType.NORMAL &&
             !w.is_skip_taskbar() &&
-            !w.minimized
+            !w.minimized &&
+            this._windowWSIndices.get(w) === this._wsIndex(workspace)
         );
     }
 
@@ -537,6 +564,7 @@ export default class TilingWMExtension extends Extension {
             this._raiseFloatingWindows(workspace);
             return;
         }
+        if (this._grabOp) return;
         const tiledWindows = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
         if (tiledWindows.length === 0) {
@@ -557,7 +585,7 @@ export default class TilingWMExtension extends Extension {
         else
             this._retileMasterStack(workspace, tiledWindows);
 
-        this._doUpdateBorders();
+        try { this._doUpdateBorders(); } catch (_e) {}
         this._raiseFloatingWindows(workspace);
         for (const win of tiledWindows)
             this._newWindowSet.delete(win);
@@ -572,8 +600,13 @@ export default class TilingWMExtension extends Extension {
     }
 
     _cancelAnimation() {
+        if (this._animTickId) {
+            GLib.source_remove(this._animTickId);
+            this._animTickId = 0;
+        }
         this._animating = false;
         this._animTargets = null;
+        this._animStates = null;
     }
 
     _animRetile(workspace, tiledWindows) {
@@ -603,79 +636,95 @@ export default class TilingWMExtension extends Extension {
         this._animating = true;
         const animTime = this._getAnimationTime();
         const duration = animTime * 1000;
-        let remaining = this._animTargets.size;
 
+        const states = [];
         for (const [win, target] of this._animTargets) {
-            if (!win || win.is_fullscreen() || !win.get_workspace()) {
-                remaining--;
-                if (remaining <= 0) this._finishAnimation(workspace, tiledWindows);
-                continue;
-            }
-
-            const actor = win.get_compositor_private();
-            if (!actor) {
-                try { win.move_resize_frame(false, target.x, target.y, target.w, target.h); } catch (_e) {}
-                remaining--;
-                if (remaining <= 0) this._finishAnimation(workspace, tiledWindows);
-                continue;
-            }
-
-            const isNew = this._newWindowSet.has(win);
+            if (!win || win.is_fullscreen() || !win.get_workspace()) continue;
             const frame = win.get_frame_rect();
+            const actor = win.get_compositor_private();
+            const isNew = this._newWindowSet.has(win);
+            states.push({ win, actor, isNew, startX: frame.x, startY: frame.y, startW: frame.width, startH: frame.height, targetX: target.x, targetY: target.y, targetW: target.w, targetH: target.h });
+        }
+        this._animTargets = null;
 
-            try { win.move_resize_frame(false, target.x, target.y, target.w, target.h); } catch (_e) {}
+        let remaining = states.length;
+        if (remaining === 0) { this._animating = false; return; }
 
-            if (isNew) {
-                actor.remove_all_transitions();
-                actor.set_opacity(0);
-                actor.show();
-                actor.ease({
-                    opacity: 255,
-                    duration,
-                    mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-                    onComplete: () => {
-                        remaining--;
-                        if (remaining <= 0) this._finishAnimation(workspace, tiledWindows);
-                    },
-                });
-            } else {
-                actor.remove_all_transitions();
-                const scaleX = frame.width > 0 ? frame.width / target.w : 1;
-                const scaleY = frame.height > 0 ? frame.height / target.h : 1;
-                actor.set_pivot_point(0, 0);
-                actor.set_translation(frame.x - target.x, frame.y - target.y, 0);
-                actor.set_scale(scaleX, scaleY);
-                actor.show();
-                const params = {
-                    translation_x: 0,
-                    translation_y: 0,
-                    duration,
-                    mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-                    onComplete: () => {
-                        remaining--;
-                        if (remaining <= 0) this._finishAnimation(workspace, tiledWindows);
-                    },
-                };
-                if (Math.abs(scaleX - 1) > 0.01 || Math.abs(scaleY - 1) > 0.01) {
-                    params.scale_x = 1;
-                    params.scale_y = 1;
+        const dec = () => {
+            remaining--;
+            if (remaining <= 0) {
+                this._animating = false;
+                for (const w of tiledWindows) this._newWindowSet.delete(w);
+                this._animStates = null;
+                this._scheduleBorders();
+                this._raiseFloatingWindows(workspace);
+                if (this._queuedAnimWorkspaces.size > 0) {
+                    const pending = [...this._queuedAnimWorkspaces];
+                    this._queuedAnimWorkspaces.clear();
+                    for (const ws of pending) this._scheduleRetile(ws);
                 }
-                actor.ease(params);
+            }
+        };
+
+        const newStates = states.filter(s => s.isNew);
+        const existingStates = states.filter(s => !s.isNew);
+
+        // New windows: init opacity and animate later
+        for (const s of newStates) {
+            if (s.actor) {
+                s.actor.remove_all_transitions();
+                s.actor.set_opacity(0);
+                s.actor.show();
             }
         }
 
-        this._animTargets = null;
-    }
-
-    _finishAnimation(workspace, tiledWindows) {
-        this._animating = false;
-        for (const w of tiledWindows) this._newWindowSet.delete(w);
-        this._scheduleBorders();
-        this._raiseFloatingWindows(workspace);
-        if (this._queuedAnimWorkspaces.size > 0) {
-            const pending = [...this._queuedAnimWorkspaces];
-            this._queuedAnimWorkspaces.clear();
-            for (const ws of pending) this._scheduleRetile(ws);
+        if (existingStates.length > 0) {
+            this._animStates = existingStates;
+            this._animStartTime = Date.now();
+            this._animTickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+                if (this._destroyed) { this._animTickId = 0; return GLib.SOURCE_REMOVE; }
+                const elapsed = Date.now() - this._animStartTime;
+                const t = Math.min(elapsed / duration, 1);
+                const e = 1 - Math.pow(1 - t, 3);
+                for (const s of this._animStates) {
+                    if (!s.win.get_compositor_private()) continue;
+                    const x = s.startX + (s.targetX - s.startX) * e;
+                    const y = s.startY + (s.targetY - s.startY) * e;
+                    const w = s.startW + (s.targetW - s.startW) * e;
+                    const h = s.startH + (s.targetH - s.startH) * e;
+                    try { s.win.move_resize_frame(true, Math.round(x), Math.round(y), Math.round(w), Math.round(h)); } catch (_e) {}
+                }
+                if (t >= 1) {
+                    this._animTickId = 0;
+                    this._animStates = null;
+                    for (const s of existingStates) {
+                        if (!s.win.get_compositor_private()) { dec(); continue; }
+                        try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
+                        dec();
+                    }
+                    // Now fade in new windows
+                    for (const s of newStates) {
+                        if (s.actor) {
+                            try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
+                            try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => { this._moveCursorToWindow(s.win); dec(); } }); } catch (_e) { dec(); }
+                        } else {
+                            dec();
+                        }
+                    }
+                    return GLib.SOURCE_REMOVE;
+                }
+                return GLib.SOURCE_CONTINUE;
+            });
+        } else {
+            // Only new windows — just fade them in immediately
+            for (const s of newStates) {
+                if (s.actor) {
+                    try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
+                    try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => { this._moveCursorToWindow(s.win); dec(); } }); } catch (_e) { dec(); }
+                } else {
+                    dec();
+                }
+            }
         }
     }
 
@@ -691,7 +740,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         const frame = win.get_frame_rect();
-        try { win.move_resize_frame(false, x, y, w, h); } catch (_e) {}
+        try { win.move_resize_frame(true, x, y, w, h); } catch (_e) {}
         actor.remove_all_transitions();
         const scaleX = frame.width > 0 ? frame.width / w : 1;
         const scaleY = frame.height > 0 ? frame.height / h : 1;
@@ -964,8 +1013,8 @@ export default class TilingWMExtension extends Extension {
         const frameA = winA.get_frame_rect();
         const frameB = winB.get_frame_rect();
         try {
-            winA.move_resize_frame(false, frameB.x, frameB.y, frameB.width, frameB.height);
-            winB.move_resize_frame(false, frameA.x, frameA.y, frameA.width, frameA.height);
+            winA.move_resize_frame(true, frameB.x, frameB.y, frameB.width, frameB.height);
+            winB.move_resize_frame(true, frameA.x, frameA.y, frameA.width, frameA.height);
         } catch (e) {
             log(`[plaid] swap move_resize failed: ${e.message}`);
         }
@@ -1403,7 +1452,7 @@ export default class TilingWMExtension extends Extension {
         try {
             const actor = win.get_compositor_private();
             if (actor) actor.remove_all_transitions();
-            win.move_resize_frame(false, x, y, w, h);
+            win.move_resize_frame(true, x, y, w, h);
         } catch (e) {
             log(`[plaid] _moveWindow failed: ${e.message}`);
         }
@@ -1837,7 +1886,7 @@ export default class TilingWMExtension extends Extension {
         const actor = win.get_compositor_private();
         if (actor) actor.remove_all_transitions();
 
-        win.move_resize_frame(false, x, y, frame.width, frame.height);
+        win.move_resize_frame(true, x, y, frame.width, frame.height);
 
         this._keyboardFocusChange = true;
         win.activate(global.get_current_time());
@@ -1922,7 +1971,7 @@ export default class TilingWMExtension extends Extension {
         const [px, py] = global.get_pointer();
         const frame = metaWindow.get_frame_rect();
         const buffer = metaWindow.get_buffer_rect();
-        if (!frame || !buffer) return;
+        if (!frame || frame.width === 0 || frame.height === 0 || !buffer) return;
 
         this._grabOp = grabOp;
         this._swapTarget = null;
@@ -2034,7 +2083,6 @@ export default class TilingWMExtension extends Extension {
                 this._liveResizeId = 0;
                 return GLib.SOURCE_REMOVE;
             }
-
             const frame = metaWindow.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
 
@@ -2187,7 +2235,7 @@ export default class TilingWMExtension extends Extension {
         try {
             const actor = win.get_compositor_private();
             if (actor) actor.remove_all_transitions();
-            win.move_resize_frame(false, x, y, w, h);
+            win.move_resize_frame(true, x, y, w, h);
         } catch (e) {
             log(`[plaid] _safeMove FAILED: ${win.get_wm_class_instance() || '?'} to ${x},${y} ${w}x${h}: ${e.message}`);
         }

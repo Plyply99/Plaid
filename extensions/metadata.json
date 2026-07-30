@@ -3,7 +3,7 @@
   "name": "Plaid",
   "description": "A tiling window manager for GNOME with three layouts, configurable gaps, borders, keybinds, float rules, mouse resize/swap, and cursor warp",
   "shell-version": ["50"],
-  "version": 5014,
+  "version": 5015,
   "url": "",
   "settings-schema": "org.gnome.shell.extensions.plaid"
 }
