@@ -4,6 +4,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
+import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -307,9 +308,13 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::master-ratio', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-width', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-color', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::active-border-color-2', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-width', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color-2', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::border-radius', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::gradient-borders', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::gradient-direction', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::pick-mode', () => {
             if (this._settings.get_boolean('pick-mode')) {
                 this._startPickMode();
@@ -1504,9 +1509,13 @@ export default class TilingWMExtension extends Extension {
 
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
+        const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#62a0ea';
         const inactiveWidth = this._settings.get_int('inactive-border-width');
         const inactiveColor = (this._settings.get_strv('inactive-border-color') || [])[0] || '#555555';
+        const inactiveColor2 = (this._settings.get_strv('inactive-border-color-2') || [])[0] || '#777777';
         const borderRadius = this._settings.get_int('border-radius');
+        const gradient = this._settings.get_boolean('gradient-borders');
+        const gradientDir = this._settings.get_string('gradient-direction');
 
         const ws = global.workspace_manager.get_active_workspace();
         if (!ws) return;
@@ -1522,7 +1531,8 @@ export default class TilingWMExtension extends Extension {
 
             const isFocused = win === focusWindow;
             const borderWidth = isFocused ? activeWidth : inactiveWidth;
-            const borderColor = isFocused ? activeColor : inactiveColor;
+            const color1 = isFocused ? activeColor : inactiveColor;
+            const color2 = isFocused ? activeColor2 : inactiveColor2;
 
             if (borderWidth === 0) continue;
 
@@ -1530,21 +1540,94 @@ export default class TilingWMExtension extends Extension {
             const offsetX = frame.x - buffer.x;
             const offsetY = frame.y - buffer.y;
 
-            const border = new St.Widget({
-                name: 'tiling-border',
-                x: offsetX - borderWidth,
-                y: offsetY - borderWidth,
-                width: frame.width + borderWidth * 2,
-                height: frame.height + borderWidth * 2,
-                style: `border: ${borderWidth}px solid ${borderColor}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
-                reactive: false,
-                visible: true,
-            });
+            let border;
+            if (gradient) {
+                border = new St.DrawingArea({
+                    x: offsetX - borderWidth,
+                    y: offsetY - borderWidth,
+                    width: frame.width + borderWidth * 2,
+                    height: frame.height + borderWidth * 2,
+                    reactive: false,
+                    visible: true,
+                });
+                border._plaidBorder = {
+                    color1: this._hexToRgb(color1),
+                    color2: this._hexToRgb(color2),
+                    width: borderWidth,
+                    radius: borderRadius,
+                    direction: gradientDir,
+                };
+                border.connect('repaint', () => this._repaintBorder(border));
+            } else {
+                border = new St.Widget({
+                    name: 'tiling-border',
+                    x: offsetX - borderWidth,
+                    y: offsetY - borderWidth,
+                    width: frame.width + borderWidth * 2,
+                    height: frame.height + borderWidth * 2,
+                    style: `border: ${borderWidth}px solid ${color1}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
+                    reactive: false,
+                    visible: true,
+                });
+            }
             actor.add_child(border);
             this._windowBorders.set(win, border);
         }
 
         this._raiseFloatingWindows(ws);
+    }
+
+    _hexToRgb(hex) {
+        const h = (hex || '').replace('#', '');
+        const v = parseInt(h, 16);
+        if (isNaN(v) || h.length < 6) return { r: 0.5, g: 0.5, b: 0.5 };
+        return {
+            r: ((v >> 16) & 255) / 255,
+            g: ((v >> 8) & 255) / 255,
+            b: (v & 255) / 255,
+        };
+    }
+
+    _roundRectPath(cr, x, y, w, h, radius) {
+        const rad = Math.min(Math.max(0, radius), w / 2, h / 2);
+        cr.moveTo(x + rad, y);
+        cr.lineTo(x + w - rad, y);
+        cr.arc(x + w - rad, y + rad, rad, -Math.PI / 2, 0);
+        cr.lineTo(x + w, y + h - rad);
+        cr.arc(x + w - rad, y + h - rad, rad, 0, Math.PI / 2);
+        cr.lineTo(x + rad, y + h);
+        cr.arc(x + rad, y + h - rad, rad, Math.PI / 2, Math.PI);
+        cr.lineTo(x, y + rad);
+        cr.arc(x + rad, y + rad, rad, Math.PI, Math.PI * 1.5);
+        cr.closePath();
+    }
+
+    _repaintBorder(border) {
+        try {
+            const info = border._plaidBorder;
+            if (!info || !border.get_context) return;
+            const cr = border.get_context();
+            const w = border.width;
+            const h = border.height;
+
+            let x0, y0, x1, y1;
+            if (info.direction === 'horizontal') {
+                x0 = 0; y0 = 0; x1 = w; y1 = 0;
+            } else if (info.direction === 'diagonal') {
+                x0 = 0; y0 = 0; x1 = w; y1 = h;
+            } else {
+                x0 = 0; y0 = 0; x1 = 0; y1 = h;
+            }
+
+            const grad = new cairo.LinearGradient(x0, y0, x1, y1);
+            grad.addColorStopRgb(0, info.color1.r, info.color1.g, info.color1.b);
+            grad.addColorStopRgb(1, info.color2.r, info.color2.g, info.color2.b);
+            cr.setSource(grad);
+            cr.setLineWidth(info.width);
+            this._roundRectPath(cr, info.width / 2, info.width / 2,
+                w - info.width, h - info.width, info.radius);
+            cr.stroke();
+        } catch (_e) {}
     }
 
     _updateBordersDuringGrab() {
@@ -1568,6 +1651,9 @@ export default class TilingWMExtension extends Extension {
             const bw = win === focusWindow ? activeWidth : inactiveWidth;
             border.set_position(offsetX - bw, offsetY - bw);
             border.set_size(frame.width + bw * 2, frame.height + bw * 2);
+            if (border.queue_repaint) {
+                try { border.queue_repaint(); } catch (_e) {}
+            }
         }
     }
 

@@ -317,6 +317,11 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         );
         activeGroup.add(activeColorRow);
 
+        const activeColor2Row = this._buildColorRow(
+            settings, 'active-border-color-2', _('Border Color 2')
+        );
+        activeGroup.add(activeColor2Row);
+
         const inactiveGroup = new Adw.PreferencesGroup({
             title: _('Inactive Window Border'),
         });
@@ -341,6 +346,11 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         );
         inactiveGroup.add(inactiveColorRow);
 
+        const inactiveColor2Row = this._buildColorRow(
+            settings, 'inactive-border-color-2', _('Border Color 2')
+        );
+        inactiveGroup.add(inactiveColor2Row);
+
         const styleGroup = new Adw.PreferencesGroup({
             title: _('Border Style'),
         });
@@ -359,6 +369,46 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         styleGroup.add(radiusRow);
         settings.bind('border-radius', radiusRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
+        const gradientRow = new Adw.SwitchRow({
+            title: _('Gradient Borders'),
+            subtitle: _('Use a gradient between the two border colors'),
+        });
+        styleGroup.add(gradientRow);
+        settings.bind('gradient-borders', gradientRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const directionModel = new Gtk.StringList({
+            strings: ['vertical', 'horizontal', 'diagonal'],
+        });
+        const directionLabels = {
+            'vertical': _('Vertical'),
+            'horizontal': _('Horizontal'),
+            'diagonal': _('Diagonal'),
+        };
+        const directionRow = new Adw.ComboRow({
+            title: _('Gradient Direction'),
+            subtitle: _('Direction of the border gradient'),
+            model: directionModel,
+        });
+        styleGroup.add(directionRow);
+        const directionIdx = ['vertical', 'horizontal', 'diagonal'].indexOf(settings.get_string('gradient-direction'));
+        if (directionIdx >= 0)
+            directionRow.set_selected(directionIdx);
+        directionRow.connect('notify::selected', () => {
+            const idx = directionRow.get_selected();
+            const dirs = ['vertical', 'horizontal', 'diagonal'];
+            if (idx >= 0 && idx < dirs.length)
+                settings.set_string('gradient-direction', dirs[idx]);
+        });
+
+        const updateGradientVisibility = () => {
+            const gradient = settings.get_boolean('gradient-borders');
+            activeColor2Row.set_sensitive(gradient);
+            inactiveColor2Row.set_sensitive(gradient);
+            directionRow.set_visible(gradient);
+        };
+        updateGradientVisibility();
+        settings.connect('changed::gradient-borders', () => updateGradientVisibility());
     }
 
     _buildColorRow(settings, key, title) {

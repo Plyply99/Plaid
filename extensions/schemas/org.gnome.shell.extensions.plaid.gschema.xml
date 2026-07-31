@@ -51,6 +51,12 @@
       <description>Color of the active window border as hex string</description>
     </key>
 
+    <key name="active-border-color-2" type="as">
+      <default>['#62a0ea']</default>
+      <summary>Active window border gradient color</summary>
+      <description>Second color of the active window border gradient as hex string</description>
+    </key>
+
     <key name="inactive-border-width" type="i">
       <default>1</default>
       <summary>Inactive window border thickness</summary>
@@ -63,10 +69,28 @@
       <description>Color of inactive window borders as hex string</description>
     </key>
 
+    <key name="inactive-border-color-2" type="as">
+      <default>['#777777']</default>
+      <summary>Inactive window border gradient color</summary>
+      <description>Second color of the inactive window border gradient as hex string</description>
+    </key>
+
     <key name="border-radius" type="i">
       <default>0</default>
       <summary>Border corner radius</summary>
       <description>Radius of border corners in pixels (0 for square corners)</description>
+    </key>
+
+    <key name="gradient-borders" type="b">
+      <default>false</default>
+      <summary>Use gradient borders</summary>
+      <description>When enabled, window borders use a gradient between the two border colors instead of a single color</description>
+    </key>
+
+    <key name="gradient-direction" type="s">
+      <default>'vertical'</default>
+      <summary>Gradient direction</summary>
+      <description>Direction of the border gradient: vertical, horizontal, or diagonal</description>
     </key>
 
     <!-- Float window patterns (WM_CLASS instance names) -->
