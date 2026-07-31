@@ -263,13 +263,18 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             cr.arc(16, 16, 14, 0, Math.PI * 2);
             cr.stroke();
         });
-        row.add_suffix(colorDot);
-
         const label = new Gtk.Label({
             label: currentColor,
             css_classes: ['dim-label'],
         });
-        row.add_suffix(label);
+        const suffixBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+            valign: Gtk.Align.CENTER,
+        });
+        suffixBox.append(colorDot);
+        suffixBox.append(label);
+        row.add_suffix(suffixBox);
 
         row.connect('activated', () => {
             const dialog = new Gtk.ColorDialog({
