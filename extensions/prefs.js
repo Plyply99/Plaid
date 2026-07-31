@@ -8,6 +8,16 @@ export default class TilingWMPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
 
+        const display = Gdk.Display.get_default();
+        const monitor = display ? display.get_primary_monitor() : null;
+        if (monitor) {
+            const geo = monitor.get_geometry();
+            const minW = Math.max(560, Math.floor(geo.width / 5));
+            const minH = Math.max(480, Math.floor(geo.height / 2));
+            window.set_size_request(minW, minH);
+            window.set_default_size(minW, minH);
+        }
+
         this._buildGeneralPage(window, settings);
         this._buildBordersPage(window, settings);
         this._buildKeybindingsPage(window, settings);
@@ -400,7 +410,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const pickGroup = new Adw.PreferencesGroup({
             title: _('Quick Pick'),
-            description: _('Click a window to add it to the float list'),
+            description: _('Click anywhere on this row, then click any window on the desktop'),
         });
         page.add(pickGroup);
 
@@ -411,14 +421,14 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         const pickButton = new Gtk.Button({
             icon_name: 'input-mouse-symbolic',
-            css_classes: ['flat', 'circular'],
+            css_classes: ['suggested-action', 'circular'],
+            can_target: false,
         });
         pickRow.add_suffix(pickButton);
-        pickRow.set_activatable(pickButton);
         pickGroup.add(pickRow);
 
         let pickWatchId = 0;
-        pickButton.connect('clicked', () => {
+        const startPick = () => {
             settings.set_boolean('pick-mode', false);
             settings.set_string('pick-mode-class', '');
             settings.set_string('pick-mode-title', '');
@@ -451,7 +461,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     () => window.present()
                 );
             });
-        });
+        };
+        pickRow.connect('activated', startPick);
 
         const classGroup = new Adw.PreferencesGroup({
             title: _('Floating by Window Class'),
@@ -468,14 +479,14 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         const addClassButton = new Gtk.Button({
             icon_name: 'list-add-symbolic',
-            css_classes: ['flat', 'circular'],
+            css_classes: ['suggested-action', 'circular'],
+            can_target: false,
         });
         addClassRow.add_suffix(addClassButton);
-        addClassRow.set_activatable(addClassButton);
         classGroup.add(addClassRow);
         this._floatClassAddRow = addClassRow;
 
-        addClassButton.connect('clicked', () => {
+        addClassRow.connect('activated', () => {
             this._showAddFloatDialog(window, settings, classGroup, addClassRow, 'float-windows', _('WM_CLASS instance name (e.g. gimp)'));
         });
 
@@ -496,14 +507,14 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         const addTitleButton = new Gtk.Button({
             icon_name: 'list-add-symbolic',
-            css_classes: ['flat', 'circular'],
+            css_classes: ['suggested-action', 'circular'],
+            can_target: false,
         });
         addTitleRow.add_suffix(addTitleButton);
-        addTitleRow.set_activatable(addTitleButton);
         titleGroup.add(addTitleRow);
         this._floatTitleAddRow = addTitleRow;
 
-        addTitleButton.connect('clicked', () => {
+        addTitleRow.connect('activated', () => {
             this._showAddFloatDialog(window, settings, titleGroup, addTitleRow, 'float-titles', _('Exact window title (e.g. Picture-in-Picture)'));
         });
 
