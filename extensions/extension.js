@@ -1618,19 +1618,66 @@ export default class TilingWMExtension extends Extension {
         return global.display.focus_window;
     }
 
-    _getDirectionVector(direction) {
-        switch (direction) {
-            case 'left': return { dx: -1, dy: 0 };
-            case 'right': return { dx: 1, dy: 0 };
-            case 'up': return { dx: 0, dy: -1 };
-            case 'down': return { dx: 0, dy: 1 };
-        }
-        return { dx: 0, dy: 0 };
-    }
+    _findDirectionalTarget(win, direction, windows) {
+        const f = win.get_frame_rect();
+        let best = null;
+        let bestOverlap = -1;
+        let bestDist = Infinity;
+        let bestPerp = Infinity;
+        let bestHeight = -1;
 
-    _getWindowCenter(win) {
-        const frame = win.get_frame_rect();
-        return { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
+        for (const w of windows) {
+            if (w === win) continue;
+            const r = w.get_frame_rect();
+            if (r.width === 0 || r.height === 0) continue;
+
+            let overlap, dist, perp;
+            switch (direction) {
+                case 'left':
+                    if (r.x + r.width > f.x) continue;
+                    overlap = Math.min(f.y + f.height, r.y + r.height) - Math.max(f.y, r.y);
+                    dist = f.x - (r.x + r.width);
+                    perp = Math.abs((f.y + f.height / 2) - (r.y + r.height / 2));
+                    break;
+                case 'right':
+                    if (r.x < f.x + f.width) continue;
+                    overlap = Math.min(f.y + f.height, r.y + r.height) - Math.max(f.y, r.y);
+                    dist = r.x - (f.x + f.width);
+                    perp = Math.abs((f.y + f.height / 2) - (r.y + r.height / 2));
+                    break;
+                case 'up':
+                    if (r.y + r.height > f.y) continue;
+                    overlap = Math.min(f.x + f.width, r.x + r.width) - Math.max(f.x, r.x);
+                    dist = f.y - (r.y + r.height);
+                    perp = Math.abs((f.x + f.width / 2) - (r.x + r.width / 2));
+                    break;
+                case 'down':
+                    if (r.y < f.y + f.height) continue;
+                    overlap = Math.min(f.x + f.width, r.x + r.width) - Math.max(f.x, r.x);
+                    dist = r.y - (f.y + f.height);
+                    perp = Math.abs((f.x + f.width / 2) - (r.x + r.width / 2));
+                    break;
+                default:
+                    return null;
+            }
+            if (overlap <= 0) continue;
+
+            const sameHeight = Math.abs(r.height - bestHeight) <= 5;
+            const overlapTie = Math.abs(overlap - bestOverlap) <= 5;
+            const distTie = Math.abs(dist - bestDist) <= 5;
+            if (overlap > bestOverlap + 5 ||
+                (overlapTie && dist < bestDist - 5) ||
+                (overlapTie && distTie &&
+                 ((!sameHeight && r.height > bestHeight) ||
+                  (sameHeight && perp < bestPerp)))) {
+                bestOverlap = overlap;
+                bestDist = dist;
+                bestPerp = perp;
+                bestHeight = r.height;
+                best = w;
+            }
+        }
+        return best;
     }
 
     _moveFocus(direction) {
@@ -1643,36 +1690,15 @@ export default class TilingWMExtension extends Extension {
             .filter(w => !this._isFloating(w));
         if (windows.length <= 1) return;
 
-        const focusedCenter = this._getWindowCenter(focused);
-        const dir = this._getDirectionVector(direction);
+        const bestWindow = this._findDirectionalTarget(focused, direction, windows);
+        if (!bestWindow) return;
 
-        let bestWindow = null;
-        let bestScore = -Infinity;
-
-        for (const win of windows) {
-            if (win === focused) continue;
-            const center = this._getWindowCenter(win);
-            const diffX = center.x - focusedCenter.x;
-            const diffY = center.y - focusedCenter.y;
-            const dot = diffX * dir.dx + diffY * dir.dy;
-            if (dot > 0) {
-                const distance = Math.sqrt(diffX * diffX + diffY * diffY);
-                const score = dot / (distance + 1);
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestWindow = win;
-                }
-            }
-        }
-
-        if (bestWindow) {
-            this._keyboardFocusChange = true;
-            bestWindow.activate(global.get_current_time());
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._keyboardFocusChange = false;
-                return false;
-            });
-        }
+        this._keyboardFocusChange = true;
+        bestWindow.activate(global.get_current_time());
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._keyboardFocusChange = false;
+            return false;
+        });
     }
 
     _swapWindow(direction) {
@@ -1689,28 +1715,7 @@ export default class TilingWMExtension extends Extension {
             .filter(w => !this._isFloating(w));
         if (windows.length <= 1) return;
 
-        const focusedCenter = this._getWindowCenter(focused);
-        const dir = this._getDirectionVector(direction);
-
-        let bestWindow = null;
-        let bestScore = -Infinity;
-
-        for (const win of windows) {
-            if (win === focused) continue;
-            const center = this._getWindowCenter(win);
-            const diffX = center.x - focusedCenter.x;
-            const diffY = center.y - focusedCenter.y;
-            const dot = diffX * dir.dx + diffY * dir.dy;
-            if (dot > 0) {
-                const distance = Math.sqrt(diffX * diffX + diffY * diffY);
-                const score = dot / (distance + 1);
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestWindow = win;
-                }
-            }
-        }
-
+        const bestWindow = this._findDirectionalTarget(focused, direction, windows);
         if (!bestWindow) return;
 
         const layout = this._settings.get_string('layout');
