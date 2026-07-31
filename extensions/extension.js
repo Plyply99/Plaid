@@ -8,6 +8,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
+const LAYOUT_NAMES = {
+    'dwindle': 'Dwindle',
+    'master-stack': 'Master-stack',
+    'centered-master-stack': 'Centered Master-stack',
+};
+
 export default class TilingWMExtension extends Extension {
     enable() {
         this._destroyed = false;
@@ -18,12 +24,15 @@ export default class TilingWMExtension extends Extension {
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
         this._windowWSIndices = new Map();
+        this._workspaceLayouts = new Map();
+        this._currentDefaultLayout = this._settings.get_string('layout');
         this._lastRetileTimes = new Map();
         this._masterRatios = new Map();
         this._stackRatios = new Map();
         this._bspTrees = new Map();
         this._lastFocusedPerWorkspace = new Map();
         this._fillScreenRects = new Map();
+        this._savedRects = new Map();
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
@@ -127,12 +136,14 @@ export default class TilingWMExtension extends Extension {
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
         this._windowWSIndices = null;
+        this._workspaceLayouts = null;
         this._masterRatios = null;
         this._stackRatios = null;
         this._bspTrees = null;
         this._lastRetileTimes = null;
         this._lastFocusedPerWorkspace = null;
         this._fillScreenRects = null;
+        this._savedRects = null;
         this._signals = null;
         this._swapTarget = null;
         this._lastSwapTarget = null;
@@ -236,6 +247,7 @@ export default class TilingWMExtension extends Extension {
                     this._masterRatios.delete(workspace);
                     this._stackRatios.delete(workspace);
                     this._bspTrees.delete(workspace);
+                    this._workspaceLayouts.delete(workspace);
                     this._lastFocusedPerWorkspace.delete(workspace);
                 }
             }
@@ -244,6 +256,8 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed || !this._settings.get_boolean('enabled')) return;
             const ws = global.workspace_manager.get_active_workspace();
             if (!ws) return;
+            if (this._settings.get_boolean('workspace-popup'))
+                this._showWorkspacePopup(ws);
             const windows = this._getWindowsForWorkspace(ws);
             if (windows.length === 0) return;
             let target = this._lastFocusedPerWorkspace.get(ws);
@@ -268,11 +282,19 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::single-gap', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::enabled', () => this._onTilingEnabledChanged()));
         this._addSignal(this._settings, this._settings.connect('changed::layout', () => {
-            this._bspTrees.clear();
-            this._masterRatios.clear();
-            this._stackRatios.clear();
-            this._retileAll();
+            const oldDefault = this._currentDefaultLayout;
+            this._currentDefaultLayout = this._settings.get_string('layout');
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!this._workspaceLayouts.has(ws))
+                    this._workspaceLayouts.set(ws, oldDefault);
+            }
+            const activeWs = global.workspace_manager.get_active_workspace();
+            if (activeWs)
+                this._workspaceLayouts.set(activeWs, this._currentDefaultLayout);
+            this._retileWorkspace(activeWs);
         }));
         this._addSignal(this._settings, this._settings.connect('changed::dwindle-ratio', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::master-ratio', () => this._retileAll()));
@@ -432,6 +454,10 @@ export default class TilingWMExtension extends Extension {
         return this._workspaceOrders.get(workspace);
     }
 
+    _getWorkspaceLayout(workspace) {
+        return this._workspaceLayouts.get(workspace) || this._settings.get_string('layout');
+    }
+
     _addWindow(win) {
         if (!this._settings) return;
         if (this._windowWorkspaces.has(win)) return;
@@ -439,6 +465,7 @@ export default class TilingWMExtension extends Extension {
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
         this._windowWSIndices.set(win, this._wsIndex(ws));
+        this._capturePosition(win);
         this._connectWindowSignals(win);
         if (ws) {
             const order = this._getWorkspaceOrder(ws);
@@ -446,7 +473,7 @@ export default class TilingWMExtension extends Extension {
                 order.push(win);
             }
             if (!this._isFloating(win)) {
-                const layout = this._settings.get_string('layout');
+                const layout = this._getWorkspaceLayout(ws);
                 if (layout === 'dwindle')
                     this._bspInsertForWorkspace(ws, win);
             }
@@ -462,6 +489,7 @@ export default class TilingWMExtension extends Extension {
         this._windowWSIndices.delete(win);
         this._toggleFloatWindows.delete(win);
         this._fillScreenRects.delete(win);
+        this._savedRects.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
         for (const [workspace, lastWin] of this._lastFocusedPerWorkspace) {
@@ -471,7 +499,7 @@ export default class TilingWMExtension extends Extension {
             const order = this._getWorkspaceOrder(ws);
             const idx = order.indexOf(win);
             if (idx !== -1) order.splice(idx, 1);
-            const layout = this._settings.get_string('layout');
+            const layout = this._getWorkspaceLayout(ws);
             if (layout === 'dwindle') {
                 const tree = this._bspGetTree(ws);
                 if (tree) this._bspTrees.set(ws, this._bspRemove(tree, win));
@@ -587,7 +615,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(workspace);
         if (layout === 'dwindle')
             this._retileDwindle(workspace, tiledWindows);
         else if (layout === 'centered-master-stack')
@@ -627,7 +655,7 @@ export default class TilingWMExtension extends Extension {
 
         this._animTargets = new Map();
 
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(workspace);
         if (layout === 'dwindle')
             this._retileDwindle(workspace, tiledWindows);
         else if (layout === 'centered-master-stack')
@@ -1041,7 +1069,7 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
         const gap = this._settings.get_int('gap');
         const areaW = workArea.width - gap * 2;
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(workspace);
         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
 
         if (axis === 'width') {
@@ -1087,7 +1115,7 @@ export default class TilingWMExtension extends Extension {
         if (numStack === 0) return 0;
 
         const masterRatio = this._getMasterRatio(ws);
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
 
         if (layout === 'centered-master-stack') {
             const masterW = Math.floor((areaW - gap * 2) * masterRatio);
@@ -1414,32 +1442,18 @@ export default class TilingWMExtension extends Extension {
                     tree = this._bspRemove(tree, tw);
                 }
             }
-            const [px, py] = global.get_pointer();
             for (const win of tiledWindows) {
                 const currentWins = this._bspCollectWindows(tree);
                 if (!currentWins.includes(win)) {
-                    this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
-                    const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
-                    if (target) {
-                        tree = this._bspReplaceLeaf(tree, target, win, gap);
-                    } else {
-                        tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
-                    }
+                    tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
                 }
             }
             this._bspTrees.set(workspace, tree);
         } else {
-            const [px, py] = global.get_pointer();
             tree = null;
             for (const win of tiledWindows) {
                 if (tree) {
-                    this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
-                    const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
-                    if (target) {
-                        tree = this._bspReplaceLeaf(tree, target, win, gap);
-                    } else {
-                        tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
-                    }
+                    tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
                 } else {
                     tree = this._bspMakeLeaf(win);
                 }
@@ -1730,7 +1744,7 @@ export default class TilingWMExtension extends Extension {
         const bestWindow = this._findDirectionalTarget(focused, direction, windows);
         if (!bestWindow) return;
 
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
         if (layout === 'dwindle') {
             const tree = this._bspGetTree(ws);
             if (tree) {
@@ -1769,7 +1783,7 @@ export default class TilingWMExtension extends Extension {
         const idx = tiledWindows.indexOf(focused);
         if (idx === -1 || tiledWindows.length <= 1) return;
 
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
         if (layout === 'dwindle')
             this._resizeDwindle(focused, ws, axis, delta);
         else
@@ -1845,11 +1859,11 @@ export default class TilingWMExtension extends Extension {
         if (!ws) return;
 
         if (wasFloating) {
-            const layout = this._settings.get_string('layout');
+            const layout = this._getWorkspaceLayout(ws);
             if (layout === 'dwindle')
                 this._bspInsertForWorkspace(ws, focused);
         } else {
-            const layout = this._settings.get_string('layout');
+            const layout = this._getWorkspaceLayout(ws);
             if (layout === 'dwindle') {
                 const tree = this._bspGetTree(ws);
                 if (tree)
@@ -1866,22 +1880,50 @@ export default class TilingWMExtension extends Extension {
     }
 
     _toggleTiling() {
+        this._settings.set_boolean('enabled', !this._settings.get_boolean('enabled'));
+    }
+
+    _onTilingEnabledChanged() {
+        if (!this._settings) return;
         const enabled = this._settings.get_boolean('enabled');
-        this._settings.set_boolean('enabled', !enabled);
 
         if (enabled) {
-            this._removeAllBorders();
-            this._bspTrees.clear();
-            this._masterRatios.clear();
-            this._stackRatios.clear();
-        } else {
+            for (const win of this._windowWorkspaces.keys())
+                this._capturePosition(win);
             this._keyboardFocusChange = true;
             this._retileAll();
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 this._keyboardFocusChange = false;
                 return false;
             });
+            if (this._settings.get_boolean('tiling-popup'))
+                this._showPopup('Tiling Enabled');
+        } else {
+            this._removeAllBorders();
+            this._restoreSavedPositions();
+            if (this._settings.get_boolean('tiling-popup'))
+                this._showPopup('Tiling Disabled');
         }
+    }
+
+    _capturePosition(win) {
+        if (!this._savedRects || this._savedRects.has(win)) return;
+        try {
+            const frame = win.get_frame_rect();
+            if (frame.width > 0 && frame.height > 0)
+                this._savedRects.set(win, { x: frame.x, y: frame.y, w: frame.width, h: frame.height });
+        } catch (_e) {}
+    }
+
+    _restoreSavedPositions() {
+        if (!this._savedRects) return;
+        for (const [win, rect] of this._savedRects) {
+            try {
+                if (!win.get_compositor_private() || win.is_fullscreen()) continue;
+                win.move_resize_frame(true, rect.x, rect.y, rect.w, rect.h);
+            } catch (_e) {}
+        }
+        this._savedRects.clear();
     }
 
     _centerWindow() {
@@ -1964,21 +2006,26 @@ export default class TilingWMExtension extends Extension {
 
     _cycleLayout() {
         const layouts = ['dwindle', 'master-stack', 'centered-master-stack'];
-        const names = {
-            'dwindle': 'Dwindle',
-            'master-stack': 'Master-stack',
-            'centered-master-stack': 'Centered Master-stack',
-        };
-        const current = this._settings.get_string('layout');
+        const ws = global.workspace_manager.get_active_workspace();
+        if (!ws) return;
+        const current = this._getWorkspaceLayout(ws);
         const idx = layouts.indexOf(current);
         const next = layouts[(idx + 1) % layouts.length];
         if (next !== current) {
-            this._settings.set_string('layout', next);
-            this._showLayoutPopup(names[next] || next);
+            this._workspaceLayouts.set(ws, next);
+            this._retileWorkspace(ws);
+            this._showPopup(`Layout: ${LAYOUT_NAMES[next] || next}`);
         }
     }
 
-    _showLayoutPopup(name) {
+    _showWorkspacePopup(ws) {
+        if (!ws) return;
+        const layout = this._getWorkspaceLayout(ws);
+        this._showPopup(`Workspace ${this._wsIndex(ws) + 1}`,
+            `Layout: ${LAYOUT_NAMES[layout] || layout}`);
+    }
+
+    _showPopup(title, subtitle = null) {
         if (this._layoutPopupHideId) {
             GLib.source_remove(this._layoutPopupHideId);
             this._layoutPopupHideId = 0;
@@ -1988,20 +2035,6 @@ export default class TilingWMExtension extends Extension {
             this._layoutPopup = null;
         }
 
-        const box = new St.BoxLayout({
-            style: 'background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px;',
-        });
-        box.add_child(new St.Label({
-            text: `Layout: ${name}`,
-            style: 'font-size: 18px; font-weight: bold; color: #ffffff;',
-        }));
-
-        this._layoutPopup = new St.Bin({
-            child: box,
-            x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.CENTER,
-            reactive: false,
-        });
         const monitors = global.display.get_n_monitors();
         let maxX = 0, maxY = 0;
         for (let i = 0; i < monitors; i++) {
@@ -2009,6 +2042,29 @@ export default class TilingWMExtension extends Extension {
             maxX = Math.max(maxX, geom.x + geom.width);
             maxY = Math.max(maxY, geom.y + geom.height);
         }
+        const topMargin = Math.floor(maxY * 0.2);
+
+        const box = new St.BoxLayout({
+            vertical: true,
+            style: `background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px; spacing: 4px; margin-top: ${topMargin}px;`,
+        });
+        box.add_child(new St.Label({
+            text: title,
+            style: 'font-size: 20px; font-weight: bold; color: #ffffff;',
+        }));
+        if (subtitle) {
+            box.add_child(new St.Label({
+                text: subtitle,
+                style: 'font-size: 14px; color: rgba(255, 255, 255, 0.8);',
+            }));
+        }
+
+        this._layoutPopup = new St.Bin({
+            child: box,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.START,
+            reactive: false,
+        });
         this._layoutPopup.set_position(0, 0);
         this._layoutPopup.set_size(maxX, maxY);
         Main.layoutManager.uiGroup.add_child(this._layoutPopup);
@@ -2190,7 +2246,7 @@ export default class TilingWMExtension extends Extension {
                 const workArea = ws.get_work_area_for_monitor(monitor);
                 if (!workArea) return GLib.SOURCE_CONTINUE;
 
-                const layout = this._settings.get_string('layout');
+                const layout = this._getWorkspaceLayout(ws);
                 if (layout === 'dwindle') {
                     const tree = this._bspGetTree(ws);
                     if (tree) {
@@ -2303,7 +2359,7 @@ export default class TilingWMExtension extends Extension {
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
 
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
         if (layout === 'dwindle') {
             const tree = this._bspGetTree(ws);
             if (!tree) return;
@@ -2339,7 +2395,7 @@ export default class TilingWMExtension extends Extension {
         if (!winA || !winB) return;
         const ws = winA.get_workspace();
         if (!ws) return;
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
         if (layout === 'dwindle') {
             const tree = this._bspGetTree(ws);
             if (tree) this._bspSwapWindows(tree, winA, winB);
@@ -2496,7 +2552,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
         if (layout === 'dwindle') {
             const leaf = this._computeDwindleDropTarget(ws, px, py);
             if (leaf && leaf.type === 'leaf') {
@@ -2525,7 +2581,7 @@ export default class TilingWMExtension extends Extension {
         const areaW = workArea.width - gap * 2;
         const areaH = workArea.height - gap * 2;
         const masterRatio = this._getMasterRatio(ws);
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
 
         let rx, ry;
         let rw, rh;
@@ -2617,7 +2673,7 @@ export default class TilingWMExtension extends Extension {
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiled.length <= 1) return;
 
-        const layout = this._settings.get_string('layout');
+        const layout = this._getWorkspaceLayout(ws);
         if (layout === 'dwindle') {
             const targetLeaf = this._computeDwindleDropTarget(ws, px, py);
             if (!targetLeaf || targetLeaf.type !== 'leaf') return;

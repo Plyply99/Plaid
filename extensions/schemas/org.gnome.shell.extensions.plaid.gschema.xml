@@ -184,6 +184,20 @@
       <description>When enabled, dragging window edges resizes the split ratio and dragging the title bar swaps windows</description>
     </key>
 
+    <!-- Workspace popup: show workspace number and layout on switch -->
+    <key name="workspace-popup" type="b">
+      <default>true</default>
+      <summary>Show workspace popup</summary>
+      <description>Show a popup with the workspace number and its layout when switching workspaces</description>
+    </key>
+
+    <!-- Tiling popup: show when tiling is toggled on/off -->
+    <key name="tiling-popup" type="b">
+      <default>true</default>
+      <summary>Show tiling popup</summary>
+      <description>Show a popup when tiling is toggled on or off</description>
+    </key>
+
     <!-- Pick mode: used to capture a window click for float rules -->
     <key name="pick-mode" type="b">
       <default>false</default>

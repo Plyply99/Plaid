@@ -63,6 +63,20 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(mouseResizeRow);
         settings.bind('mouse-resize', mouseResizeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const workspacePopupRow = new Adw.SwitchRow({
+            title: _('Show Workspace Popup'),
+            subtitle: _('Show workspace number and layout when switching workspaces'),
+        });
+        group.add(workspacePopupRow);
+        settings.bind('workspace-popup', workspacePopupRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const tilingPopupRow = new Adw.SwitchRow({
+            title: _('Show Tiling Popup'),
+            subtitle: _('Show a popup when tiling is toggled on or off'),
+        });
+        group.add(tilingPopupRow);
+        settings.bind('tiling-popup', tilingPopupRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const gapRow = new Adw.SpinRow({
             title: _('Window Gap'),
             subtitle: _('Gap between windows in pixels'),
