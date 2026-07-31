@@ -9,13 +9,20 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         const settings = this.getSettings();
 
         const display = Gdk.Display.get_default();
-        const monitor = display ? display.get_primary_monitor() : null;
-        if (monitor) {
-            const geo = monitor.get_geometry();
-            const minW = Math.max(560, Math.floor(geo.width / 5));
-            const minH = Math.max(480, Math.floor(geo.height / 2));
-            window.set_size_request(minW, minH);
-            window.set_default_size(minW, minH);
+        if (display) {
+            const n = display.get_n_monitors();
+            let screenW = 0, screenH = 0;
+            for (let i = 0; i < n; i++) {
+                const geo = display.get_monitor(i).get_geometry();
+                screenW = Math.max(screenW, geo.width);
+                screenH = Math.max(screenH, geo.height);
+            }
+            if (screenW > 0 && screenH > 0) {
+                const minW = Math.max(560, Math.floor(screenW / 5));
+                const minH = Math.max(480, Math.floor(screenH / 2));
+                window.set_size_request(minW, minH);
+                window.set_default_size(minW, minH);
+            }
         }
 
         this._buildGeneralPage(window, settings);
