@@ -105,25 +105,39 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(singleGapRow);
         settings.bind('single-gap', singleGapRow, 'value', Gio.SettingsBindFlags.DEFAULT);
 
-        const layoutModel = new Gtk.StringList({
-            strings: ['dwindle', 'master-stack', 'centered-master-stack'],
+        const layoutNames = ['dwindle', 'master-stack', 'centered-master-stack'];
+        const layoutCaptions = {
+            'dwindle': _('Dwindle'),
+            'master-stack': _('Master-stack'),
+            'centered-master-stack': _('Centered Master-stack'),
+        };
+        const previewDrawings = new Map();
+        const refreshLayoutPreviews = () => {
+            for (const drawing of previewDrawings.values())
+                drawing.queue_draw();
+        };
+        const selectLayout = (layout) => {
+            settings.set_string('layout', layout);
+            updateRatioVisibility();
+            refreshLayoutPreviews();
+        };
+
+        const layoutRow = new Adw.PreferencesRow();
+        const layoutBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+            halign: Gtk.Align.CENTER,
+            margin_top: 10,
+            margin_bottom: 10,
         });
-        const layoutRow = new Adw.ComboRow({
-            title: _('Layout'),
-            subtitle: _('Window tiling layout'),
-            model: layoutModel,
-        });
+        layoutRow.set_child(layoutBox);
         group.add(layoutRow);
-        const layoutBinding = settings.bind('layout', layoutRow, 'selected-item', Gio.SettingsBindFlags.DEFAULT);
-        const layoutIdx = ['dwindle', 'master-stack', 'centered-master-stack'].indexOf(settings.get_string('layout'));
-        if (layoutIdx >= 0)
-            layoutRow.set_selected(layoutIdx);
-        layoutRow.connect('notify::selected', () => {
-            const idx = layoutRow.get_selected();
-            const layouts = ['dwindle', 'master-stack', 'centered-master-stack'];
-            if (idx >= 0 && idx < layouts.length)
-                settings.set_string('layout', layouts[idx]);
-        });
+
+        for (const layout of layoutNames) {
+            layoutBox.append(this._buildLayoutPreviewCard(
+                settings, layout, layoutCaptions[layout],
+                () => selectLayout(layout), previewDrawings));
+        }
 
         const dwindleRatioRow = new Adw.SpinRow({
             title: _('Dwindle Split Ratio'),
@@ -161,7 +175,10 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             masterRatioRow.set_visible(layout !== 'dwindle');
         };
         updateRatioVisibility();
-        settings.connect('changed::layout', () => updateRatioVisibility());
+        settings.connect('changed::layout', () => {
+            updateRatioVisibility();
+            refreshLayoutPreviews();
+        });
 
         const resizeAmountRow = new Adw.SpinRow({
             title: _('Resize Step'),
@@ -176,6 +193,97 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         group.add(resizeAmountRow);
         settings.bind('resize-amount', resizeAmountRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+    }
+
+    _buildLayoutPreviewCard(settings, layout, caption, onSelect, previewDrawings) {
+        const drawing = new Gtk.DrawingArea({
+            width_request: 140,
+            height_request: 80,
+            content_width: 140,
+            content_height: 80,
+        });
+        previewDrawings.set(layout, drawing);
+
+        drawing.set_draw_func((area, cr, width, height) => {
+            const pad = 5;
+            const gap = 3;
+            const x0 = pad;
+            const y0 = pad;
+            const W = width - pad * 2;
+            const H = height - pad * 2;
+
+            if (settings.get_string('layout') === layout) {
+                let accent = { red: 0.2, green: 0.5, blue: 0.9, alpha: 1 };
+                try {
+                    const ctx = area.get_style_context();
+                    const [ok, color] = ctx.lookup_color('accent_color');
+                    if (ok) accent = color;
+                } catch (_e) {}
+                cr.setSourceRGBA(accent.red, accent.green, accent.blue, accent.alpha);
+                cr.setLineWidth(2);
+                cr.rectangle(1, 1, width - 2, height - 2);
+                cr.stroke();
+            }
+
+            const rect = (x, y, w, h) => {
+                cr.setSourceRGBA(0.5, 0.5, 0.5, 0.4);
+                cr.rectangle(x, y, w, h);
+                cr.fill();
+            };
+
+            if (layout === 'dwindle') {
+                const r = 0.618;
+                const aw = Math.floor(W * r);
+                const ah = Math.floor(H * r);
+                const lw1 = Math.floor(aw * r);
+                rect(x0, y0, lw1, ah);
+                rect(x0 + lw1 + gap, y0, aw - lw1 - gap, ah);
+                rect(x0, y0 + ah + gap, aw, H - ah - gap);
+                rect(x0 + aw + gap, y0, W - aw - gap, ah);
+                rect(x0 + aw + gap, y0 + ah + gap, W - aw - gap, H - ah - gap);
+            } else if (layout === 'master-stack') {
+                const mw = Math.floor(W * 0.5);
+                rect(x0, y0, mw, H);
+                const sx = x0 + mw + gap;
+                const sw = W - mw - gap;
+                const sh = Math.floor((H - gap * 2) / 3);
+                for (let i = 0; i < 3; i++)
+                    rect(sx, y0 + i * (sh + gap), sw, sh);
+            } else {
+                const mw = Math.floor(W * 0.4);
+                const mx = x0 + Math.floor((W - mw) / 2);
+                rect(mx, y0, mw, H);
+                const lw = mx - x0 - gap;
+                const rx = mx + mw + gap;
+                const rw = W - (mx + mw - x0) - gap;
+                const sh = Math.floor((H - gap) / 2);
+                if (lw > 0) {
+                    rect(x0, y0, lw, sh);
+                    rect(x0, y0 + sh + gap, lw, H - sh - gap);
+                }
+                if (rw > 0) {
+                    rect(rx, y0, rw, sh);
+                    rect(rx, y0 + sh + gap, rw, H - sh - gap);
+                }
+            }
+        });
+
+        drawing.tooltip_text = caption;
+        try { drawing.set_cursor_from_name('pointer'); } catch (_e) {}
+        const gesture = new Gtk.GestureClick();
+        gesture.connect('pressed', () => onSelect());
+        drawing.add_controller(gesture);
+
+        const card = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+        });
+        card.append(drawing);
+        card.append(new Gtk.Label({
+            label: caption,
+            css_classes: ['dim-label'],
+        }));
+        return card;
     }
 
     _buildBordersPage(window, settings) {
