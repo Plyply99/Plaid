@@ -10,10 +10,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const display = Gdk.Display.get_default();
         if (display) {
-            const n = display.get_n_monitors();
             let screenW = 0, screenH = 0;
-            for (let i = 0; i < n; i++) {
-                const geo = display.get_monitor(i).get_geometry();
+            for (const monitor of display.get_monitors()) {
+                const geo = monitor.get_geometry();
                 screenW = Math.max(screenW, geo.width);
                 screenH = Math.max(screenH, geo.height);
             }
