@@ -1,4 +1,6 @@
 import Clutter from 'gi://Clutter';
+import Cogl from 'gi://Cogl';
+import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
@@ -19,6 +21,188 @@ const BORDER_SEG_STEP = 12;
 const BORDER_CORNER_MIN_SEGS = 8;
 const BORDER_CORNER_SEG_STEP = 4;
 
+const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
+const MASK_EFFECT_NAME = 'plaid-corner-mask';
+
+const MASK_SNIPPET_DECLARATIONS = `
+uniform vec4 bounds;
+uniform float clipRadius;
+uniform vec2 pixelStep;
+uniform vec4 borderColor1;
+uniform vec4 borderColor2;
+uniform float borderWidth;
+uniform float gradientMode;
+uniform float theta;
+uniform vec4 borderedAreaBounds;
+uniform float borderedAreaClipRadius;
+
+float circleBounds(vec2 p, vec2 center, float clipRadius) {
+    vec2 delta = p - center;
+    float distSquared = dot(delta, delta);
+    float outerRadius = clipRadius + 0.5;
+    if (distSquared >= (outerRadius * outerRadius))
+        return 0.0;
+    float innerRadius = clipRadius - 0.5;
+    if (distSquared <= (innerRadius * innerRadius))
+        return 1.0;
+    return outerRadius - sqrt(distSquared);
+}
+
+float getPointOpacity(vec2 p, vec4 bounds, float clipRadius) {
+    if (p.x < bounds.x || p.x > bounds.z || p.y < bounds.y || p.y > bounds.w)
+        return 0.0;
+    vec2 center;
+    float centerLeft = bounds.x + clipRadius;
+    float centerRight = bounds.z - clipRadius;
+    if (p.x < centerLeft)
+        center.x = centerLeft;
+    else if (p.x > centerRight)
+        center.x = centerRight;
+    else
+        return 1.0;
+    float centerTop = bounds.y + clipRadius;
+    float centerBottom = bounds.w - clipRadius;
+    if (p.y < centerTop)
+        center.y = centerTop;
+    else if (p.y > centerBottom)
+        center.y = centerBottom;
+    else
+        return 1.0;
+    return circleBounds(p, center, clipRadius);
+}
+
+float gradientPos(vec2 p, vec4 bounds) {
+    if (gradientMode < 0.5)
+        return clamp((p.y - bounds.y) / (bounds.w - bounds.y), 0.0, 1.0);
+    if (gradientMode < 1.5)
+        return clamp((p.x - bounds.x) / (bounds.z - bounds.x), 0.0, 1.0);
+    if (gradientMode < 2.5)
+        return clamp(((p.x - bounds.x) + (p.y - bounds.y)) / ((bounds.z - bounds.x) + (bounds.w - bounds.y)), 0.0, 1.0);
+    vec2 c = vec2((bounds.x + bounds.z) / 2.0, (bounds.y + bounds.w) / 2.0);
+    float ang = atan(p.y - c.y, p.x - c.x) - theta;
+    float t = mod(ang, 6.28318530718) / 6.28318530718;
+    return t < 0.5 ? t * 2.0 : (1.0 - t) * 2.0;
+}
+`;
+
+const MASK_SNIPPET_CODE = `
+    vec2 p = cogl_tex_coord0_in.xy / pixelStep;
+
+    float pointAlpha = getPointOpacity(p, bounds, clipRadius);
+
+    cogl_color_out *= pointAlpha;
+
+    if (borderWidth > 0.5) {
+        float borderedAreaAlpha = getPointOpacity(p, borderedAreaBounds, borderedAreaClipRadius);
+        float borderAlpha = clamp(abs(pointAlpha - borderedAreaAlpha), 0.0, 1.0);
+        if (borderAlpha > 0.0) {
+            vec3 gradColor = mix(borderColor1.rgb, borderColor2.rgb, gradientPos(p, bounds));
+            cogl_color_out = mix(cogl_color_out, vec4(gradColor, 1.0), borderAlpha * borderColor1.a);
+        }
+    }
+`;
+
+const CornerMaskEffect = GObject.registerClass({
+    GTypeName: 'PlaidCornerMaskEffect',
+}, class CornerMaskEffect extends Shell.GLSLEffect {
+    constructor() {
+        super();
+        this._radius = 0;
+        this._snippetAdded = false;
+        this._metaWin = null;
+        this._uniformLocations = {
+            bounds: this.get_uniform_location('bounds'),
+            clipRadius: this.get_uniform_location('clipRadius'),
+            pixelStep: this.get_uniform_location('pixelStep'),
+            borderColor1: this.get_uniform_location('borderColor1'),
+            borderColor2: this.get_uniform_location('borderColor2'),
+            borderWidth: this.get_uniform_location('borderWidth'),
+            gradientMode: this.get_uniform_location('gradientMode'),
+            theta: this.get_uniform_location('theta'),
+            borderedAreaBounds: this.get_uniform_location('borderedAreaBounds'),
+            borderedAreaClipRadius: this.get_uniform_location('borderedAreaClipRadius'),
+        };
+    }
+
+    vfunc_build_pipeline() {
+        try {
+            this.add_glsl_snippet(SNIPPET_HOOK_FRAGMENT, MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE, false);
+        } catch (e) {
+            log(`[plaid] mask snippet failed: ${e.message}`);
+        }
+    }
+
+    vfunc_paint_target(node, paintContext) {
+        try {
+            const actor = this.get_actor();
+            if (actor && this._metaWin && this._metaWin.get_frame_rect) {
+                const buffer = this._metaWin.get_buffer_rect();
+                const frame = this._metaWin.get_frame_rect();
+                const offsetX = frame.x - buffer.x;
+                const offsetY = frame.y - buffer.y;
+                const bw = frame.width - buffer.width;
+                const bh = frame.height - buffer.height;
+                const w = Math.max(1, actor.width);
+                const h = Math.max(1, actor.height);
+                const loc = this._uniformLocations;
+                this.set_uniform_float(loc.bounds, 4, [
+                    offsetX + 1,
+                    offsetY + 1,
+                    offsetX + actor.width + bw,
+                    offsetY + actor.height + bh,
+                ]);
+                this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
+            }
+        } catch (e) {
+            log(`[plaid] mask paint sync failed: ${e.message}`);
+        }
+        super.vfunc_paint_target(node, paintContext);
+    }
+
+    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta) {
+        this._radius = radius;
+        const loc = this._uniformLocations;
+        try {
+            const actor = this.get_actor();
+            const w = Math.max(1, actor ? actor.width : 1);
+            const h = Math.max(1, actor ? actor.height : 1);
+            const inset = Math.max(0, borderWidth);
+            this.set_uniform_float(loc.bounds, 4, [x1, y1, x2, y2]);
+            this.set_uniform_float(loc.clipRadius, 1, [radius]);
+            this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
+            this.set_uniform_float(loc.borderedAreaBounds, 4, [x1 + inset, y1 + inset, x2 - inset, y2 - inset]);
+            this.set_uniform_float(loc.borderedAreaClipRadius, 1, [Math.max(0, radius - inset)]);
+            this.set_uniform_float(loc.borderWidth, 1, [borderWidth]);
+            this.set_uniform_float(loc.borderColor1, 4, color1);
+            this.set_uniform_float(loc.borderColor2, 4, color2);
+            this.set_uniform_float(loc.gradientMode, 1, [mode]);
+            this.set_uniform_float(loc.theta, 1, [theta]);
+        } catch (e) {
+            log(`[plaid] mask uniforms failed: ${e.message}`);
+            return;
+        }
+        this.queue_repaint();
+    }
+
+    setTheta(theta) {
+        try {
+            this.set_uniform_float(this._uniformLocations.theta, 1, [theta]);
+        } catch (_e) {
+            return;
+        }
+        this.queue_repaint();
+    }
+
+    setBorderWidth(width) {
+        try {
+            this.set_uniform_float(this._uniformLocations.borderWidth, 1, [width]);
+        } catch (_e) {
+            return;
+        }
+        this.queue_repaint();
+    }
+});
+
 export default class TilingWMExtension extends Extension {
     enable() {
         this._destroyed = false;
@@ -26,6 +210,7 @@ export default class TilingWMExtension extends Extension {
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._windowBorders = new Map();
+        this._windowMasks = new Map();
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
         this._windowWSIndices = new Map();
@@ -45,6 +230,7 @@ export default class TilingWMExtension extends Extension {
         this._toggleFloatWindows = new Set();
         this._keyboardFocusChange = false;
         this._grabOp = null;
+        this._grabWindow = null;
         this._grabStartX = 0;
         this._grabStartY = 0;
         this._grabWidthSign = 0;
@@ -145,6 +331,8 @@ export default class TilingWMExtension extends Extension {
         this._floatingTitles = null;
         this._toggleFloatWindows = null;
         this._windowBorders = null;
+        this._removeAllMasks();
+        this._windowMasks = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
         this._windowWSIndices = null;
@@ -313,18 +501,23 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::dwindle-ratio', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::master-ratio', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-width', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::borders-enabled', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::active-border-color-2', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-width', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color-2', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::border-radius', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::rounded-corners', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::gradient-borders', () => {
             this._updateBorders();
             this._syncBorderAnimation();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gradient-direction', () => this._updateBorders()));
-        this._addSignal(this._settings, this._settings.connect('changed::border-animation-speed', () => this._syncBorderAnimation()));
+        this._addSignal(this._settings, this._settings.connect('changed::border-animation-speed', () => {
+            this._syncBorderAnimation();
+            this._updateBorders();
+        }));
         this._addSignal(this._settings, this._settings.connect('changed::pick-mode', () => {
             if (this._settings.get_boolean('pick-mode')) {
                 this._startPickMode();
@@ -1501,7 +1694,10 @@ export default class TilingWMExtension extends Extension {
     _doUpdateBorders() {
         if (!this._settings) return;
         this._removeAllBorders();
-        if (!this._settings.get_boolean('enabled')) return;
+        if (!this._settings.get_boolean('enabled')) {
+            this._removeAllMasks();
+            return;
+        }
 
         const focusWindow = global.display.focus_window;
 
@@ -1512,6 +1708,8 @@ export default class TilingWMExtension extends Extension {
         const inactiveColor = (this._settings.get_strv('inactive-border-color') || [])[0] || '#555555';
         const inactiveColor2 = (this._settings.get_strv('inactive-border-color-2') || [])[0] || '#777777';
         const borderRadius = this._settings.get_int('border-radius');
+        const roundedCorners = this._settings.get_boolean('rounded-corners');
+        const bordersEnabled = this._settings.get_boolean('borders-enabled');
         const gradient = this._settings.get_boolean('gradient-borders');
         const gradientDir = this._settings.get_string('gradient-direction');
 
@@ -1520,19 +1718,27 @@ export default class TilingWMExtension extends Extension {
 
         const windows = this._getWindowsForWorkspace(ws);
         for (const win of windows) {
-            if (win.is_fullscreen()) continue;
+            if (win.is_fullscreen()) {
+                this._removeMask(win);
+                continue;
+            }
             if (this._grabOp && win === this._getActiveWindow()) continue;
             const actor = win.get_compositor_private();
             if (!actor) continue;
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
 
+            if (roundedCorners && borderRadius > 0) {
+                this._ensureWindowMask(win, actor, borderRadius + 1);
+                continue;
+            }
+
             const isFocused = win === focusWindow;
             const borderWidth = isFocused ? activeWidth : inactiveWidth;
             const color1 = isFocused ? activeColor : inactiveColor;
             const color2 = isFocused ? activeColor2 : inactiveColor2;
 
-            if (borderWidth === 0) continue;
+            if (!bordersEnabled || borderWidth === 0) continue;
 
             const buffer = win.get_buffer_rect();
             const offsetX = frame.x - buffer.x;
@@ -1571,6 +1777,9 @@ export default class TilingWMExtension extends Extension {
             actor.add_child(border);
             this._windowBorders.set(win, border);
         }
+
+        if (!roundedCorners || borderRadius <= 0)
+            this._removeAllMasks();
 
         this._raiseFloatingWindows(ws);
         this._syncBorderAnimation();
@@ -1751,8 +1960,15 @@ export default class TilingWMExtension extends Extension {
                 this._stopBorderAnimation();
                 return GLib.SOURCE_REMOVE;
             }
+            const stSettings = St.Settings.get();
+            const slow = Math.max(0.1, stSettings.slow_down_factor);
+            const period = this._borderRotationMs(this._settings.get_int('border-animation-speed'));
+            const theta = period > 0 ? (((Date.now() / period) * slow) % 1) * Math.PI * 2 : 0;
+            for (const effect of this._windowMasks.values()) {
+                try { effect.setTheta(theta); } catch (_e) {}
+            }
             for (const border of this._windowBorders.values()) {
-                try { border.queue_repaint(); } catch (_e) {}
+                try { border.queue_redraw(); } catch (_e) {}
             }
             return GLib.SOURCE_CONTINUE;
         });
@@ -1770,7 +1986,7 @@ export default class TilingWMExtension extends Extension {
             if (!this._settings || this._destroyed) return;
             const wantAnim = this._settings.get_boolean('gradient-borders') &&
                 this._settings.get_int('border-animation-speed') > 0 &&
-                this._windowBorders.size > 0;
+                (this._windowBorders.size > 0 || this._windowMasks.size > 0);
             if (wantAnim)
                 this._startBorderAnimation();
             else
@@ -1803,7 +2019,7 @@ export default class TilingWMExtension extends Extension {
             border.set_position(offsetX - bw, offsetY - bw);
             border.set_size(frame.width + bw * 2, frame.height + bw * 2);
             if (border.queue_repaint) {
-                try { border.queue_repaint(); } catch (_e) {}
+                try { border.queue_redraw(); } catch (_e) {}
             }
         }
     }
@@ -1821,6 +2037,188 @@ export default class TilingWMExtension extends Extension {
             try { border.destroy(); } catch (_e) {}
             this._windowBorders.delete(win);
         }
+        this._removeMask(win);
+    }
+
+    _unwrapMaskActor(actor, win) {
+        if (!actor) return null;
+        if (win.get_client_type() === Meta.WindowClientType.X11) {
+            const firstChild = actor.get_first_child();
+            return firstChild || null;
+        }
+        return actor;
+    }
+
+    _ensureWindowMask(win, actor, radius) {
+        if (!this._windowMasks || !actor || !actor.add_effect_with_name) return;
+        const target = this._unwrapMaskActor(actor, win);
+        if (!target || !target.add_effect_with_name) return;
+        let effect = this._windowMasks.get(win);
+        if (effect && effect._radius !== radius) {
+            try { target.remove_effect_by_name(MASK_EFFECT_NAME); } catch (_e) {}
+            this._windowMasks.delete(win);
+            effect = null;
+        }
+        if (!effect) {
+            effect = new CornerMaskEffect();
+            try {
+                target.add_effect_with_name(MASK_EFFECT_NAME, effect);
+                this._windowMasks.set(win, effect);
+                this._debugLog(`corner mask attached radius=${radius}`);
+            } catch (e) {
+                log(`[plaid] corner mask attach failed: ${e.message}`);
+                return;
+            }
+            effect.enabled = true;
+            effect._metaWin = win;
+            try {
+                effect._watchActor = target;
+                effect._sizeWatchId = target.connect('notify::size', () => {
+                    this._connectTextureWatch(win, actor, effect);
+                    this._scheduleMaskRedraw(win, actor, effect);
+                });
+            } catch (_e) {}
+            this._connectTextureWatch(win, actor, effect);
+        }
+        this._updateMaskBounds(win, actor, effect, radius);
+        try { target.queue_redraw(); } catch (_e) {}
+    }
+
+    _connectTextureWatch(win, actor, effect) {
+        if (effect._textureWatchId) {
+            try { effect._watchTexture.disconnect(effect._textureWatchId); } catch (_e) {}
+            effect._textureWatchId = 0;
+        }
+        let texture = null;
+        if (actor && actor.get_texture)
+            texture = actor.get_texture();
+        if (texture && texture.connect) {
+            try {
+                effect._watchTexture = texture;
+                effect._textureWatchId = texture.connect('size-changed', () => {
+                    this._scheduleMaskRedraw(win, actor, effect);
+                });
+            } catch (_e) {}
+        }
+    }
+
+    _scheduleMaskRedraw(win, actor, effect) {
+        if (effect._refreshTimeoutId) {
+            try { GLib.source_remove(effect._refreshTimeoutId); } catch (_e) {}
+        }
+        effect._refreshTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            effect._refreshTimeoutId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._debugLog(`mask redraw kick r=${effect._radius}`);
+            this._updateMaskBounds(win, actor, effect, effect._radius);
+            try { target.invalidate_paint_volume(); } catch (_e) {}
+            try { actor.invalidate_paint_volume(); } catch (_e) {}
+            try { global.stage.queue_redraw(); } catch (_e) {}
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _kickMaskNow(win) {
+        if (!this._windowMasks) return;
+        const effect = this._windowMasks.get(win);
+        if (!effect) return;
+        if (effect._refreshTimeoutId) {
+            try { GLib.source_remove(effect._refreshTimeoutId); } catch (_e) {}
+            effect._refreshTimeoutId = 0;
+        }
+        const actor = win.get_compositor_private();
+        if (!actor) return;
+        this._updateMaskBounds(win, actor, effect, effect._radius);
+        const target = this._unwrapMaskActor(actor, win);
+        if (target) {
+            try { target.invalidate_paint_volume(); } catch (_e) {}
+        }
+        try { actor.invalidate_paint_volume(); } catch (_e) {}
+        try { global.stage.queue_redraw(); } catch (_e) {}
+    }
+
+    _updateMaskBounds(win, actor, effect, radius) {
+        const buffer = win.get_buffer_rect();
+        const frame = win.get_frame_rect();
+        const offsetX = frame.x - buffer.x;
+        const offsetY = frame.y - buffer.y;
+        const bw = frame.width - buffer.width;
+        const bh = frame.height - buffer.height;
+        const x1 = offsetX + 1;
+        const y1 = offsetY + 1;
+        const x2 = offsetX + actor.width + bw;
+        const y2 = offsetY + actor.height + bh;
+
+        if (!this._settings) {
+            effect.updateMask(x1, y1, x2, y2, radius, 0, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0);
+            return;
+        }
+
+        const isFocused = win === global.display.focus_window;
+        const widthKey = isFocused ? 'active-border-width' : 'inactive-border-width';
+        const color1Key = isFocused ? 'active-border-color' : 'inactive-border-color';
+        const color2Key = isFocused ? 'active-border-color-2' : 'inactive-border-color-2';
+        const borderWidth = (this._grabWindow === win)
+            ? 0
+            : (this._settings.get_boolean('borders-enabled')
+                ? this._settings.get_int(widthKey)
+                : 0);
+        const toRgba = (hex) => {
+            const c = this._hexToRgb(hex);
+            return [c.r, c.g, c.b, 1];
+        };
+        const color1Hex = (this._settings.get_strv(color1Key) || [])[0] || '#3584e4';
+        const color2Hex = (this._settings.get_strv(color2Key) || [])[0] || color1Hex;
+        const color1 = toRgba(color1Hex);
+        const color2 = toRgba(color2Hex);
+
+        let mode = 0;
+        let theta = 0;
+        const speed = this._settings.get_int('border-animation-speed');
+        const period = this._borderRotationMs(speed);
+        if (period > 0 && this._settings.get_boolean('gradient-borders')) {
+            mode = 3;
+            const stSettings = St.Settings.get();
+            const slow = Math.max(0.1, stSettings.slow_down_factor);
+            theta = (((Date.now() / period) * slow) % 1) * Math.PI * 2;
+        } else {
+            const dir = this._settings.get_string('gradient-direction');
+            if (dir === 'horizontal')
+                mode = 1;
+            else if (dir === 'diagonal')
+                mode = 2;
+        }
+
+        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta);
+    }
+
+    _removeMask(win) {
+        if (!this._windowMasks) return;
+        const effect = this._windowMasks.get(win);
+        if (!effect) return;
+        if (effect._refreshTimeoutId) {
+            try { GLib.source_remove(effect._refreshTimeoutId); } catch (_e) {}
+            effect._refreshTimeoutId = 0;
+        }
+        effect._metaWin = null;
+        if (effect._sizeWatchId) {
+            try { effect._watchActor.disconnect(effect._sizeWatchId); } catch (_e) {}
+        }
+        if (effect._textureWatchId) {
+            try { effect._watchTexture.disconnect(effect._textureWatchId); } catch (_e) {}
+        }
+        const actor = win.get_compositor_private();
+        const target = this._unwrapMaskActor(actor, win);
+        if (target && target.remove_effect_by_name) {
+            try { target.remove_effect_by_name(MASK_EFFECT_NAME); } catch (_e) {}
+        }
+        this._windowMasks.delete(win);
+    }
+
+    _removeAllMasks() {
+        if (!this._windowMasks) return;
+        for (const win of [...this._windowMasks.keys()])
+            this._removeMask(win);
     }
 
     _updateDropOverlaySize() {
@@ -2468,6 +2866,13 @@ export default class TilingWMExtension extends Extension {
         this._grabOp = grabOp;
         this._swapTarget = null;
 
+        if (this._isResizeGrab(grabOp)) {
+            this._grabWindow = metaWindow;
+            const effect = this._windowMasks?.get(metaWindow);
+            if (effect)
+                effect.setBorderWidth(0);
+        }
+
         const wmClass = metaWindow.get_wm_class_instance() || '?';
         this._debugLog(`GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(frame)} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
 
@@ -2512,6 +2917,7 @@ export default class TilingWMExtension extends Extension {
             this._startGrabLoop(metaWindow, 'move');
         } else {
             this._grabOp = null;
+            this._grabWindow = null;
         }
     }
 
@@ -2529,6 +2935,9 @@ export default class TilingWMExtension extends Extension {
             }
         }
 
+        if (wasTracking && metaWindow)
+            this._kickMaskNow(metaWindow);
+
         if (wasTracking && metaWindow) {
             const wmClass = metaWindow.get_wm_class_instance() || '?';
             const ws = metaWindow.get_workspace();
@@ -2543,6 +2952,7 @@ export default class TilingWMExtension extends Extension {
         this._hideDropPreview();
         this._stopLiveResizeLoop();
         this._grabOp = null;
+        this._grabWindow = null;
         this._swapTarget = null;
         this._lastSwapTarget = null;
         this._grabInitialStackRatios = null;

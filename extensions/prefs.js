@@ -293,6 +293,18 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         window.add(page);
 
+        const mainGroup = new Adw.PreferencesGroup({
+            title: _('Window Borders'),
+        });
+        page.add(mainGroup);
+
+        const showBordersRow = new Adw.SwitchRow({
+            title: _('Show Borders'),
+            subtitle: _('Draw borders around windows (rounded corners still apply if enabled)'),
+        });
+        mainGroup.add(showBordersRow);
+        settings.bind('borders-enabled', showBordersRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const activeGroup = new Adw.PreferencesGroup({
             title: _('Active Window Border'),
         });
@@ -369,6 +381,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         styleGroup.add(radiusRow);
         settings.bind('border-radius', radiusRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
+        const roundedRow = new Adw.SwitchRow({
+            title: _('Rounded Corners'),
+            subtitle: _('Mask window content corners to match the border radius'),
+        });
+        styleGroup.add(roundedRow);
+        settings.bind('rounded-corners', roundedRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         const gradientRow = new Adw.SwitchRow({
             title: _('Gradient Borders'),

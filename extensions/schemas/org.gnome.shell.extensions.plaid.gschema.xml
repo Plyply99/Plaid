@@ -39,6 +39,12 @@
       <description>Ratio of the screen allocated to the master window (0.15 to 0.85)</description>
     </key>
 
+    <key name="borders-enabled" type="b">
+      <default>true</default>
+      <summary>Show window borders</summary>
+      <description>When disabled, no borders are drawn around windows (rounded corners still apply if enabled)</description>
+    </key>
+
     <key name="active-border-width" type="i">
       <default>2</default>
       <summary>Active window border thickness</summary>
@@ -79,6 +85,12 @@
       <default>0</default>
       <summary>Border corner radius</summary>
       <description>Radius of border corners in pixels (0 for square corners)</description>
+    </key>
+
+    <key name="rounded-corners" type="b">
+      <default>false</default>
+      <summary>Round window corners</summary>
+      <description>When enabled, window content corners are masked to match the border corner radius</description>
     </key>
 
     <key name="gradient-borders" type="b">
