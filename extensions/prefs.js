@@ -247,17 +247,21 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
 
         const colorDot = new Gtk.DrawingArea({
-            width_request: 24,
-            height_request: 24,
-            content_width: 24,
-            content_height: 24,
+            width_request: 32,
+            height_request: 32,
+            content_width: 32,
+            content_height: 32,
         });
         colorDot.set_draw_func((_area, cr) => {
             const color = new Gdk.RGBA();
             color.parse((settings.get_strv(key) || [])[0] || '#3584e4');
             cr.setSourceRGB(color.red, color.green, color.blue);
-            cr.arc(12, 12, 10, 0, Math.PI * 2);
+            cr.arc(16, 16, 14, 0, Math.PI * 2);
             cr.fill();
+            cr.setSourceRGBA(0, 0, 0, 0.25);
+            cr.setLineWidth(1);
+            cr.arc(16, 16, 14, 0, Math.PI * 2);
+            cr.stroke();
         });
         row.add_suffix(colorDot);
 
