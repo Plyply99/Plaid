@@ -217,5 +217,12 @@
       <description>Fill the focused window to the work area (single-window gap). If floating, stores position for restore. If tiled and alone, fills/unfills.</description>
     </key>
 
+    <!-- Keybinding: Cycle Layout -->
+    <key name="cycle-layout" type="as">
+      <default><![CDATA[['<Super><Shift>grave']]]></default>
+      <summary>Cycle layout</summary>
+      <description>Cycle between dwindle, master-stack, and centered-master-stack</description>
+    </key>
+
   </schema>
 </schemalist>

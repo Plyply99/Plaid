@@ -43,6 +43,8 @@ export default class TilingWMExtension extends Extension {
         this._grabInitialStackRatios = null;
         this._liveResizeId = 0;
         this._swapTarget = null;
+        this._layoutPopup = null;
+        this._layoutPopupHideId = 0;
         this._lastSwapTarget = null;
         this._dropPreview = null;
 
@@ -106,6 +108,14 @@ export default class TilingWMExtension extends Extension {
             this._dropOverlay = null;
         }
         this._cancelAnimation();
+        if (this._layoutPopupHideId) {
+            GLib.source_remove(this._layoutPopupHideId);
+            this._layoutPopupHideId = 0;
+        }
+        if (this._layoutPopup) {
+            this._layoutPopup.destroy();
+            this._layoutPopup = null;
+        }
         this._disconnectSignals();
         this._destroyFloatPickDialog();
         this._removeKeybindings();
@@ -1589,6 +1599,7 @@ export default class TilingWMExtension extends Extension {
             { key: 'center-window', fn: () => this._centerWindow() },
             { key: 'fill-screen', fn: () => this._toggleFillScreen() },
             { key: 'pick-float-window', fn: () => this._handlePickFloat() },
+            { key: 'cycle-layout', fn: () => this._cycleLayout() },
         ];
 
         for (const { key, fn } of bindings) {
@@ -1608,6 +1619,7 @@ export default class TilingWMExtension extends Extension {
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
             'toggle-float', 'toggle-tiling', 'center-window', 'fill-screen', 'pick-float-window',
+            'cycle-layout',
         ];
         for (const key of keys) {
             Main.wm.removeKeybinding(key);
@@ -1948,6 +1960,83 @@ export default class TilingWMExtension extends Extension {
                 this._raiseFloatingWindows(ws);
             }
         }
+    }
+
+    _cycleLayout() {
+        const layouts = ['dwindle', 'master-stack', 'centered-master-stack'];
+        const names = {
+            'dwindle': 'Dwindle',
+            'master-stack': 'Master-stack',
+            'centered-master-stack': 'Centered Master-stack',
+        };
+        const current = this._settings.get_string('layout');
+        const idx = layouts.indexOf(current);
+        const next = layouts[(idx + 1) % layouts.length];
+        if (next !== current) {
+            this._settings.set_string('layout', next);
+            this._showLayoutPopup(names[next] || next);
+        }
+    }
+
+    _showLayoutPopup(name) {
+        if (this._layoutPopupHideId) {
+            GLib.source_remove(this._layoutPopupHideId);
+            this._layoutPopupHideId = 0;
+        }
+        if (this._layoutPopup) {
+            this._layoutPopup.destroy();
+            this._layoutPopup = null;
+        }
+
+        const box = new St.BoxLayout({
+            style: 'background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px;',
+        });
+        box.add_child(new St.Label({
+            text: `Layout: ${name}`,
+            style: 'font-size: 18px; font-weight: bold; color: #ffffff;',
+        }));
+
+        this._layoutPopup = new St.Bin({
+            child: box,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: false,
+        });
+        const monitors = global.display.get_n_monitors();
+        let maxX = 0, maxY = 0;
+        for (let i = 0; i < monitors; i++) {
+            const geom = global.display.get_monitor_geometry(i);
+            maxX = Math.max(maxX, geom.x + geom.width);
+            maxY = Math.max(maxY, geom.y + geom.height);
+        }
+        this._layoutPopup.set_position(0, 0);
+        this._layoutPopup.set_size(maxX, maxY);
+        Main.layoutManager.uiGroup.add_child(this._layoutPopup);
+
+        this._layoutPopup.opacity = 0;
+        this._layoutPopup.ease({
+            opacity: 255,
+            duration: 150,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+
+        this._layoutPopupHideId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+            this._layoutPopupHideId = 0;
+            if (this._layoutPopup) {
+                this._layoutPopup.ease({
+                    opacity: 0,
+                    duration: 200,
+                    mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                    onComplete: () => {
+                        if (this._layoutPopup) {
+                            this._layoutPopup.destroy();
+                            this._layoutPopup = null;
+                        }
+                    },
+                });
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // --- Grab-Based Mouse Resize & Swap ---
