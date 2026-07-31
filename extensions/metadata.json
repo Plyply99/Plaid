@@ -1,9 +1,9 @@
 {
   "uuid": "plaid@gnome",
   "name": "Plaid",
-  "description": "A tiling window manager for GNOME with three layouts, configurable gaps, borders, keybinds, float rules, mouse resize/swap, and cursor warp",
+  "description": "A tiling window manager for GNOME with three layouts, configurable gaps, borders, keybinds, float rules, scratchpad, mouse resize/swap, popups, and cursor warp",
   "shell-version": ["50"],
-  "version": 5015,
+  "version": 5018,
   "url": "",
   "settings-schema": "org.gnome.shell.extensions.plaid"
 }
