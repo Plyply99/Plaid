@@ -238,5 +238,24 @@
       <description>Cycle between dwindle, master-stack, and centered-master-stack</description>
     </key>
 
+    <!-- Keybindings: Scratchpad -->
+    <key name="scratchpad-toggle" type="as">
+      <default><![CDATA[['<Super>Escape']]]></default>
+      <summary>Toggle scratchpad</summary>
+      <description>Show or hide all scratchpad windows on the current workspace</description>
+    </key>
+
+    <key name="scratchpad-add" type="as">
+      <default><![CDATA[['<Super><Shift>Escape']]]></default>
+      <summary>Add window to scratchpad</summary>
+      <description>Hide the focused window and store it in the scratchpad</description>
+    </key>
+
+    <key name="scratchpad-remove" type="as">
+      <default><![CDATA[['<Super><Control><Shift>Escape']]]></default>
+      <summary>Remove window from scratchpad</summary>
+      <description>Restore the focused scratchpad window to its original workspace and position</description>
+    </key>
+
   </schema>
 </schemalist>

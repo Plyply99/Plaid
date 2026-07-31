@@ -54,6 +54,8 @@ export default class TilingWMExtension extends Extension {
         this._swapTarget = null;
         this._layoutPopup = null;
         this._layoutPopupHideId = 0;
+        this._scratchpadWindows = new Map();
+        this._scratchpadVisible = false;
         this._lastSwapTarget = null;
         this._dropPreview = null;
 
@@ -126,6 +128,8 @@ export default class TilingWMExtension extends Extension {
             try { this._layoutPopup.destroy(); } catch (_e) {}
             this._layoutPopup = null;
         }
+        this._scratchpadWindows = null;
+        this._scratchpadVisible = false;
         this._disconnectSignals();
         this._destroyFloatPickDialog();
         this._removeKeybindings();
@@ -493,6 +497,7 @@ export default class TilingWMExtension extends Extension {
         this._toggleFloatWindows.delete(win);
         this._fillScreenRects.delete(win);
         this._savedRects.delete(win);
+        this._scratchpadWindows.delete(win);
         this._disconnectWindowSignals(win);
         this._removeBorder(win);
         for (const [workspace, lastWin] of this._lastFocusedPerWorkspace) {
@@ -1617,6 +1622,9 @@ export default class TilingWMExtension extends Extension {
             { key: 'fill-screen', fn: () => this._toggleFillScreen() },
             { key: 'pick-float-window', fn: () => this._handlePickFloat() },
             { key: 'cycle-layout', fn: () => this._cycleLayout() },
+            { key: 'scratchpad-toggle', fn: () => this._scratchpadToggle() },
+            { key: 'scratchpad-add', fn: () => this._scratchpadAdd() },
+            { key: 'scratchpad-remove', fn: () => this._scratchpadRemove() },
         ];
 
         for (const { key, fn } of bindings) {
@@ -1636,7 +1644,7 @@ export default class TilingWMExtension extends Extension {
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
             'toggle-float', 'toggle-tiling', 'center-window', 'fill-screen', 'pick-float-window',
-            'cycle-layout',
+            'cycle-layout', 'scratchpad-toggle', 'scratchpad-add', 'scratchpad-remove',
         ];
         for (const key of keys) {
             Main.wm.removeKeybinding(key);
@@ -2098,6 +2106,98 @@ export default class TilingWMExtension extends Extension {
             }
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    // --- Scratchpad ---
+
+    _scratchpadAdd() {
+        const win = this._getActiveWindow();
+        if (!win || this._scratchpadWindows.has(win)) return;
+        const ws = win.get_workspace();
+        if (!ws) return;
+        try {
+            const frame = win.get_frame_rect();
+            this._scratchpadWindows.set(win, {
+                workspace: ws,
+                x: frame.x, y: frame.y, w: frame.width, h: frame.height,
+            });
+            this._toggleFloatWindows.add(win);
+            try { win.minimize(); } catch (_e) {
+                try { win.minimized = true; } catch (_e2) {}
+            }
+            this._scratchpadVisible = false;
+            this._retileWorkspace(ws);
+            this._showPopup('Added to Scratchpad');
+        } catch (_e) {}
+    }
+
+    _scratchpadToggle() {
+        if (!this._scratchpadWindows || this._scratchpadWindows.size === 0) return;
+        if (this._scratchpadVisible) {
+            for (const win of this._scratchpadWindows.keys()) {
+                try {
+                    if (!win.get_compositor_private()) continue;
+                    try { win.minimize(); } catch (_e) {
+                        try { win.minimized = true; } catch (_e2) {}
+                    }
+                } catch (_e) {}
+            }
+            this._scratchpadVisible = false;
+            this._showPopup('Scratchpad Hidden');
+        } else {
+            const activeWs = global.workspace_manager.get_active_workspace();
+            if (!activeWs) return;
+            const monitor = global.display.get_primary_monitor();
+            const workArea = activeWs.get_work_area_for_monitor(monitor);
+            let firstWin = null;
+            for (const win of this._scratchpadWindows.keys()) {
+                try {
+                    if (!win.get_compositor_private() || win.is_fullscreen()) continue;
+                    if (win.get_workspace() !== activeWs) {
+                        try { win.change_workspace(activeWs); } catch (_e) {}
+                    }
+                    try { win.unminimize(); } catch (_e) {
+                        try { win.minimized = false; } catch (_e2) {}
+                    }
+                    try { win.raise(); } catch (_e) {}
+                    if (workArea) {
+                        const frame = win.get_frame_rect();
+                        if (frame.width > 0 && frame.height > 0) {
+                            win.move_resize_frame(true,
+                                workArea.x + Math.floor((workArea.width - frame.width) / 2),
+                                workArea.y + Math.floor((workArea.height - frame.height) / 2),
+                                frame.width, frame.height);
+                        }
+                    }
+                    if (!firstWin) firstWin = win;
+                } catch (_e) {}
+            }
+            this._scratchpadVisible = true;
+            if (firstWin) {
+                try { firstWin.activate(global.get_current_time()); } catch (_e) {}
+            }
+            this._showPopup('Scratchpad Shown');
+        }
+    }
+
+    _scratchpadRemove() {
+        const win = this._getActiveWindow();
+        if (!win) return;
+        const saved = this._scratchpadWindows.get(win);
+        if (!saved) return;
+        this._scratchpadWindows.delete(win);
+        this._toggleFloatWindows.delete(win);
+        try {
+            try { win.unminimize(); } catch (_e) {
+                try { win.minimized = false; } catch (_e2) {}
+            }
+            if (saved.workspace && win.get_workspace() !== saved.workspace) {
+                try { win.change_workspace(saved.workspace); } catch (_e) {}
+            }
+            win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
+            this._retileWorkspace(saved.workspace);
+            this._showPopup('Removed from Scratchpad');
+        } catch (_e) {}
     }
 
     // --- Grab-Based Mouse Resize & Swap ---

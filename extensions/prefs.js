@@ -365,6 +365,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         this._addShortcutRow(miscGroup, settings, 'fill-screen', _('Fill Screen'));
         this._addShortcutRow(miscGroup, settings, 'center-window', _('Center Window'));
         this._addShortcutRow(miscGroup, settings, 'pick-float-window', _('Pick Window to Float'));
+        this._addShortcutRow(miscGroup, settings, 'scratchpad-toggle', _('Toggle Scratchpad'));
+        this._addShortcutRow(miscGroup, settings, 'scratchpad-add', _('Add Window to Scratchpad'));
+        this._addShortcutRow(miscGroup, settings, 'scratchpad-remove', _('Remove Window from Scratchpad'));
     }
 
     _addShortcutRow(group, settings, key, title) {
