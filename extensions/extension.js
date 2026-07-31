@@ -2326,7 +2326,7 @@ export default class TilingWMExtension extends Extension {
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
 
-        this._layoutPopupHideId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+        this._layoutPopupHideId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
             this._layoutPopupHideId = 0;
             if (this._layoutPopup === popup) {
                 popup.ease({
