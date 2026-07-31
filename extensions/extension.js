@@ -55,6 +55,7 @@ export default class TilingWMExtension extends Extension {
         this._swapTarget = null;
         this._layoutPopup = null;
         this._layoutPopupHideId = 0;
+        this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
         this._lastSwapTarget = null;
@@ -131,6 +132,7 @@ export default class TilingWMExtension extends Extension {
         }
         this._scratchpadWindows = null;
         this._scratchpadVisible = false;
+        this._stopBorderAnimation();
         this._disconnectSignals();
         this._destroyFloatPickDialog();
         this._removeKeybindings();
@@ -313,8 +315,12 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color-2', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::border-radius', () => this._updateBorders()));
-        this._addSignal(this._settings, this._settings.connect('changed::gradient-borders', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::gradient-borders', () => {
+            this._updateBorders();
+            this._syncBorderAnimation();
+        }));
         this._addSignal(this._settings, this._settings.connect('changed::gradient-direction', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::border-animation-speed', () => this._syncBorderAnimation()));
         this._addSignal(this._settings, this._settings.connect('changed::pick-mode', () => {
             if (this._settings.get_boolean('pick-mode')) {
                 this._startPickMode();
@@ -1575,6 +1581,7 @@ export default class TilingWMExtension extends Extension {
         }
 
         this._raiseFloatingWindows(ws);
+        this._syncBorderAnimation();
     }
 
     _hexToRgb(hex) {
@@ -1611,7 +1618,21 @@ export default class TilingWMExtension extends Extension {
             const h = border.height;
 
             let x0, y0, x1, y1;
-            if (info.direction === 'horizontal') {
+            const speed = this._settings.get_int('border-animation-speed');
+            const period = this._borderRotationMs(speed);
+            if (period > 0) {
+                const stSettings = St.Settings.get();
+                const slow = Math.max(0.1, stSettings.slow_down_factor);
+                const phase = ((Date.now() / period) * slow) % 1;
+                const theta = phase * Math.PI * 2;
+                const cx = w / 2;
+                const cy = h / 2;
+                const r = Math.max(w, h) * 0.75;
+                x0 = cx - Math.cos(theta) * r;
+                y0 = cy - Math.sin(theta) * r;
+                x1 = cx + Math.cos(theta) * r;
+                y1 = cy + Math.sin(theta) * r;
+            } else if (info.direction === 'horizontal') {
                 x0 = 0; y0 = 0; x1 = w; y1 = 0;
             } else if (info.direction === 'diagonal') {
                 x0 = 0; y0 = 0; x1 = w; y1 = h;
@@ -1628,6 +1649,48 @@ export default class TilingWMExtension extends Extension {
                 w - info.width, h - info.width, info.radius);
             cr.stroke();
         } catch (_e) {}
+    }
+
+    _borderRotationMs(speed) {
+        if (speed <= 0) return 0;
+        return 22000 - speed * 2000;
+    }
+
+    _startBorderAnimation() {
+        if (this._borderAnimId) return;
+        const stSettings = St.Settings.get();
+        if (!stSettings.enable_animations) return;
+        if (!this._settings.get_boolean('gradient-borders')) return;
+        if (this._settings.get_int('border-animation-speed') <= 0) return;
+        this._borderAnimId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+            if (this._destroyed || !this._settings.get_boolean('gradient-borders') ||
+                this._settings.get_int('border-animation-speed') <= 0 || this._grabOp) {
+                this._stopBorderAnimation();
+                return GLib.SOURCE_REMOVE;
+            }
+            for (const border of this._windowBorders.values()) {
+                try { border.queue_repaint(); } catch (_e) {}
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopBorderAnimation() {
+        if (this._borderAnimId) {
+            GLib.source_remove(this._borderAnimId);
+            this._borderAnimId = 0;
+        }
+    }
+
+    _syncBorderAnimation() {
+        if (!this._settings || this._destroyed) return;
+        const wantAnim = this._settings.get_boolean('gradient-borders') &&
+            this._settings.get_int('border-animation-speed') > 0 &&
+            this._windowBorders.size > 0;
+        if (wantAnim)
+            this._startBorderAnimation();
+        else
+            this._stopBorderAnimation();
     }
 
     _updateBordersDuringGrab() {

@@ -401,11 +401,26 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 settings.set_string('gradient-direction', dirs[idx]);
         });
 
+        const animSpeedRow = new Adw.SpinRow({
+            title: _('Animation Speed'),
+            subtitle: _('Speed of the gradient border rotation (0 = off, 10 = fastest)'),
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 10,
+                step_increment: 1,
+                page_increment: 2,
+                value: settings.get_int('border-animation-speed'),
+            }),
+        });
+        styleGroup.add(animSpeedRow);
+        settings.bind('border-animation-speed', animSpeedRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
         const updateGradientVisibility = () => {
             const gradient = settings.get_boolean('gradient-borders');
             activeColor2Row.set_sensitive(gradient);
             inactiveColor2Row.set_sensitive(gradient);
             directionRow.set_visible(gradient);
+            animSpeedRow.set_visible(gradient);
         };
         updateGradientVisibility();
         settings.connect('changed::gradient-borders', () => updateGradientVisibility());

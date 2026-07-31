@@ -93,6 +93,13 @@
       <description>Direction of the border gradient: vertical, horizontal, or diagonal</description>
     </key>
 
+    <key name="border-animation-speed" type="i">
+      <default>5</default>
+      <range min="0" max="10"/>
+      <summary>Border animation speed</summary>
+      <description>Speed of the gradient border rotation (0 = off, 10 = fastest)</description>
+    </key>
+
     <!-- Float window patterns (WM_CLASS instance names) -->
     <key name="float-windows" type="as">
       <default><![CDATA[['gimp', 'steam', 'vlc', 'io.github.bugaevc.wl-clipboard']]]></default>
