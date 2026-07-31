@@ -409,7 +409,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
     _buildFloatPage(window, settings) {
         const page = new Adw.PreferencesPage({
-            title: _('Float Windows'),
+            title: _('Windows'),
             icon_name: 'view-dual-symbolic',
         });
         window.add(page);
