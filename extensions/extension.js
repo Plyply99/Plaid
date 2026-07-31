@@ -1595,60 +1595,132 @@ export default class TilingWMExtension extends Extension {
         };
     }
 
-    _roundRectPath(cr, x, y, w, h, radius) {
-        const rad = Math.min(Math.max(0, radius), w / 2, h / 2);
-        cr.moveTo(x + rad, y);
-        cr.lineTo(x + w - rad, y);
-        cr.arc(x + w - rad, y + rad, rad, -Math.PI / 2, 0);
-        cr.lineTo(x + w, y + h - rad);
-        cr.arc(x + w - rad, y + h - rad, rad, 0, Math.PI / 2);
-        cr.lineTo(x + rad, y + h);
-        cr.arc(x + rad, y + h - rad, rad, Math.PI / 2, Math.PI);
-        cr.lineTo(x, y + rad);
-        cr.arc(x + rad, y + rad, rad, Math.PI, Math.PI * 1.5);
-        cr.closePath();
+    _buildBorderSegments(border) {
+        const info = border._plaidBorder;
+        if (!info) return [];
+        const w = border.width;
+        const h = border.height;
+        const key = `${w}x${h}x${info.radius}`;
+        if (border._plaidSegs && border._plaidSegKey === key)
+            return border._plaidSegs;
+
+        const bw = info.width;
+        const pathX = bw / 2;
+        const pathY = bw / 2;
+        const pathW = w - bw;
+        const pathH = h - bw;
+        if (pathW <= 0 || pathH <= 0) return [];
+
+        const r = Math.min(Math.max(0, info.radius), pathW / 2, pathH / 2);
+        const segs = [];
+        const add = (x0, y0, x1, y1) => segs.push({ x0, y0, x1, y1 });
+        const straight = (x0, y0, x1, y1) => {
+            const len = Math.hypot(x1 - x0, y1 - y0);
+            const n = Math.max(1, Math.ceil(len / 12));
+            for (let i = 0; i < n; i++) {
+                const a = i / n;
+                const b = (i + 1) / n;
+                add(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a,
+                    x0 + (x1 - x0) * b, y0 + (y1 - y0) * b);
+            }
+        };
+        const arc = (cxp, cyp, a0, a1) => {
+            const n = Math.max(8, Math.ceil(Math.abs(a1 - a0) * r / 4));
+            for (let i = 0; i < n; i++) {
+                const a = a0 + (a1 - a0) * (i / n);
+                const b = a0 + (a1 - a0) * ((i + 1) / n);
+                add(cxp + Math.cos(a) * r, cyp + Math.sin(a) * r,
+                    cxp + Math.cos(b) * r, cyp + Math.sin(b) * r);
+            }
+        };
+
+        if (r <= 0) {
+            straight(pathX, pathY, pathX + pathW, pathY);
+            straight(pathX + pathW, pathY, pathX + pathW, pathY + pathH);
+            straight(pathX + pathW, pathY + pathH, pathX, pathY + pathH);
+            straight(pathX, pathY + pathH, pathX, pathY);
+        } else {
+            const top = pathY + r;
+            const bottom = pathY + pathH - r;
+            const left = pathX + r;
+            const right = pathX + pathW - r;
+            straight(left, pathY, right, pathY);
+            arc(right, top, -Math.PI / 2, 0);
+            straight(pathX + pathW, top, pathX + pathW, bottom);
+            arc(right, bottom, 0, Math.PI / 2);
+            straight(right, pathY + pathH, left, pathY + pathH);
+            arc(left, bottom, Math.PI / 2, Math.PI);
+            straight(pathX, bottom, pathX, top);
+            arc(left, top, Math.PI, Math.PI * 1.5);
+        }
+
+        border._plaidSegs = segs;
+        border._plaidSegKey = key;
+        return segs;
     }
 
     _repaintBorder(border) {
         try {
             const info = border._plaidBorder;
             if (!info || !border.get_context) return;
-            const cr = border.get_context();
             const w = border.width;
             const h = border.height;
+            if (w <= 0 || h <= 0) return;
 
-            let x0, y0, x1, y1;
+            const segs = this._buildBorderSegments(border);
+            if (segs.length === 0) return;
+
+            const bw = info.width;
+            const cx = w / 2;
+            const cy = h / 2;
             const speed = this._settings.get_int('border-animation-speed');
             const period = this._borderRotationMs(speed);
-            if (period > 0) {
+            const animated = period > 0;
+            let theta = 0;
+            if (animated) {
                 const stSettings = St.Settings.get();
                 const slow = Math.max(0.1, stSettings.slow_down_factor);
-                const phase = ((Date.now() / period) * slow) % 1;
-                const theta = phase * Math.PI * 2;
-                const cx = w / 2;
-                const cy = h / 2;
-                const r = Math.max(w, h) * 0.75;
-                x0 = cx - Math.cos(theta) * r;
-                y0 = cy - Math.sin(theta) * r;
-                x1 = cx + Math.cos(theta) * r;
-                y1 = cy + Math.sin(theta) * r;
-            } else if (info.direction === 'horizontal') {
-                x0 = 0; y0 = 0; x1 = w; y1 = 0;
-            } else if (info.direction === 'diagonal') {
-                x0 = 0; y0 = 0; x1 = w; y1 = h;
-            } else {
-                x0 = 0; y0 = 0; x1 = 0; y1 = h;
+                theta = (((Date.now() / period) * slow) % 1) * Math.PI * 2;
             }
 
-            const grad = new cairo.LinearGradient(x0, y0, x1, y1);
-            grad.addColorStopRgb(0, info.color1.r, info.color1.g, info.color1.b);
-            grad.addColorStopRgb(1, info.color2.r, info.color2.g, info.color2.b);
-            cr.setSource(grad);
-            cr.setLineWidth(info.width);
-            this._roundRectPath(cr, info.width / 2, info.width / 2,
-                w - info.width, h - info.width, info.radius);
-            cr.stroke();
-        } catch (_e) {}
+            const cr = border.get_context();
+            cr.setLineWidth(bw);
+            cr.setLineCap(cairo.LineCap.ROUND);
+
+            for (const seg of segs) {
+                const p = { x: (seg.x0 + seg.x1) / 2, y: (seg.y0 + seg.y1) / 2 };
+                const gpos = this._borderGradientPos(w, h, p, info.direction, animated, theta, cx, cy);
+                const c = this._lerpRgb(info.color1, info.color2, gpos);
+                cr.setSourceRGB(c.r, c.g, c.b);
+                cr.moveTo(seg.x0, seg.y0);
+                cr.lineTo(seg.x1, seg.y1);
+                cr.stroke();
+            }
+        } catch (e) {
+            log(`[plaid] repaint FAILED: ${e.message}`);
+        }
+    }
+
+    _borderGradientPos(w, h, p, direction, animated, theta, cx, cy) {
+        if (animated) {
+            const ang = Math.atan2(p.y - cy, p.x - cx);
+            const g = ((ang - theta) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
+            return g < 0.5 ? g * 2 : (1 - g) * 2;
+        }
+        if (direction === 'horizontal')
+            return Math.max(0, Math.min(1, p.x / w));
+        if (direction === 'diagonal')
+            return Math.max(0, Math.min(1, (p.x + p.y) / (w + h)));
+        return Math.max(0, Math.min(1, p.y / h));
+    }
+
+    _lerpRgb(c1, c2, t) {
+        const k = Math.max(0, Math.min(1, t));
+        return {
+            r: c1.r + (c2.r - c1.r) * k,
+            g: c1.g + (c2.g - c1.g) * k,
+            b: c1.b + (c2.b - c1.b) * k,
+        };
     }
 
     _borderRotationMs(speed) {
