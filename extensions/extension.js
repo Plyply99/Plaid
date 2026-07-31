@@ -122,7 +122,8 @@ export default class TilingWMExtension extends Extension {
             this._layoutPopupHideId = 0;
         }
         if (this._layoutPopup) {
-            this._layoutPopup.destroy();
+            try { this._layoutPopup.remove_all_transitions(); } catch (_e) {}
+            try { this._layoutPopup.destroy(); } catch (_e) {}
             this._layoutPopup = null;
         }
         this._disconnectSignals();
@@ -256,8 +257,10 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed || !this._settings.get_boolean('enabled')) return;
             const ws = global.workspace_manager.get_active_workspace();
             if (!ws) return;
-            if (this._settings.get_boolean('workspace-popup'))
-                this._showWorkspacePopup(ws);
+            try {
+                if (this._settings.get_boolean('workspace-popup'))
+                    this._showWorkspacePopup(ws);
+            } catch (_e) {}
             const windows = this._getWindowsForWorkspace(ws);
             if (windows.length === 0) return;
             let target = this._lastFocusedPerWorkspace.get(ws);
@@ -2031,7 +2034,8 @@ export default class TilingWMExtension extends Extension {
             this._layoutPopupHideId = 0;
         }
         if (this._layoutPopup) {
-            this._layoutPopup.destroy();
+            try { this._layoutPopup.remove_all_transitions(); } catch (_e) {}
+            try { this._layoutPopup.destroy(); } catch (_e) {}
             this._layoutPopup = null;
         }
 
@@ -2059,18 +2063,19 @@ export default class TilingWMExtension extends Extension {
             }));
         }
 
-        this._layoutPopup = new St.Bin({
+        const popup = new St.Bin({
             child: box,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
             reactive: false,
         });
-        this._layoutPopup.set_position(0, 0);
-        this._layoutPopup.set_size(maxX, maxY);
-        Main.layoutManager.uiGroup.add_child(this._layoutPopup);
+        this._layoutPopup = popup;
+        popup.set_position(0, 0);
+        popup.set_size(maxX, maxY);
+        Main.layoutManager.uiGroup.add_child(popup);
 
-        this._layoutPopup.opacity = 0;
-        this._layoutPopup.ease({
+        popup.opacity = 0;
+        popup.ease({
             opacity: 255,
             duration: 150,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
@@ -2078,13 +2083,13 @@ export default class TilingWMExtension extends Extension {
 
         this._layoutPopupHideId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
             this._layoutPopupHideId = 0;
-            if (this._layoutPopup) {
-                this._layoutPopup.ease({
+            if (this._layoutPopup === popup) {
+                popup.ease({
                     opacity: 0,
                     duration: 200,
                     mode: Clutter.AnimationMode.EASE_IN_QUAD,
                     onComplete: () => {
-                        if (this._layoutPopup) {
+                        if (this._layoutPopup === popup) {
                             this._layoutPopup.destroy();
                             this._layoutPopup = null;
                         }
