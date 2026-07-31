@@ -2042,11 +2042,11 @@ export default class TilingWMExtension extends Extension {
             maxX = Math.max(maxX, geom.x + geom.width);
             maxY = Math.max(maxY, geom.y + geom.height);
         }
-        const topMargin = Math.floor(maxY * 0.2);
+        const bottomMargin = Math.floor(maxY * 0.70);
 
         const box = new St.BoxLayout({
             vertical: true,
-            style: `background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px; spacing: 4px; margin-top: ${topMargin}px;`,
+            style: `background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px; spacing: 4px; margin-top: ${bottomMargin}px;`,
         });
         box.add_child(new St.Label({
             text: title,
@@ -2062,7 +2062,7 @@ export default class TilingWMExtension extends Extension {
         this._layoutPopup = new St.Bin({
             child: box,
             x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.START,
+            y_align: Clutter.ActorAlign.CENTER,
             reactive: false,
         });
         this._layoutPopup.set_position(0, 0);
