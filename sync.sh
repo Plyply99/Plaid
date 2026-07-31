@@ -5,7 +5,7 @@
 set -e
 
 SOURCE="$(cd "$(dirname "$0")" && pwd)/extensions"
-DEST="$HOME/.local/share/gnome-shell/extensions/plaid@gnome"
+DEST="$HOME/.local/share/gnome-shell/extensions/plaid@plyply99"
 
 echo "Plaid sync"
 echo "=========="

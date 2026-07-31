@@ -58,7 +58,7 @@ All keybinds use `Super` as the primary modifier with vim-style `hjkl` for direc
 ./build.sh
 
 # install it
-gnome-extensions install dist/plaid@gnome.zip
+gnome-extensions install dist/plaid@plyply99.zip
 ```
 
 Then log out and back in (Wayland).
@@ -67,10 +67,10 @@ Then log out and back in (Wayland).
 
 ```bash
 # enable the extension
-gnome-extensions enable plaid@gnome
+gnome-extensions enable plaid@plyply99
 
 # open preferences
-gnome-extensions prefs plaid@gnome
+gnome-extensions prefs plaid@plyply99
 ```
 
 Settings are stored via GSettings under `org.gnome.shell.extensions.plaid`.
@@ -83,7 +83,7 @@ Settings are stored via GSettings under `org.gnome.shell.extensions.plaid`.
 ./sync.sh
 ```
 
-Compiles the schema and copies `extensions/` to `~/.local/share/gnome-shell/extensions/plaid@gnome/`, then log out and back in.
+Compiles the schema and copies `extensions/` to `~/.local/share/gnome-shell/extensions/plaid@plyply99/`, then log out and back in.
 
 ### Build a distributable zip
 
@@ -91,7 +91,7 @@ Compiles the schema and copies `extensions/` to `~/.local/share/gnome-shell/exte
 ./build.sh
 ```
 
-Produces `dist/plaid@gnome.zip`.
+Produces `dist/plaid@plyply99.zip`.
 
 ## Versioning
 

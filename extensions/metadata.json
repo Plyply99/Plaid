@@ -1,5 +1,5 @@
 {
-  "uuid": "plaid@gnome",
+  "uuid": "plaid@plyply99",
   "name": "Plaid",
   "description": "A tiling window manager for GNOME with three layouts, configurable gaps, borders, keybinds, float rules, scratchpad, mouse resize/swap, popups, and cursor warp",
   "shell-version": ["50"],

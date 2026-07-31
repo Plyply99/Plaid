@@ -13,13 +13,13 @@ echo "==========="
 glib-compile-schemas "$SOURCE/schemas/"
 
 mkdir -p "$OUT"
-echo "Packing $SOURCE -> $OUT/plaid@gnome.zip"
+echo "Packing $SOURCE -> $OUT/plaid@plyply99.zip"
 gnome-extensions pack --force --out-dir="$OUT" "$SOURCE"
 
 # normalize the zip name (gnome-extensions produces <uuid>.shell-extension.zip)
-if [ -f "$OUT/plaid@gnome.shell-extension.zip" ]; then
-    mv -f "$OUT/plaid@gnome.shell-extension.zip" "$OUT/plaid@gnome.zip"
+if [ -f "$OUT/plaid@plyply99.shell-extension.zip" ]; then
+    mv -f "$OUT/plaid@plyply99.shell-extension.zip" "$OUT/plaid@plyply99.zip"
 fi
 
-echo "Done: $OUT/plaid@gnome.zip"
-echo "Install with: gnome-extensions install $OUT/plaid@gnome.zip"
+echo "Done: $OUT/plaid@plyply99.zip"
+echo "Install with: gnome-extensions install $OUT/plaid@plyply99.zip"
