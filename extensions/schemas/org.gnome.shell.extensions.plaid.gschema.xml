@@ -15,10 +15,32 @@
       <summary>Gap between windows in pixels</summary>
     </key>
 
-    <key name="single-gap" type="i">
-      <default>0</default>
-      <summary>Gap around a single window in pixels</summary>
-      <description>Gap between a single tiled window and the screen edge (0 = no gap)</description>
+    <key name="single-gap-top" type="i">
+      <default>4</default>
+      <range min="0"/>
+      <summary>Top gap around a single window</summary>
+      <description>Gap between a single tiled window and the top screen edge (0 = no gap)</description>
+    </key>
+
+    <key name="single-gap-bottom" type="i">
+      <default>4</default>
+      <range min="0"/>
+      <summary>Bottom gap around a single window</summary>
+      <description>Gap between a single tiled window and the bottom screen edge (0 = no gap)</description>
+    </key>
+
+    <key name="single-gap-left" type="i">
+      <default>4</default>
+      <range min="0"/>
+      <summary>Left gap around a single window</summary>
+      <description>Gap between a single tiled window and the left screen edge (0 = no gap)</description>
+    </key>
+
+    <key name="single-gap-right" type="i">
+      <default>4</default>
+      <range min="0"/>
+      <summary>Right gap around a single window</summary>
+      <description>Gap between a single tiled window and the right screen edge (0 = no gap)</description>
     </key>
 
     <key name="layout" type="s">
@@ -91,6 +113,33 @@
       <default>false</default>
       <summary>Round window corners</summary>
       <description>When enabled, window content corners are masked to match the border corner radius</description>
+    </key>
+
+    <key name="window-blur" type="b">
+      <default>false</default>
+      <summary>Blur windows</summary>
+      <description>When enabled, the content behind windows is blurred</description>
+    </key>
+
+    <key name="window-blur-radius" type="i">
+      <default>20</default>
+      <range min="0" max="30"/>
+      <summary>Window blur radius</summary>
+      <description>Strength of the window blur in pixels</description>
+    </key>
+
+    <key name="window-blur-brightness" type="d">
+      <default>0.6</default>
+      <range min="0.1" max="1"/>
+      <summary>Window blur brightness</summary>
+      <description>Brightness of the blurred layer (1.0 leaves it unchanged)</description>
+    </key>
+
+    <key name="window-blur-opacity" type="i">
+      <default>100</default>
+      <range min="30" max="100"/>
+      <summary>Window content opacity</summary>
+      <description>Opacity of window content over the blurred layer (100 is fully opaque)</description>
     </key>
 
     <key name="gradient-borders" type="b">
@@ -274,11 +323,6 @@
     </key>
 
     <!-- Keybinding: Fill Screen -->
-    <key name="fill-screen" type="as">
-      <default><![CDATA[['<Super><Shift>m']]]></default>
-      <summary>Fill screen</summary>
-      <description>Fill the focused window to the work area (single-window gap). If floating, stores position for restore. If tiled and alone, fills/unfills.</description>
-    </key>
 
     <!-- Keybinding: Cycle Layout -->
     <key name="cycle-layout" type="as">

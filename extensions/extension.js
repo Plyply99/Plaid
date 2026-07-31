@@ -23,6 +23,7 @@ const BORDER_CORNER_SEG_STEP = 4;
 
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
 const MASK_EFFECT_NAME = 'plaid-corner-mask';
+const BLUR_EFFECT_NAME = 'plaid-window-blur';
 
 const MASK_SNIPPET_DECLARATIONS = `
 uniform vec4 bounds;
@@ -35,6 +36,7 @@ uniform float gradientMode;
 uniform float theta;
 uniform vec4 borderedAreaBounds;
 uniform float borderedAreaClipRadius;
+uniform float opacity;
 
 float circleBounds(vec2 p, vec2 center, float clipRadius) {
     vec2 delta = p - center;
@@ -92,6 +94,8 @@ const MASK_SNIPPET_CODE = `
 
     cogl_color_out *= pointAlpha;
 
+    cogl_color_out *= opacity;
+
     if (borderWidth > 0.5) {
         float borderedAreaAlpha = getPointOpacity(p, borderedAreaBounds, borderedAreaClipRadius);
         float borderAlpha = clamp(abs(pointAlpha - borderedAreaAlpha), 0.0, 1.0);
@@ -121,6 +125,7 @@ const CornerMaskEffect = GObject.registerClass({
             theta: this.get_uniform_location('theta'),
             borderedAreaBounds: this.get_uniform_location('borderedAreaBounds'),
             borderedAreaClipRadius: this.get_uniform_location('borderedAreaClipRadius'),
+            opacity: this.get_uniform_location('opacity'),
         };
     }
 
@@ -159,7 +164,7 @@ const CornerMaskEffect = GObject.registerClass({
         super.vfunc_paint_target(node, paintContext);
     }
 
-    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta) {
+    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity) {
         this._radius = radius;
         const loc = this._uniformLocations;
         try {
@@ -177,6 +182,7 @@ const CornerMaskEffect = GObject.registerClass({
             this.set_uniform_float(loc.borderColor2, 4, color2);
             this.set_uniform_float(loc.gradientMode, 1, [mode]);
             this.set_uniform_float(loc.theta, 1, [theta]);
+            this.set_uniform_float(loc.opacity, 1, [opacity]);
         } catch (e) {
             log(`[plaid] mask uniforms failed: ${e.message}`);
             return;
@@ -201,6 +207,7 @@ const CornerMaskEffect = GObject.registerClass({
         }
         this.queue_repaint();
     }
+
 });
 
 export default class TilingWMExtension extends Extension {
@@ -211,6 +218,7 @@ export default class TilingWMExtension extends Extension {
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._windowBorders = new Map();
         this._windowMasks = new Map();
+        this._windowBlurs = new Map();
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
         this._windowWSIndices = new Map();
@@ -221,7 +229,6 @@ export default class TilingWMExtension extends Extension {
         this._stackRatios = new Map();
         this._bspTrees = new Map();
         this._lastFocusedPerWorkspace = new Map();
-        this._fillScreenRects = new Map();
         this._savedRects = new Map();
         this._signals = [];
         this._pendingRetileIds = new Map();
@@ -333,6 +340,8 @@ export default class TilingWMExtension extends Extension {
         this._windowBorders = null;
         this._removeAllMasks();
         this._windowMasks = null;
+        this._removeAllBlurs();
+        this._windowBlurs = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
         this._windowWSIndices = null;
@@ -342,7 +351,6 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = null;
         this._lastRetileTimes = null;
         this._lastFocusedPerWorkspace = null;
-        this._fillScreenRects = null;
         this._savedRects = null;
         this._signals = null;
         this._swapTarget = null;
@@ -356,17 +364,27 @@ export default class TilingWMExtension extends Extension {
 
     _disableMutterDefaults() {
         this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
-        this._savedAutoMaximize = this._mutterSettings.get_boolean('auto-maximize');
         this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
-        this._mutterSettings.set_boolean('auto-maximize', false);
         this._mutterSettings.set_boolean('edge-tiling', false);
+        this._wmKeybindings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
+        this._savedMaximize = this._wmKeybindings.get_strv('maximize');
+        this._savedMaximizeHoriz = this._wmKeybindings.get_strv('maximize-horizontally');
+        this._savedMaximizeVert = this._wmKeybindings.get_strv('maximize-vertically');
+        this._wmKeybindings.set_strv('maximize', []);
+        this._wmKeybindings.set_strv('maximize-horizontally', []);
+        this._wmKeybindings.set_strv('maximize-vertically', []);
     }
 
     _restoreMutterDefaults() {
         if (this._mutterSettings) {
-            this._mutterSettings.set_boolean('auto-maximize', this._savedAutoMaximize);
             this._mutterSettings.set_boolean('edge-tiling', this._savedEdgeTiling);
             this._mutterSettings = null;
+        }
+        if (this._wmKeybindings) {
+            this._wmKeybindings.set_strv('maximize', this._savedMaximize);
+            this._wmKeybindings.set_strv('maximize-horizontally', this._savedMaximizeHoriz);
+            this._wmKeybindings.set_strv('maximize-vertically', this._savedMaximizeVert);
+            this._wmKeybindings = null;
         }
     }
 
@@ -483,7 +501,10 @@ export default class TilingWMExtension extends Extension {
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
-        this._addSignal(this._settings, this._settings.connect('changed::single-gap', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::single-gap-top', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::single-gap-bottom', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::single-gap-left', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::single-gap-right', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::enabled', () => this._onTilingEnabledChanged()));
         this._addSignal(this._settings, this._settings.connect('changed::layout', () => {
             const oldDefault = this._currentDefaultLayout;
@@ -509,6 +530,10 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::inactive-border-color-2', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::border-radius', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::rounded-corners', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::window-blur', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::window-blur-radius', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::window-blur-brightness', () => this._updateBorders()));
+        this._addSignal(this._settings, this._settings.connect('changed::window-blur-opacity', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::gradient-borders', () => {
             this._updateBorders();
             this._syncBorderAnimation();
@@ -691,7 +716,6 @@ export default class TilingWMExtension extends Extension {
         this._windowWorkspaces.delete(win);
         this._windowWSIndices.delete(win);
         this._toggleFloatWindows.delete(win);
-        this._fillScreenRects.delete(win);
         this._savedRects.delete(win);
         this._scratchpadWindows.delete(win);
         this._disconnectWindowSignals(win);
@@ -1021,12 +1045,11 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
 
         const numWindows = tiledWindows.length;
-        const singleGap = this._settings.get_int('single-gap');
 
         if (numWindows === 1) {
-            this._moveWindow(tiledWindows[0],
-                workArea.x + singleGap, workArea.y + singleGap,
-                workArea.width - singleGap * 2, workArea.height - singleGap * 2);
+            const rect = this._singleWindowRect(workArea);
+            if (rect)
+                this._moveWindow(tiledWindows[0], rect.x, rect.y, rect.w, rect.h);
             return;
         }
 
@@ -1116,12 +1139,11 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
 
         const numWindows = tiledWindows.length;
-        const singleGap = this._settings.get_int('single-gap');
 
         if (numWindows === 1) {
-            this._moveWindow(tiledWindows[0],
-                workArea.x + singleGap, workArea.y + singleGap,
-                workArea.width - singleGap * 2, workArea.height - singleGap * 2);
+            const rect = this._singleWindowRect(workArea);
+            if (rect)
+                this._moveWindow(tiledWindows[0], rect.x, rect.y, rect.w, rect.h);
             return;
         }
 
@@ -1622,14 +1644,9 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
 
         if (tiledWindows.length === 1) {
-            const singleGap = this._settings.get_int('single-gap');
-            this._moveWindow(
-                tiledWindows[0],
-                workArea.x + singleGap,
-                workArea.y + singleGap,
-                workArea.width - singleGap * 2,
-                workArea.height - singleGap * 2
-            );
+            const rect = this._singleWindowRect(workArea);
+            if (rect)
+                this._moveWindow(tiledWindows[0], rect.x, rect.y, rect.w, rect.h);
             return;
         }
 
@@ -1686,6 +1703,20 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _singleWindowRect(workArea) {
+        if (!this._settings) return null;
+        const top = this._settings.get_int('single-gap-top');
+        const bottom = this._settings.get_int('single-gap-bottom');
+        const left = this._settings.get_int('single-gap-left');
+        const right = this._settings.get_int('single-gap-right');
+        return {
+            x: workArea.x + left,
+            y: workArea.y + top,
+            w: Math.max(1, workArea.width - left - right),
+            h: Math.max(1, workArea.height - top - bottom),
+        };
+    }
+
     _updateBorders() {
         if (!this._settings || this._destroyed) return;
         this._scheduleBorders();
@@ -1696,6 +1727,7 @@ export default class TilingWMExtension extends Extension {
         this._removeAllBorders();
         if (!this._settings.get_boolean('enabled')) {
             this._removeAllMasks();
+            this._removeAllBlurs();
             return;
         }
 
@@ -1710,6 +1742,7 @@ export default class TilingWMExtension extends Extension {
         const borderRadius = this._settings.get_int('border-radius');
         const roundedCorners = this._settings.get_boolean('rounded-corners');
         const bordersEnabled = this._settings.get_boolean('borders-enabled');
+        const blurEnabled = this._settings.get_boolean('window-blur');
         const gradient = this._settings.get_boolean('gradient-borders');
         const gradientDir = this._settings.get_string('gradient-direction');
 
@@ -1720,6 +1753,7 @@ export default class TilingWMExtension extends Extension {
         for (const win of windows) {
             if (win.is_fullscreen()) {
                 this._removeMask(win);
+                this._removeBlur(win);
                 continue;
             }
             if (this._grabOp && win === this._getActiveWindow()) continue;
@@ -1727,6 +1761,9 @@ export default class TilingWMExtension extends Extension {
             if (!actor) continue;
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
+
+            if (blurEnabled)
+                this._ensureWindowBlur(win, actor);
 
             if (roundedCorners && borderRadius > 0) {
                 this._ensureWindowMask(win, actor, borderRadius + 1);
@@ -1780,6 +1817,9 @@ export default class TilingWMExtension extends Extension {
 
         if (!roundedCorners || borderRadius <= 0)
             this._removeAllMasks();
+
+        if (!blurEnabled)
+            this._removeAllBlurs();
 
         this._raiseFloatingWindows(ws);
         this._syncBorderAnimation();
@@ -2111,6 +2151,7 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             this._debugLog(`mask redraw kick r=${effect._radius}`);
             this._updateMaskBounds(win, actor, effect, effect._radius);
+            this._ensureWindowBlur(win, actor);
             try { target.invalidate_paint_volume(); } catch (_e) {}
             try { actor.invalidate_paint_volume(); } catch (_e) {}
             try { global.stage.queue_redraw(); } catch (_e) {}
@@ -2189,7 +2230,9 @@ export default class TilingWMExtension extends Extension {
                 mode = 2;
         }
 
-        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta);
+        const opacity = this._settings.get_int('window-blur-opacity') / 100;
+
+        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity);
     }
 
     _removeMask(win) {
@@ -2215,10 +2258,162 @@ export default class TilingWMExtension extends Extension {
         this._windowMasks.delete(win);
     }
 
+    _ensureWindowBlur(win, actor) {
+        if (!this._windowBlurs || !actor || !actor.add_effect_with_name) return;
+        if (!this._settings || !this._settings.get_boolean('window-blur')) return;
+
+        let blur = this._windowBlurs.get(win);
+
+        if (blur) {
+            let hostAlive;
+            if (blur._sibling)
+                hostAlive = blur._sibling.get_parent() !== null && blur.get_actor() === blur._sibling;
+            else
+                hostAlive = blur.get_actor() !== null;
+            if (!hostAlive) {
+                try {
+                    const currentActor = blur.get_actor();
+                    if (currentActor && currentActor.remove_effect_by_name)
+                        currentActor.remove_effect_by_name(BLUR_EFFECT_NAME);
+                    if (blur._sibling) {
+                        this._unbindBlurSibling(blur);
+                        try { blur._sibling.destroy(); } catch (_e) {}
+                        blur._sibling = null;
+                    }
+                    this._windowBlurs.delete(win);
+                    blur = null;
+                    this._debugLog('blur self-heal: host dead, recreating');
+                } catch (e) {
+                    log(`[plaid] window blur heal failed: ${e.message}`);
+                    return;
+                }
+            }
+        }
+
+        if (!blur) {
+            try {
+                blur = new Shell.BlurEffect();
+                blur._bindings = [];
+                const sibling = new St.Widget({
+                    reactive: false,
+                    visible: true,
+                });
+                for (let i = 0; i < 4; i++) {
+                    sibling.add_constraint(new Clutter.BindConstraint({
+                        source: actor,
+                        coordinate: i,
+                        offset: 0,
+                    }));
+                }
+                for (const prop of ['pivot-point', 'translation-x', 'translation-y', 'scale-x', 'scale-y', 'visible']) {
+                    try {
+                        blur._bindings.push(actor.bind_property(
+                            prop, sibling, prop, GObject.BindingFlags.SYNC_CREATE
+                        ));
+                    } catch (_e) {}
+                }
+                global.windowGroup.insert_child_below(sibling, actor);
+                sibling.add_effect_with_name(BLUR_EFFECT_NAME, blur);
+                blur._sibling = sibling;
+                blur._sourceActor = actor;
+                this._windowBlurs.set(win, blur);
+                try {
+                    blur._actorDestroyId = actor.connect('destroy', () => this._removeBlur(win));
+                } catch (_e) {}
+                try {
+                    const frame = win.get_frame_rect();
+                    const buffer = win.get_buffer_rect();
+                    this._debugLog(`blur sibling created frame=(${frame.x},${frame.y},${frame.width},${frame.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height})`);
+                } catch (_e) {}
+            } catch (e) {
+                log(`[plaid] window blur attach failed: ${e.message}`);
+                return;
+            }
+        }
+
+        if (blur._sibling) {
+            try {
+                const buffer = win.get_buffer_rect();
+                const frame = win.get_frame_rect();
+                const offsets = [
+                    frame.x - buffer.x,
+                    frame.y - buffer.y,
+                    frame.width - buffer.width,
+                    frame.height - buffer.height,
+                ];
+                const constraints = blur._sibling.get_constraints();
+                constraints.forEach((c, i) => {
+                    if (c instanceof Clutter.BindConstraint)
+                        c.offset = offsets[i];
+                });
+            } catch (_e) {}
+        }
+
+        try {
+            const siblingAlive = blur._sibling ? (blur._sibling.get_parent() ? 'yes' : 'no') : 'n/a';
+            const actorMatch = blur.get_actor() === blur._sibling ? 'yes' : 'no';
+            this._debugLog(`blur state siblingParent=${siblingAlive} actorMatch=${actorMatch}`);
+        } catch (_e) {}
+
+        try {
+            if (blur.mode !== Shell.BlurMode.BACKGROUND)
+                blur.mode = Shell.BlurMode.BACKGROUND;
+            const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+            const radius = Math.round(this._settings.get_int('window-blur-radius') * scale);
+            if (blur.radius !== radius)
+                blur.radius = radius;
+            const brightness = this._settings.get_double('window-blur-brightness');
+            if (blur.brightness !== brightness)
+                blur.brightness = brightness;
+        } catch (e) {
+            log(`[plaid] window blur update failed: ${e.message}`);
+        }
+    }
+
+    _unbindBlurSibling(blur) {
+        if (blur._bindings) {
+            for (const binding of blur._bindings) {
+                try { binding.unbind(); } catch (_e) {}
+            }
+            blur._bindings = [];
+        }
+    }
+
+    _removeBlur(win) {
+        if (!this._windowBlurs) return;
+        const blur = this._windowBlurs.get(win);
+        if (!blur) return;
+        if (blur._actorDestroyId) {
+            const a = win.get_compositor_private();
+            if (a) {
+                try { a.disconnect(blur._actorDestroyId); } catch (_e) {}
+            }
+            blur._actorDestroyId = 0;
+        }
+        if (blur._sibling) {
+            this._unbindBlurSibling(blur);
+            try { blur._sibling.destroy(); } catch (_e) {}
+            blur._sibling = null;
+        }
+        const actor = win.get_compositor_private();
+        const target = this._unwrapMaskActor(actor, win);
+        if (target && target.remove_effect_by_name) {
+            try { target.remove_effect_by_name(BLUR_EFFECT_NAME); } catch (_e) {}
+        }
+        this._windowBlurs.delete(win);
+    }
+
+    _removeAllBlurs() {
+        if (!this._windowBlurs) return;
+        for (const win of [...this._windowBlurs.keys()])
+            this._removeBlur(win);
+    }
+
     _removeAllMasks() {
         if (!this._windowMasks) return;
         for (const win of [...this._windowMasks.keys()])
-            this._removeMask(win);
+        this._removeMask(win);
+        this._removeBlur(win);
     }
 
     _updateDropOverlaySize() {
@@ -2254,7 +2449,6 @@ export default class TilingWMExtension extends Extension {
             { key: 'toggle-float', fn: () => this._toggleFloat() },
             { key: 'toggle-tiling', fn: () => this._toggleTiling() },
             { key: 'center-window', fn: () => this._centerWindow() },
-            { key: 'fill-screen', fn: () => this._toggleFillScreen() },
             { key: 'pick-float-window', fn: () => this._handlePickFloat() },
             { key: 'cycle-layout', fn: () => this._cycleLayout() },
             { key: 'scratchpad-toggle', fn: () => this._scratchpadToggle() },
@@ -2278,7 +2472,7 @@ export default class TilingWMExtension extends Extension {
             'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
-            'toggle-float', 'toggle-tiling', 'center-window', 'fill-screen', 'pick-float-window',
+            'toggle-float', 'toggle-tiling', 'center-window', 'pick-float-window',
             'cycle-layout', 'scratchpad-toggle', 'scratchpad-add', 'scratchpad-remove',
         ];
         for (const key of keys) {
@@ -2604,51 +2798,6 @@ export default class TilingWMExtension extends Extension {
         });
     }
 
-    _toggleFillScreen() {
-        const win = this._getActiveWindow();
-        if (!win) return;
-        const ws = win.get_workspace();
-        if (!ws) return;
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
-        if (!workArea) return;
-        const singleGap = this._settings.get_int('single-gap');
-        const fillRect = {
-            x: workArea.x + singleGap,
-            y: workArea.y + singleGap,
-            w: workArea.width - singleGap * 2,
-            h: workArea.height - singleGap * 2,
-        };
-        if (fillRect.w <= 0 || fillRect.h <= 0) return;
-
-        if (this._isFloating(win)) {
-            if (this._fillScreenRects.has(win)) {
-                const saved = this._fillScreenRects.get(win);
-                this._fillScreenRects.delete(win);
-                this._moveWindow(win, saved.x, saved.y, saved.w, saved.h);
-            } else {
-                const frame = win.get_frame_rect();
-                this._fillScreenRects.set(win, { x: frame.x, y: frame.y, w: frame.width, h: frame.height });
-                this._moveWindow(win, fillRect.x, fillRect.y, fillRect.w, fillRect.h);
-                this._raiseFloatingWindows(ws);
-            }
-        } else {
-            const windows = ws.list_windows().filter(w =>
-                w.get_window_type() === Meta.WindowType.NORMAL &&
-                !w.is_skip_taskbar() &&
-                !w.minimized
-            );
-            if (windows.length > 1) return;
-            const frame = win.get_frame_rect();
-            if (frame.x === fillRect.x && frame.y === fillRect.y &&
-                frame.width === fillRect.w && frame.height === fillRect.h) {
-                this._retileWorkspace(ws);
-            } else {
-                this._moveWindow(win, fillRect.x, fillRect.y, fillRect.w, fillRect.h);
-                this._raiseFloatingWindows(ws);
-            }
-        }
-    }
 
     _cycleLayout() {
         const layouts = ['dwindle', 'master-stack', 'centered-master-stack'];
@@ -2845,6 +2994,14 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.display, global.display.connect('grab-op-end', (_d, metaWindow, grabOp) => {
             this._handleGrabEnd(metaWindow, grabOp);
+        }));
+        this._addSignal(global.display, global.display.connect('restacked', () => {
+            if (!this._windowBlurs) return;
+            for (const blur of this._windowBlurs.values()) {
+                if (blur._sibling && blur._sourceActor) {
+                    try { global.windowGroup.set_child_below_sibling(blur._sibling, blur._sourceActor); } catch (_e) {}
+                }
+            }
         }));
     }
 

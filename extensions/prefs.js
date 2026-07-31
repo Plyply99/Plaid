@@ -25,7 +25,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         }
 
         this._buildGeneralPage(window, settings);
-        this._buildBordersPage(window, settings);
+        this._buildFlairPage(window, settings);
         this._buildKeybindingsPage(window, settings);
         this._buildFloatPage(window, settings);
     }
@@ -91,19 +91,48 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(gapRow);
         settings.bind('gap', gapRow, 'value', Gio.SettingsBindFlags.DEFAULT);
 
-        const singleGapRow = new Adw.SpinRow({
-            title: _('Single Window Gap'),
-            subtitle: _('Gap around a single tiled window (0 = no gap)'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 200,
-                step_increment: 1,
-                page_increment: 10,
-                value: settings.get_int('single-gap'),
-            }),
+        const singleEdgeRow = new Adw.ActionRow({
+            title: _('Single Window Edges'),
+            subtitle: _('Gap between a single tiled window and each screen edge'),
         });
-        group.add(singleGapRow);
-        settings.bind('single-gap', singleGapRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        const edgeGrid = new Gtk.Grid({
+            column_spacing: 8,
+            row_spacing: 4,
+            halign: Gtk.Align.FILL,
+            hexpand: true,
+        });
+        const edgeLabels = [
+            ['single-gap-top', _('Top')],
+            ['single-gap-bottom', _('Bottom')],
+            ['single-gap-left', _('Left')],
+            ['single-gap-right', _('Right')],
+        ];
+        edgeLabels.forEach(([key, label], idx) => {
+            const row = Math.floor(idx / 2);
+            const col = (idx % 2) * 2;
+            const labelWidget = new Gtk.Label({
+                label,
+                css_classes: ['dim-label'],
+                xalign: 1,
+            });
+            labelWidget.width_request = 56;
+            const spin = new Gtk.SpinButton({
+                adjustment: new Gtk.Adjustment({
+                    lower: 0,
+                    upper: 200,
+                    step_increment: 1,
+                    page_increment: 10,
+                    value: settings.get_int(key),
+                }),
+                width_request: 70,
+                valign: Gtk.Align.CENTER,
+            });
+            edgeGrid.attach(labelWidget, col, row, 1, 1);
+            edgeGrid.attach(spin, col + 1, row, 1, 1);
+            settings.bind(key, spin, 'value', Gio.SettingsBindFlags.DEFAULT);
+        });
+        singleEdgeRow.add_suffix(edgeGrid);
+        group.add(singleEdgeRow);
 
         const layoutNames = ['dwindle', 'master-stack', 'centered-master-stack'];
         const layoutCaptions = {
@@ -286,12 +315,24 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         return card;
     }
 
-    _buildBordersPage(window, settings) {
+    _buildFlairPage(window, settings) {
         const page = new Adw.PreferencesPage({
-            title: _('Borders'),
-            icon_name: 'preferences-other-symbolic',
+            title: _('Flair'),
+            icon_name: 'applications-graphics-symbolic',
         });
         window.add(page);
+
+        const compatGroup = new Adw.PreferencesGroup({
+            title: _('Compatibility'),
+        });
+        page.add(compatGroup);
+
+        const compatRow = new Adw.ActionRow({
+            title: _('Disable other window-effect extensions'),
+            subtitle: _('Plaid handles window borders, rounded corners, and blur itself. Other window-effect extensions (Rounded Window Corners Reborn, Blur My Shell, etc.) may conflict visually.'),
+            icon_name: 'dialog-warning-symbolic',
+        });
+        compatGroup.add(compatRow);
 
         const mainGroup = new Adw.PreferencesGroup({
             title: _('Window Borders'),
@@ -443,6 +484,70 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         };
         updateGradientVisibility();
         settings.connect('changed::gradient-borders', () => updateGradientVisibility());
+
+        const blurGroup = new Adw.PreferencesGroup({
+            title: _('Window Blur'),
+        });
+        page.add(blurGroup);
+
+        const blurRow = new Adw.SwitchRow({
+            title: _('Blur Windows'),
+            subtitle: _('Blur the content behind windows using the shell\'s native blur'),
+        });
+        blurGroup.add(blurRow);
+        settings.bind('window-blur', blurRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const blurRadiusRow = new Adw.SpinRow({
+            title: _('Blur Radius'),
+            subtitle: _('Strength of the blur in pixels'),
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 30,
+                step_increment: 1,
+                page_increment: 5,
+                value: settings.get_int('window-blur-radius'),
+            }),
+        });
+        blurGroup.add(blurRadiusRow);
+        settings.bind('window-blur-radius', blurRadiusRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
+        const blurBrightnessRow = new Adw.SpinRow({
+            title: _('Blur Brightness'),
+            subtitle: _('Brightness of the blurred layer'),
+            digits: 2,
+            adjustment: new Gtk.Adjustment({
+                lower: 0.1,
+                upper: 1.0,
+                step_increment: 0.05,
+                page_increment: 0.1,
+                value: settings.get_double('window-blur-brightness'),
+            }),
+        });
+        blurGroup.add(blurBrightnessRow);
+        settings.bind('window-blur-brightness', blurBrightnessRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
+        const blurOpacityRow = new Adw.SpinRow({
+            title: _('Window Opacity'),
+            subtitle: _('Opacity of window content over the blurred layer (lower values soften the whole window, including text)'),
+            adjustment: new Gtk.Adjustment({
+                lower: 30,
+                upper: 100,
+                step_increment: 1,
+                page_increment: 10,
+                value: settings.get_int('window-blur-opacity'),
+            }),
+        });
+        blurGroup.add(blurOpacityRow);
+        settings.bind('window-blur-opacity', blurOpacityRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+
+        const updateBlurVisibility = () => {
+            const blur = settings.get_boolean('window-blur');
+            blurRadiusRow.set_visible(blur);
+            blurBrightnessRow.set_visible(blur);
+            blurOpacityRow.set_visible(blur);
+        };
+        updateBlurVisibility();
+        settings.connect('changed::window-blur', () => updateBlurVisibility());
     }
 
     _buildColorRow(settings, key, title) {
@@ -472,7 +577,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         const label = new Gtk.Label({
             label: currentColor,
             css_classes: ['dim-label'],
+            xalign: 0,
         });
+        label.width_request = 70;
         const suffixBox = new Gtk.Box({
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 8,
@@ -554,7 +661,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         this._addShortcutRow(miscGroup, settings, 'toggle-float', _('Toggle Float'));
         this._addShortcutRow(miscGroup, settings, 'toggle-tiling', _('Toggle Tiling'));
         this._addShortcutRow(miscGroup, settings, 'cycle-layout', _('Cycle Layout'));
-        this._addShortcutRow(miscGroup, settings, 'fill-screen', _('Fill Screen'));
         this._addShortcutRow(miscGroup, settings, 'center-window', _('Center Window'));
         this._addShortcutRow(miscGroup, settings, 'pick-float-window', _('Pick Window to Float'));
         this._addShortcutRow(miscGroup, settings, 'scratchpad-toggle', _('Toggle Scratchpad'));
