@@ -100,6 +100,12 @@
       <description>Speed of the gradient border rotation (0 = off, 10 = fastest)</description>
     </key>
 
+    <key name="debug" type="b">
+      <default>false</default>
+      <summary>Enable verbose debug logging</summary>
+      <description>Log per-event debug details (window removal, grab operations) to the journal</description>
+    </key>
+
     <!-- Float window patterns (WM_CLASS instance names) -->
     <key name="float-windows" type="as">
       <default><![CDATA[['gimp', 'steam', 'vlc', 'io.github.bugaevc.wl-clipboard']]]></default>

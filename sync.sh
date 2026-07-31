@@ -1,6 +1,8 @@
 #!/bin/bash
 # Plaid - Development sync script
-# Compiles schemas and copies the extension to the user's installed location.
+# Compiles schemas and syncs source to the user's installed location.
+# Changed files are written atomically (temp + rename) so a running
+# GNOME Shell never observes a partially-written schema or script.
 
 set -e
 
@@ -14,6 +16,31 @@ glib-compile-schemas "$SOURCE/schemas/"
 
 echo "Copying $SOURCE -> $DEST"
 mkdir -p "$DEST"
-cp -r "$SOURCE"/* "$DEST"/
+
+sync_file() {
+    local src="$1"
+    local dst="$2"
+    if cmp -s "$src" "$dst" 2>/dev/null; then
+        return
+    fi
+    local tmp
+    tmp="${dst}.tmp.$$"
+    cp -p "$src" "$tmp"
+    mv -f "$tmp" "$dst"
+    echo "  updated $(basename "$dst")"
+}
+
+for file in "$SOURCE"/*; do
+    [ -f "$file" ] || continue
+    sync_file "$file" "$DEST/$(basename "$file")"
+done
+
+if [ -d "$SOURCE/schemas" ]; then
+    mkdir -p "$DEST/schemas"
+    for file in "$SOURCE"/schemas/*; do
+        [ -f "$file" ] || continue
+        sync_file "$file" "$DEST/schemas/$(basename "$file")"
+    done
+fi
 
 echo "Done. Restart GNOME Shell (log out and back in on Wayland)."

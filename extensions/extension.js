@@ -15,6 +15,10 @@ const LAYOUT_NAMES = {
     'centered-master-stack': 'Centered Master-stack',
 };
 
+const BORDER_SEG_STEP = 12;
+const BORDER_CORNER_MIN_SEGS = 8;
+const BORDER_CORNER_SEG_STEP = 4;
+
 export default class TilingWMExtension extends Extension {
     enable() {
         this._destroyed = false;
@@ -381,7 +385,11 @@ export default class TilingWMExtension extends Extension {
         this._pendingBorderId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._pendingBorderId = 0;
             if (this._destroyed) return false;
-            this._doUpdateBorders();
+            try {
+                this._doUpdateBorders();
+            } catch (e) {
+                log(`[plaid] _doUpdateBorders failed: ${e.message}`);
+            }
             return false;
         });
     }
@@ -410,22 +418,6 @@ export default class TilingWMExtension extends Extension {
         } catch (e) {
             log(`[plaid] _moveCursorToWindow failed: ${e.message}`);
             return false;
-        }
-    }
-
-    _warpCursor(win, winX, winY, relX, relY) {
-        try {
-            const frame = win.get_frame_rect();
-            if (frame.width === 0 || frame.height === 0) return;
-            const clampedRelX = Math.max(0, Math.min(frame.width - 1, relX));
-            const clampedRelY = Math.max(0, Math.min(frame.height - 1, relY));
-            const warpX = winX + clampedRelX;
-            const warpY = winY + clampedRelY;
-            const backend = Clutter.get_default_backend();
-            const seat = backend.get_default_seat();
-            seat.warp_pointer(warpX, warpY);
-        } catch (e) {
-            log(`[plaid] _warpCursor failed: ${e.message}`);
         }
     }
 
@@ -502,7 +494,7 @@ export default class TilingWMExtension extends Extension {
         if (!this._settings) return;
         const ws = this._windowWorkspaces.get(win) || win.get_workspace();
         const wmClass = win.get_wm_class_instance() || '?';
-        log(`[plaid] REMOVE_WINDOW: ${wmClass} ws=${this._wsIndex(ws)}`);
+        this._debugLog(`REMOVE_WINDOW: ${wmClass} ws=${this._wsIndex(ws)}`);
         this._windowWorkspaces.delete(win);
         this._windowWSIndices.delete(win);
         this._toggleFloatWindows.delete(win);
@@ -1584,6 +1576,12 @@ export default class TilingWMExtension extends Extension {
         this._syncBorderAnimation();
     }
 
+    _debugLog(...args) {
+        if (this._destroyed || !this._settings) return;
+        if (!this._settings.get_boolean('debug')) return;
+        log(`[plaid] ${args.join(' ')}`);
+    }
+
     _hexToRgb(hex) {
         const h = (hex || '').replace('#', '');
         const v = parseInt(h, 16);
@@ -1616,7 +1614,7 @@ export default class TilingWMExtension extends Extension {
         const add = (x0, y0, x1, y1) => segs.push({ x0, y0, x1, y1 });
         const straight = (x0, y0, x1, y1) => {
             const len = Math.hypot(x1 - x0, y1 - y0);
-            const n = Math.max(1, Math.ceil(len / 12));
+            const n = Math.max(1, Math.ceil(len / BORDER_SEG_STEP));
             for (let i = 0; i < n; i++) {
                 const a = i / n;
                 const b = (i + 1) / n;
@@ -1625,7 +1623,7 @@ export default class TilingWMExtension extends Extension {
             }
         };
         const arc = (cxp, cyp, a0, a1) => {
-            const n = Math.max(8, Math.ceil(Math.abs(a1 - a0) * r / 4));
+            const n = Math.max(BORDER_CORNER_MIN_SEGS, Math.ceil(Math.abs(a1 - a0) * r / BORDER_CORNER_SEG_STEP));
             for (let i = 0; i < n; i++) {
                 const a = a0 + (a1 - a0) * (i / n);
                 const b = a0 + (a1 - a0) * ((i + 1) / n);
@@ -1730,13 +1728,26 @@ export default class TilingWMExtension extends Extension {
 
     _startBorderAnimation() {
         if (this._borderAnimId) return;
-        const stSettings = St.Settings.get();
-        if (!stSettings.enable_animations) return;
-        if (!this._settings.get_boolean('gradient-borders')) return;
-        if (this._settings.get_int('border-animation-speed') <= 0) return;
+        try {
+            const stSettings = St.Settings.get();
+            if (!stSettings.enable_animations) return;
+            if (!this._settings.get_boolean('gradient-borders')) return;
+            if (this._settings.get_int('border-animation-speed') <= 0) return;
+        } catch (e) {
+            log(`[plaid] _startBorderAnimation failed: ${e.message}`);
+            return;
+        }
         this._borderAnimId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
-            if (this._destroyed || !this._settings.get_boolean('gradient-borders') ||
-                this._settings.get_int('border-animation-speed') <= 0 || this._grabOp) {
+            try {
+                const stSettings = St.Settings.get();
+                if (this._destroyed || !stSettings.enable_animations ||
+                    !this._settings.get_boolean('gradient-borders') ||
+                    this._settings.get_int('border-animation-speed') <= 0 || this._grabOp) {
+                    this._stopBorderAnimation();
+                    return GLib.SOURCE_REMOVE;
+                }
+            } catch (e) {
+                log(`[plaid] border animation tick failed: ${e.message}`);
                 this._stopBorderAnimation();
                 return GLib.SOURCE_REMOVE;
             }
@@ -1755,14 +1766,19 @@ export default class TilingWMExtension extends Extension {
     }
 
     _syncBorderAnimation() {
-        if (!this._settings || this._destroyed) return;
-        const wantAnim = this._settings.get_boolean('gradient-borders') &&
-            this._settings.get_int('border-animation-speed') > 0 &&
-            this._windowBorders.size > 0;
-        if (wantAnim)
-            this._startBorderAnimation();
-        else
+        try {
+            if (!this._settings || this._destroyed) return;
+            const wantAnim = this._settings.get_boolean('gradient-borders') &&
+                this._settings.get_int('border-animation-speed') > 0 &&
+                this._windowBorders.size > 0;
+            if (wantAnim)
+                this._startBorderAnimation();
+            else
+                this._stopBorderAnimation();
+        } catch (e) {
+            log(`[plaid] _syncBorderAnimation failed: ${e.message}`);
             this._stopBorderAnimation();
+        }
     }
 
     _updateBordersDuringGrab() {
@@ -2453,7 +2469,7 @@ export default class TilingWMExtension extends Extension {
         this._swapTarget = null;
 
         const wmClass = metaWindow.get_wm_class_instance() || '?';
-        log(`[plaid] GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(frame)} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
+        this._debugLog(`GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(frame)} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
 
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
             const [startX, startY] = global.get_pointer();
@@ -2520,7 +2536,7 @@ export default class TilingWMExtension extends Extension {
                 const tree = this._bspGetTree(ws);
                 const treeWins = tree ? this._bspCollectWindows(tree) : [];
                 const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
-                log(`[plaid] GRAB_END win=${wmClass} treeWins=[${treeWins.map(w => w.get_wm_class_instance() || '?').join(',')}] tiled=[${tiled.map(w => w.get_wm_class_instance() || '?').join(',')}]`);
+                this._debugLog(`GRAB_END win=${wmClass} treeWins=[${treeWins.map(w => w.get_wm_class_instance() || '?').join(',')}] tiled=[${tiled.map(w => w.get_wm_class_instance() || '?').join(',')}]`);
             }
         }
 
@@ -2604,7 +2620,7 @@ export default class TilingWMExtension extends Extension {
                     if (this._grabWidthSign !== 0) {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
-                        log(`[plaid] MS_RESIZE dx=${dx} dy=${dy} wSign=${this._grabWidthSign} hSign=${this._grabHeightSign} idx=${idx} numTiled=${tiled.length} initMasterRatio=${this._grabInitialMasterRatio.toFixed(3)}`);
+                        this._debugLog(`MS_RESIZE dx=${dx} dy=${dy} wSign=${this._grabWidthSign} hSign=${this._grabHeightSign} idx=${idx} numTiled=${tiled.length} initMasterRatio=${this._grabInitialMasterRatio.toFixed(3)}`);
                         let sign = this._grabWidthSign;
                         if (idx > 0) sign = -sign;
                         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
@@ -2620,7 +2636,7 @@ export default class TilingWMExtension extends Extension {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
                         if (idx > 0 && this._grabInitialStackRatios) {
-                            log(`[plaid] MS_HEIGHT idx=${idx} dy=${dy} hSign=${this._grabHeightSign} initStackRatios=[${[...this._grabInitialStackRatios.entries()].map(([k,v])=>`${k}:${v.toFixed(2)}`).join(',')}]`);
+                            this._debugLog(`MS_HEIGHT idx=${idx} dy=${dy} hSign=${this._grabHeightSign} initStackRatios=[${[...this._grabInitialStackRatios.entries()].map(([k,v])=>`${k}:${v.toFixed(2)}`).join(',')}]`);
                             const numStack = tiled.length - 1;
                             const gapTotal = gap * (numStack - 1);
                             const totalStackH = areaH - gapTotal;
@@ -2727,23 +2743,6 @@ export default class TilingWMExtension extends Extension {
             if (tree) this._bspSwapWindows(tree, winA, winB);
         } else {
             this._swapMasterStackWindows(winA, winB);
-        }
-    }
-
-    _performSwap(winA, winB) {
-        this._swapInLayout(winA, winB);
-    }
-
-    _checkSwapTarget(metaWindow) {
-        if (!this._isMoveGrab(this._grabOp)) return;
-        const ws = metaWindow.get_workspace();
-        const [px, py] = global.get_pointer();
-        const target = global.display.get_window_at_position(px, py);
-        if (target && target !== metaWindow && target.get_workspace() === ws &&
-            this._shouldManage(target) && !this._isFloating(target)) {
-            this._swapTarget = target;
-        } else {
-            this._swapTarget = null;
         }
     }
 
