@@ -111,6 +111,18 @@ const MASK_SNIPPET_CODE = `
     }
 `;
 
+const LayoutInertClone = GObject.registerClass({
+    GTypeName: 'PlaidLayoutInertClone',
+}, class LayoutInertClone extends Clutter.Clone {
+    vfunc_get_preferred_width(_forHeight) {
+        return [0, 0];
+    }
+
+    vfunc_get_preferred_height(_forWidth) {
+        return [0, 0];
+    }
+});
+
 const CornerMaskEffect = GObject.registerClass({
     GTypeName: 'PlaidCornerMaskEffect',
 }, class CornerMaskEffect extends Shell.GLSLEffect {
@@ -3847,7 +3859,7 @@ export default class TilingWMExtension extends Extension {
                         if (video && this._container &&
                             this._container !== Main.layoutManager._backgroundGroup) {
                             try {
-                                const clone = new Clutter.Clone({ source: video.actor });
+                                const clone = new LayoutInertClone({ source: video.actor });
                                 this._container.add_child(clone);
                                 this._container.connect('child-added', () => {
                                     try {
