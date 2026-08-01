@@ -3765,6 +3765,7 @@ export default class TilingWMExtension extends Extension {
 
         let texture = null;
         let actor = null;
+        let content = null;
         try {
             const coglContext = Clutter.get_default_backend().get_cogl_context();
             texture = Cogl.Texture2D.new_with_size(coglContext, union.w, union.h);
@@ -3776,7 +3777,7 @@ export default class TilingWMExtension extends Extension {
         try {
             actor = new Clutter.Actor({ reactive: false, visible: true });
             actor.set_size(union.w, union.h);
-            const content = Clutter.TextureContent.new_from_texture(texture, null);
+            content = Clutter.TextureContent.new_from_texture(texture, null);
             actor.set_content(content);
             Main.layoutManager._backgroundGroup.add_child(actor);
         } catch (e) {
