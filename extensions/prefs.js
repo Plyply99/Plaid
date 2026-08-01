@@ -692,6 +692,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         this._addShortcutRow(miscGroup, settings, 'scratchpad-toggle', _('Toggle Scratchpad'));
         this._addShortcutRow(miscGroup, settings, 'scratchpad-add', _('Add Window to Scratchpad'));
         this._addShortcutRow(miscGroup, settings, 'scratchpad-remove', _('Remove Window from Scratchpad'));
+        this._addShortcutRow(miscGroup, settings, 'dropdown-terminal', _('Toggle Drop-Down Terminal'));
     }
 
     _addShortcutRow(group, settings, key, title) {

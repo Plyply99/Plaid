@@ -261,6 +261,7 @@ export default class TilingWMExtension extends Extension {
         this._dropdownUnmanagedId = 0;
         this._dropdownPending = false;
         this._dropdownPendingId = 0;
+        this._dropdownWaiters = new Map();
         this._dropdownSettingsChangedId = 0;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
@@ -356,6 +357,7 @@ export default class TilingWMExtension extends Extension {
         this._shellSettingsChangedId = 0;
         this._jpSettingsChangedId = 0;
         this._clearDropdownWindow();
+        this._clearDropdownWaiters();
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
             GLib.source_remove(this._dropdownPendingId);
@@ -3231,6 +3233,7 @@ export default class TilingWMExtension extends Extension {
         this._dropdownPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
             this._dropdownPendingId = 0;
             this._dropdownPending = false;
+            this._clearDropdownWaiters();
             return GLib.SOURCE_REMOVE;
         });
         let appInfo = null;
@@ -3255,12 +3258,37 @@ export default class TilingWMExtension extends Extension {
     _handleDropdownWindowCreated(win) {
         if (!this._dropdownPending || !win) return false;
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
+        if (this._tryClaimDropdown(win)) return true;
+        if (this._dropdownWaiters.has(win)) return false;
+        this._debugLog('dropdown: window created, waiting for identity');
+        const notifyIds = [];
+        const cleanup = () => {
+            for (const id of notifyIds) {
+                try { win.disconnect(id); } catch (_e) {}
+            }
+            notifyIds.length = 0;
+            if (this._dropdownWaiters.get(win) === cleanup) {
+                this._dropdownWaiters.delete(win);
+            }
+        };
+        const retry = () => {
+            if (this._tryClaimDropdown(win)) cleanup();
+        };
+        notifyIds.push(win.connect('notify::wm-class', retry));
+        notifyIds.push(win.connect('notify::gtk-application-id', retry));
+        win.connect('unmanaged', cleanup);
+        this._dropdownWaiters.set(win, cleanup);
+        return false;
+    }
+
+    _tryClaimDropdown(win) {
+        if (!this._dropdownPending || !win) return false;
         const command = this._settings.get_string('dropdown-terminal-command') || '';
         const bin = command.trim().split(/\s+/)[0] || '';
         const instance = (win.get_wm_class_instance() || '').toLowerCase();
         const cls = (win.get_wm_class() || '').toLowerCase();
         if (!bin || !(instance.includes(bin) || cls.includes(bin))) {
-            this._debugLog(`dropdown: window created, no match (instance=${instance} class=${cls})`);
+            this._debugLog(`dropdown: identity not yet matching (instance=${instance} class=${cls})`);
             return false;
         }
         if (this._dropdownPendingId) {
@@ -3276,6 +3304,13 @@ export default class TilingWMExtension extends Extension {
         this._showDropdownTerminal(win);
         this._debugLog(`dropdown: claimed ${instance || cls}`);
         return true;
+    }
+
+    _clearDropdownWaiters() {
+        for (const cleanup of this._dropdownWaiters.values()) {
+            try { cleanup(); } catch (_e) {}
+        }
+        this._dropdownWaiters.clear();
     }
 
     _configureDropdownTerminal(win) {
