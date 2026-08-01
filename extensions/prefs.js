@@ -574,13 +574,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         ddtGroup.add(ddtHeightRow);
         settings.bind('dropdown-terminal-height', ddtHeightRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-
-        const ddtClickDismissRow = new Adw.SwitchRow({
-            title: _('Click to Dismiss'),
-            subtitle: _('Clicking outside the terminal hides it'),
-        });
-        ddtGroup.add(ddtClickDismissRow);
-        settings.bind('dropdown-terminal-click-dismiss', ddtClickDismissRow, 'active', Gio.SettingsBindFlags.DEFAULT);
     }
 
     _buildColorRow(settings, key, title) {

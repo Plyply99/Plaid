@@ -264,7 +264,7 @@ export default class TilingWMExtension extends Extension {
         this._dropdownWaiters = new Map();
         this._dropdownSettingsChangedId = 0;
         this._dropdownHeightChangedId = 0;
-        this._dropdownStageEventId = 0;
+        this._dropdownGeometryIds = null;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -360,10 +360,6 @@ export default class TilingWMExtension extends Extension {
         this._jpSettingsChangedId = 0;
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
-        if (this._dropdownStageEventId) {
-            try { global.stage.disconnect(this._dropdownStageEventId); } catch (_e) {}
-            this._dropdownStageEventId = 0;
-        }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
             GLib.source_remove(this._dropdownPendingId);
@@ -1913,6 +1909,8 @@ export default class TilingWMExtension extends Extension {
         const blurEnabled = this._settings.get_boolean('window-blur');
         const bordersEnabled = this._settings.get_boolean('borders-enabled');
 
+        this._removeBorder(win);
+
         if (blurEnabled)
             this._ensureWindowBlur(win, actor);
 
@@ -3270,6 +3268,7 @@ export default class TilingWMExtension extends Extension {
             this._dropdownHeightChangedId = this._settings.connect(
                 'changed::dropdown-terminal-height',
                 () => {
+                    this._debugLog('dropdown: height setting changed');
                     const win = this._dropdownWin;
                     if (win && !win.minimized) {
                         this._debugLog('dropdown: height setting changed, re-applying');
@@ -3278,12 +3277,6 @@ export default class TilingWMExtension extends Extension {
                 });
         } catch (_e) {
             this._dropdownHeightChangedId = 0;
-        }
-        try {
-            this._dropdownStageEventId = global.stage.connect(
-                'captured-event', (_actor, event) => this._onDropdownStageEvent(event));
-        } catch (_e) {
-            this._dropdownStageEventId = 0;
         }
     }
 
@@ -3376,6 +3369,13 @@ export default class TilingWMExtension extends Extension {
         this._removeBlur(win);
         this._removeBorder(win);
         this._dropdownWin = win;
+        this._dropdownGeometryIds = [];
+        this._dropdownGeometryIds.push(win.connect('size-changed', () => {
+            if (this._dropdownWin === win) this._applyDropdownEffects(win);
+        }));
+        this._dropdownGeometryIds.push(win.connect('position-changed', () => {
+            if (this._dropdownWin === win) this._applyDropdownEffects(win);
+        }));
         this._dropdownUnmanagedId = win.connect('unmanaged', () => {
             if (this._dropdownWin === win) {
                 this._dropdownWin = null;
@@ -3403,32 +3403,11 @@ export default class TilingWMExtension extends Extension {
     }
 
     _showDropdownTerminal(win) {
-        this._positionDropdownTerminal(win);
         try { win.unminimize(); } catch (_e) {}
         try { win.make_above(); } catch (_e) {}
+        this._positionDropdownTerminal(win);
         try { win.activate(global.get_current_time()); } catch (_e) {}
         this._applyDropdownEffects(win);
-    }
-
-    _onDropdownStageEvent(event) {
-        if (this._destroyed) return Clutter.EVENT_PROPAGATE;
-        if (event.type() !== Clutter.EventType.BUTTON_PRESS) return Clutter.EVENT_PROPAGATE;
-        if (!this._settings.get_boolean('dropdown-terminal-click-dismiss')) return Clutter.EVENT_PROPAGATE;
-        const win = this._dropdownWin;
-        if (!win || win.minimized) return Clutter.EVENT_PROPAGATE;
-        try {
-            if (Main.overview && Main.overview.visible) return Clutter.EVENT_PROPAGATE;
-        } catch (_e) {}
-        const [x, y] = event.get_coords();
-        const frame = win.get_frame_rect();
-        const pad = 8;
-        if (x >= frame.x - pad && x <= frame.x + frame.width + pad &&
-            y >= frame.y - pad && y <= frame.y + frame.height + pad) {
-            return Clutter.EVENT_PROPAGATE;
-        }
-        this._debugLog('dropdown: click outside, dismissing');
-        try { win.minimize(); } catch (_e) {}
-        return Clutter.EVENT_PROPAGATE;
     }
 
     _dropdownRect() {
@@ -3460,7 +3439,8 @@ export default class TilingWMExtension extends Extension {
             let rect = null;
             try { rect = this._dropdownRect(); } catch (_e) {}
             if (!rect) return false;
-            this._debugLog(`dropdown: rect=(${rect.x},${rect.y},${rect.width},${rect.height})`);
+            const before = win.get_frame_rect();
+            this._debugLog(`dropdown: position target=(${rect.x},${rect.y},${rect.width},${rect.height}) before=(${before.x},${before.y},${before.width},${before.height}) try=${retries}`);
             try {
                 win.move_resize_frame(true, rect.x, rect.y, rect.width, rect.height);
             } catch (_e) {}
@@ -3468,11 +3448,13 @@ export default class TilingWMExtension extends Extension {
             const done = frame.x === rect.x && frame.y === rect.y &&
                 frame.width === rect.width && frame.height === rect.height;
             if (done) {
+                this._debugLog(`dropdown: position settled at (${frame.x},${frame.y},${frame.width},${frame.height})`);
                 this._applyDropdownEffects(win);
                 return false;
             }
             retries++;
-            if (retries >= 10) {
+            if (retries >= 20) {
+                this._debugLog(`dropdown: position gave up after ${retries} tries, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
                 this._applyDropdownEffects(win);
                 return false;
             }
@@ -3499,6 +3481,12 @@ export default class TilingWMExtension extends Extension {
         this._clearDropdownWaiters();
         const win = this._dropdownWin;
         if (!win) return;
+        if (this._dropdownGeometryIds) {
+            for (const id of this._dropdownGeometryIds) {
+                try { win.disconnect(id); } catch (_e) {}
+            }
+            this._dropdownGeometryIds = null;
+        }
         if (this._dropdownUnmanagedId) {
             try { win.disconnect(this._dropdownUnmanagedId); } catch (_e) {}
             this._dropdownUnmanagedId = 0;
