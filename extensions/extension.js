@@ -259,6 +259,8 @@ export default class TilingWMExtension extends Extension {
         this._layoutPopupHideId = 0;
         this._warningPopup = null;
         this._warningPopupId = 0;
+        this._pendingWarning = null;
+        this._pendingWarningOverviewId = 0;
         this._origWorkspaceSwitcherDisplay = null;
         this._dropdownWin = null;
         this._dropdownUnmanagedId = 0;
@@ -406,6 +408,11 @@ export default class TilingWMExtension extends Extension {
             try { this._warningPopup.destroy(); } catch (_e) {}
             this._warningPopup = null;
         }
+        if (this._pendingWarningOverviewId) {
+            try { Main.overview.disconnect(this._pendingWarningOverviewId); } catch (_e) {}
+            this._pendingWarningOverviewId = 0;
+        }
+        this._pendingWarning = null;
         this._scratchpadWindows = null;
         this._scratchpadVisible = false;
         this._stopBorderAnimation();
@@ -3381,6 +3388,29 @@ export default class TilingWMExtension extends Extension {
     }
 
     _showWarningPopup(title, subtitle, hint) {
+        try {
+            if (Main.overview && Main.overview.visible) {
+                this._pendingWarning = { title, subtitle, hint };
+                if (!this._pendingWarningOverviewId) {
+                    this._pendingWarningOverviewId = Main.overview.connect('hidden', () => {
+                        if (this._pendingWarningOverviewId) {
+                            try { Main.overview.disconnect(this._pendingWarningOverviewId); } catch (_e) {}
+                            this._pendingWarningOverviewId = 0;
+                        }
+                        if (this._pendingWarning) {
+                            const pending = this._pendingWarning;
+                            this._pendingWarning = null;
+                            this._displayWarningPopup(pending.title, pending.subtitle, pending.hint);
+                        }
+                    });
+                }
+                return;
+            }
+        } catch (_e) {}
+        this._displayWarningPopup(title, subtitle, hint);
+    }
+
+    _displayWarningPopup(title, subtitle, hint) {
         if (this._warningPopup) {
             try { this._warningPopup.remove_all_transitions(); } catch (_e) {}
             try { this._warningPopup.destroy(); } catch (_e) {}
