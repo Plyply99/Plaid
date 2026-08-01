@@ -370,12 +370,6 @@
       <description>Show or hide the drop-down terminal on the active monitor</description>
     </key>
 
-    <key name="dropdown-terminal-focus-lock" type="b">
-      <default>false</default>
-      <summary>Keep focus on drop-down terminal</summary>
-      <description>While the drop-down terminal is open and focused, focus is returned to it when a click would move it away. Deliberate keyboard switching and sloppy-focus hovering are respected. Dismiss the terminal to release.</description>
-    </key>
-
     <key name="dropdown-terminal-click-dismiss" type="b">
       <default>true</default>
       <summary>Click outside to dismiss</summary>
