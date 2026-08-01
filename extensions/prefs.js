@@ -577,7 +577,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const ddtFocusLockRow = new Adw.SwitchRow({
             title: _('Keep Focus'),
-            subtitle: _('Keep focus on the drop-down terminal until it is dismissed'),
+            subtitle: _('Clicks can\'t take focus from the drop-down terminal'),
         });
         ddtGroup.add(ddtFocusLockRow);
         settings.bind('dropdown-terminal-focus-lock', ddtFocusLockRow, 'active', Gio.SettingsBindFlags.DEFAULT);

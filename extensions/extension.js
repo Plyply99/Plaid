@@ -263,9 +263,11 @@ export default class TilingWMExtension extends Extension {
         this._dropdownPendingId = 0;
         this._dropdownWaiters = new Map();
         this._dropdownSettingsChangedId = 0;
+        this._dropdownHeightChangedId = 0;
         this._dropdownLocked = false;
         this._dropdownStealId = 0;
         this._dropdownStageEventId = 0;
+        this._dropdownLastPress = 0;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -374,6 +376,10 @@ export default class TilingWMExtension extends Extension {
         if (this._dropdownSettingsChangedId) {
             try { this._settings.disconnect(this._dropdownSettingsChangedId); } catch (_e) {}
             this._dropdownSettingsChangedId = 0;
+        }
+        if (this._dropdownHeightChangedId) {
+            try { this._settings.disconnect(this._dropdownHeightChangedId); } catch (_e) {}
+            this._dropdownHeightChangedId = 0;
         }
         if (this._warningPopupId) {
             GLib.source_remove(this._warningPopupId);
@@ -3266,8 +3272,21 @@ export default class TilingWMExtension extends Extension {
             this._dropdownSettingsChangedId = 0;
         }
         try {
+            this._dropdownHeightChangedId = this._settings.connect(
+                'changed::dropdown-terminal-height',
+                () => {
+                    const win = this._dropdownWin;
+                    if (win && !win.minimized) {
+                        this._debugLog('dropdown: height setting changed, re-applying');
+                        this._positionDropdownTerminal(win);
+                    }
+                });
+        } catch (_e) {
+            this._dropdownHeightChangedId = 0;
+        }
+        try {
             this._dropdownStageEventId = global.stage.connect(
-                'event', (_actor, event) => this._onDropdownStageEvent(event));
+                'captured-event', (_actor, event) => this._onDropdownStageEvent(event));
         } catch (_e) {
             this._dropdownStageEventId = 0;
         }
@@ -3410,6 +3429,7 @@ export default class TilingWMExtension extends Extension {
     _handleDropdownFocusSteal() {
         if (this._destroyed || !this._dropdownLocked) return;
         if (!this._settings.get_boolean('dropdown-terminal-focus-lock')) return;
+        if (GLib.get_monotonic_time() - this._dropdownLastPress > 400000) return;
         const win = this._dropdownWin;
         if (!win || win.minimized) return;
         if (global.display.focus_window === win) return;
@@ -3433,6 +3453,7 @@ export default class TilingWMExtension extends Extension {
     _onDropdownStageEvent(event) {
         if (this._destroyed) return Clutter.EVENT_PROPAGATE;
         if (event.type() !== Clutter.EventType.BUTTON_PRESS) return Clutter.EVENT_PROPAGATE;
+        this._dropdownLastPress = GLib.get_monotonic_time();
         if (!this._settings.get_boolean('dropdown-terminal-click-dismiss')) return Clutter.EVENT_PROPAGATE;
         const win = this._dropdownWin;
         if (!win || win.minimized) return Clutter.EVENT_PROPAGATE;
