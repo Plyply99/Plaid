@@ -3836,19 +3836,20 @@ export default class TilingWMExtension extends Extension {
                             const doLog = (opts && opts.recheck) ||
                                 (changed && (!logged || key !== logged.key || now - logged.t > 250));
                             const prevRealized = clone._bgPrevRealized;
-                            clone.set_size(w, h);
+                            clone.set_size(1, 1);
                             clone.set_position(x, y);
+                            clone.set_scale(w, h);
                             const rw = Math.round(clone.get_width());
                             const rh = Math.round(clone.get_height());
                             const rx = Math.round(clone.get_x());
                             const ry = Math.round(clone.get_y());
                             if (doLog) {
                                 this._bgLog(`clone fit[${cls} ${name}] container ${cw}x${ch} aspect ${cA.toFixed(3)} ` +
-                                    `-> req ${w}x${h}@${x},${y} realized ${rw}x${rh}@${rx},${ry}` +
+                                    `-> scale ${w}x${h}@${x},${y} box ${rw}x${rh}@${rx},${ry}` +
                                     (prevRealized ? ` prev ${prevRealized}` : ''));
                                 clone._bgFitLogged = { key, t: now };
                             }
-                            clone._bgPrevRealized = `${rw}x${rh}@${rx},${ry}`;
+                            clone._bgPrevRealized = `${w}x${h}@${x},${y}`;
                         } catch (e) {
                             this._bgLog(`clone fit error: ${e}`);
                         }
