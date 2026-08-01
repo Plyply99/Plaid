@@ -3773,7 +3773,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const state = { pipeline: null, sink: null, texture, actor, content, w: union.w, h: union.h, pollId: 0 };
+        const state = { pipeline: null, sink: null, texture, actor, content, w: union.w, h: union.h, pollId: 0, uploadFailedLogged: false };
 
         const onFrame = () => {
             if (this._destroyed || this._bgVideo !== state) return;
@@ -3790,7 +3790,11 @@ export default class TilingWMExtension extends Extension {
                 state.content.invalidate();
                 state.actor.queue_redraw();
             } catch (e) {
-                this._debugLog(`background video: frame upload failed: ${e}`);
+                if (!state.uploadFailedLogged) {
+                    state.uploadFailedLogged = true;
+                    log(`[plaid] background video: frame upload failed: ${e}`);
+                    this._showPopup('Animated Background Failed', `Frame upload failed: ${e}`);
+                }
             } finally {
                 buffer.unmap(info);
             }
