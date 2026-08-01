@@ -1788,29 +1788,16 @@ export default class TilingWMExtension extends Extension {
 
         const focusWindow = global.display.focus_window;
 
-        const activeWidth = this._settings.get_int('active-border-width');
-        const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
-        const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#62a0ea';
-        const inactiveWidth = this._settings.get_int('inactive-border-width');
-        const inactiveColor = (this._settings.get_strv('inactive-border-color') || [])[0] || '#555555';
-        const inactiveColor2 = (this._settings.get_strv('inactive-border-color-2') || [])[0] || '#777777';
         const borderRadius = this._settings.get_int('border-radius');
         const roundedCorners = this._settings.get_boolean('rounded-corners');
         const bordersEnabled = this._settings.get_boolean('borders-enabled');
         const blurEnabled = this._settings.get_boolean('window-blur');
-        const gradient = this._settings.get_boolean('gradient-borders');
-        const gradientDir = this._settings.get_string('gradient-direction');
 
         const ws = global.workspace_manager.get_active_workspace();
         if (!ws) return;
 
         const windows = this._getWindowsForWorkspace(ws);
         for (const win of windows) {
-            if (this._dropdownWin === win) {
-                this._removeMask(win);
-                this._removeBlur(win);
-                continue;
-            }
             if (win.is_fullscreen()) {
                 this._removeMask(win);
                 this._removeBlur(win);
@@ -1831,48 +1818,8 @@ export default class TilingWMExtension extends Extension {
             }
 
             const isFocused = win === focusWindow;
-            const borderWidth = isFocused ? activeWidth : inactiveWidth;
-            const color1 = isFocused ? activeColor : inactiveColor;
-            const color2 = isFocused ? activeColor2 : inactiveColor2;
-
-            if (!bordersEnabled || borderWidth === 0) continue;
-
-            const buffer = win.get_buffer_rect();
-            const offsetX = frame.x - buffer.x;
-            const offsetY = frame.y - buffer.y;
-
-            let border;
-            if (gradient) {
-                border = new St.DrawingArea({
-                    x: offsetX - borderWidth,
-                    y: offsetY - borderWidth,
-                    width: frame.width + borderWidth * 2,
-                    height: frame.height + borderWidth * 2,
-                    reactive: false,
-                    visible: true,
-                });
-                border._plaidBorder = {
-                    color1: this._hexToRgb(color1),
-                    color2: this._hexToRgb(color2),
-                    width: borderWidth,
-                    radius: borderRadius,
-                    direction: gradientDir,
-                };
-                border.connect('repaint', () => this._repaintBorder(border));
-            } else {
-                border = new St.Widget({
-                    name: 'tiling-border',
-                    x: offsetX - borderWidth,
-                    y: offsetY - borderWidth,
-                    width: frame.width + borderWidth * 2,
-                    height: frame.height + borderWidth * 2,
-                    style: `border: ${borderWidth}px solid ${color1}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
-                    reactive: false,
-                    visible: true,
-                });
-            }
-            actor.add_child(border);
-            this._windowBorders.set(win, border);
+            if (bordersEnabled && this._ensureWindowBorder(win, actor, frame, isFocused))
+                continue;
         }
 
         if (!roundedCorners || borderRadius <= 0)
@@ -1881,8 +1828,95 @@ export default class TilingWMExtension extends Extension {
         if (!blurEnabled)
             this._removeAllBlurs();
 
+        if (this._dropdownWin)
+            this._applyDropdownEffects(this._dropdownWin);
+
         this._raiseFloatingWindows(ws);
         this._syncBorderAnimation();
+    }
+
+    _ensureWindowBorder(win, actor, frame, isFocused) {
+        if (!frame || frame.width === 0 || frame.height === 0) return false;
+        const activeWidth = this._settings.get_int('active-border-width');
+        const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
+        const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#62a0ea';
+        const inactiveWidth = this._settings.get_int('inactive-border-width');
+        const inactiveColor = (this._settings.get_strv('inactive-border-color') || [])[0] || '#555555';
+        const inactiveColor2 = (this._settings.get_strv('inactive-border-color-2') || [])[0] || '#777777';
+        const borderRadius = this._settings.get_int('border-radius');
+        const gradient = this._settings.get_boolean('gradient-borders');
+        const gradientDir = this._settings.get_string('gradient-direction');
+
+        const borderWidth = isFocused ? activeWidth : inactiveWidth;
+        const color1 = isFocused ? activeColor : inactiveColor;
+        const color2 = isFocused ? activeColor2 : inactiveColor2;
+
+        if (borderWidth === 0) return false;
+
+        const buffer = win.get_buffer_rect();
+        const offsetX = frame.x - buffer.x;
+        const offsetY = frame.y - buffer.y;
+
+        let border;
+        if (gradient) {
+            border = new St.DrawingArea({
+                x: offsetX - borderWidth,
+                y: offsetY - borderWidth,
+                width: frame.width + borderWidth * 2,
+                height: frame.height + borderWidth * 2,
+                reactive: false,
+                visible: true,
+            });
+            border._plaidBorder = {
+                color1: this._hexToRgb(color1),
+                color2: this._hexToRgb(color2),
+                width: borderWidth,
+                radius: borderRadius,
+                direction: gradientDir,
+            };
+            border.connect('repaint', () => this._repaintBorder(border));
+        } else {
+            border = new St.Widget({
+                name: 'tiling-border',
+                x: offsetX - borderWidth,
+                y: offsetY - borderWidth,
+                width: frame.width + borderWidth * 2,
+                height: frame.height + borderWidth * 2,
+                style: `border: ${borderWidth}px solid ${color1}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
+                reactive: false,
+                visible: true,
+            });
+        }
+        actor.add_child(border);
+        this._windowBorders.set(win, border);
+        return true;
+    }
+
+    _applyDropdownEffects(win) {
+        if (!this._settings || this._destroyed || !win) return;
+        const actor = win.get_compositor_private();
+        if (!actor) return;
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) return;
+        const borderRadius = this._settings.get_int('border-radius');
+        const roundedCorners = this._settings.get_boolean('rounded-corners');
+        const blurEnabled = this._settings.get_boolean('window-blur');
+        const bordersEnabled = this._settings.get_boolean('borders-enabled');
+
+        if (blurEnabled)
+            this._ensureWindowBlur(win, actor);
+
+        if (roundedCorners && borderRadius > 0) {
+            this._ensureWindowMask(win, actor, borderRadius + 1);
+        } else {
+            this._removeMask(win);
+        }
+
+        if (!blurEnabled)
+            this._removeBlur(win);
+
+        if (bordersEnabled && !this._ensureWindowBorder(win, actor, frame, true))
+            this._removeBorder(win);
     }
 
     _debugLog(...args) {
@@ -3338,16 +3372,57 @@ export default class TilingWMExtension extends Extension {
     }
 
     _showDropdownTerminal(win) {
-        try {
-            const mon = this._dropdownMonitor();
-            const heightPct = this._settings.get_int('dropdown-terminal-height') || 33;
-            const height = Math.floor(mon.height * heightPct / 100);
-            this._debugLog(`dropdown: monitor=(${mon.x},${mon.y},${mon.width},${mon.height}) hPct=${heightPct} -> rect=(${mon.x},${mon.y},${mon.width},${height})`);
-            win.move_resize_frame(true, mon.x, mon.y, mon.width, height);
-        } catch (_e) {}
+        this._positionDropdownTerminal(win);
         try { win.unminimize(); } catch (_e) {}
         try { win.make_above(); } catch (_e) {}
         try { win.activate(global.get_current_time()); } catch (_e) {}
+        this._applyDropdownEffects(win);
+    }
+
+    _dropdownRect() {
+        const mon = this._dropdownMonitor();
+        const heightPct = this._settings.get_int('dropdown-terminal-height') || 33;
+        const height = Math.floor(mon.height * heightPct / 100);
+        let panelHeight = 0;
+        try {
+            panelHeight = Math.max(0, Main.panel.get_height() || 48);
+        } catch (_e) {
+            panelHeight = 48;
+        }
+        return { x: mon.x, y: mon.y + panelHeight, width: mon.width, height };
+    }
+
+    _positionDropdownTerminal(win) {
+        let retries = 0;
+        const apply = () => {
+            if (this._destroyed) return false;
+            let rect = null;
+            try { rect = this._dropdownRect(); } catch (_e) {}
+            if (!rect) return false;
+            this._debugLog(`dropdown: rect=(${rect.x},${rect.y},${rect.width},${rect.height})`);
+            try {
+                win.move_resize_frame(true, rect.x, rect.y, rect.width, rect.height);
+            } catch (_e) {}
+            const frame = win.get_frame_rect();
+            const done = frame.x === rect.x && frame.y === rect.y &&
+                frame.width === rect.width && frame.height === rect.height;
+            if (done) {
+                this._applyDropdownEffects(win);
+                return false;
+            }
+            retries++;
+            if (retries >= 10) {
+                this._applyDropdownEffects(win);
+                return false;
+            }
+            return true;
+        };
+        const retry = () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
+        };
+        if (apply())
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
     }
 
     _dropdownMonitor() {
@@ -3367,6 +3442,9 @@ export default class TilingWMExtension extends Extension {
             try { win.disconnect(this._dropdownUnmanagedId); } catch (_e) {}
             this._dropdownUnmanagedId = 0;
         }
+        this._removeBorder(win);
+        this._removeMask(win);
+        this._removeBlur(win);
         try { win.skip_taskbar = false; } catch (_e) {}
         try { win.on_all_workspaces = false; } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
