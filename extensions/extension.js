@@ -1853,12 +1853,11 @@ export default class TilingWMExtension extends Extension {
     _handleFloatMaximize(win) {
         if (this._gappedMaxSet.has(win)) {
             const saved = this._floatMaxRects.get(win);
-            this._floatMaxRects.delete(win);
             try { win.unmaximize(); } catch (_e) {}
             if (saved && saved.w > 0) {
                 this._debugLog(`float maximize: restoring (${saved.x},${saved.y},${saved.w},${saved.h})`);
-                this._applyFloatRect(win, saved.x, saved.y, saved.w, saved.h, () => {
-                    this._gappedMaxSet.delete(win);
+                this._applyFloatRect(win, saved.x, saved.y, saved.w, saved.h, (success) => {
+                    if (success) this._gappedMaxSet.delete(win);
                 });
             } else {
                 this._gappedMaxSet.delete(win);
@@ -1866,8 +1865,8 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         if (!this._floatMaxRects.has(win)) {
-            const f = win.get_frame_rect();
-            this._floatMaxRects.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+            this._debugLog('float maximize: no saved rect, leaving window normally maximized');
+            return;
         }
         const ws = win.get_workspace();
         if (!ws) return;
@@ -1894,12 +1893,12 @@ export default class TilingWMExtension extends Extension {
             this._moveWindow(win, x, y, w, h);
             const f = win.get_frame_rect();
             if (f.x === x && f.y === y && f.width === w && f.height === h) {
-                if (onDone) { try { onDone(); } catch (_e) {} }
+                if (onDone) { try { onDone(true); } catch (_e) {} }
                 return false;
             }
             retries++;
             if (retries >= 15) {
-                if (onDone) { try { onDone(); } catch (_e) {} }
+                if (onDone) { try { onDone(false); } catch (_e) {} }
                 return false;
             }
             return true;
