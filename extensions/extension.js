@@ -3798,7 +3798,10 @@ export default class TilingWMExtension extends Extension {
             let srcW = 0, srcH = 0;
             try {
                 const discoverer = new GstPbutils.Discoverer();
-                const info = discoverer.discover_uri(`file://${path}`);
+                let uri = null;
+                try { uri = Gst.uri_construct('file', path); } catch (_e2) {}
+                if (!uri) uri = `file://${path}`;
+                const info = discoverer.discover_uri(uri);
                 const streams = info.get_video_streams();
                 if (streams.length > 0) {
                     const structure = streams[0].get_caps().get_structure(0);
@@ -3807,10 +3810,12 @@ export default class TilingWMExtension extends Extension {
                     if (okW && okH) { srcW = w; srcH = h; }
                 }
             } catch (e) {
-                this._debugLog(`background video: discovery failed: ${e}`);
+                log(`[plaid] background video: discovery failed: ${e}`);
+                this._showPopup('Animated Background Failed', `Could not read video: ${path}`);
             }
             if (srcW <= 0 || srcH <= 0) {
-                this._debugLog('background video: no video stream found');
+                log('[plaid] background video: no video stream found');
+                this._showPopup('Animated Background Failed', 'No video stream found in this file');
                 this._stopBackgroundVideo();
                 return;
             }
@@ -3859,7 +3864,9 @@ export default class TilingWMExtension extends Extension {
                 } else if (msg.type === Gst.MessageType.ERROR) {
                     let err = null;
                     try { [err] = msg.parse_error(); } catch (_e2) {}
-                    this._debugLog(`background video error: ${err ? err.message : 'unknown'}`);
+                    const reason = err ? err.message : 'unknown';
+                    log(`[plaid] background video error: ${reason}`);
+                    this._showPopup('Animated Background Failed', `Could not play video (missing decoder?): ${reason}`);
                     this._stopBackgroundVideo();
                 }
             });
