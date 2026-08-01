@@ -11,7 +11,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as WorkspaceAnimation from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
+import * as Background from 'resource:///org/gnome/shell/ui/background.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup } from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -379,12 +379,12 @@ export default class TilingWMExtension extends Extension {
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
         this._stopBackgroundVideo();
-        if (this._origWorkspaceBackgroundInit) {
+        if (this._origBackgroundManagerInit) {
             try {
-                WorkspaceAnimation.WorkspaceBackground.prototype._init =
-                    this._origWorkspaceBackgroundInit;
+                Background.BackgroundManager.prototype._init =
+                    this._origBackgroundManagerInit;
             } catch (_e) {}
-            this._origWorkspaceBackgroundInit = null;
+            this._origBackgroundManagerInit = null;
         }
         if (this._bgVideoChangedId) {
             try { this._settings.disconnect(this._bgVideoChangedId); } catch (_e) {}
@@ -3785,23 +3785,32 @@ export default class TilingWMExtension extends Extension {
             this._bgFitChangedId = 0;
         }
         try {
-            if (!this._origWorkspaceBackgroundInit && WorkspaceAnimation.WorkspaceBackground) {
-                const orig = WorkspaceAnimation.WorkspaceBackground.prototype._init;
-                this._origWorkspaceBackgroundInit = orig;
+            if (!this._origBackgroundManagerInit && Background.BackgroundManager) {
+                const orig = Background.BackgroundManager.prototype._init;
+                this._origBackgroundManagerInit = orig;
                 const getVideoActor = () =>
                     this._bgVideo ? this._bgVideo.actor : null;
-                WorkspaceAnimation.WorkspaceBackground.prototype._init = function (...args) {
+                Background.BackgroundManager.prototype._init = function (...args) {
                     orig.apply(this, args);
+                    const container = args[0] && args[0].container;
                     const video = getVideoActor();
-                    if (video) {
+                    if (container && video && container !== Main.layoutManager._backgroundGroup) {
                         try {
-                            this.add_child(new Clutter.Clone({ source: video }));
+                            const clone = new Clutter.Clone({ source: video });
+                            for (let i = 0; i < 4; i++) {
+                                clone.add_constraint(new Clutter.BindConstraint({
+                                    source: container,
+                                    coordinate: i,
+                                    offset: 0,
+                                }));
+                            }
+                            container.add_child(clone);
                         } catch (_e) {}
                     }
                 };
             }
         } catch (_e) {
-            this._origWorkspaceBackgroundInit = null;
+            this._origBackgroundManagerInit = null;
         }
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
