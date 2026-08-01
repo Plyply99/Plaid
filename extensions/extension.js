@@ -3800,7 +3800,7 @@ export default class TilingWMExtension extends Extension {
                 const data = info.get_data();
                 state.texture.set_region(0, 0, 0, 0,
                     state.w, state.h, state.w, state.h,
-                    Cogl.PixelFormat.RGBA_8888, data);
+                    Cogl.PixelFormat.RGBA_8888, state.w * 4, data);
                 state.content.invalidate();
                 state.actor.queue_redraw();
             } catch (e) {
