@@ -28,6 +28,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         this._buildFlairPage(window, settings);
         this._buildKeybindingsPage(window, settings);
         this._buildFloatPage(window, settings);
+        this._buildBackgroundPage(window, settings);
     }
 
     _buildGeneralPage(window, settings) {
@@ -876,6 +877,81 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
 
         this._rebuildFloatList(settings, titleGroup, addTitleRow, 'float-titles', '_floatTitleRows');
+    }
+
+    _buildBackgroundPage(window, settings) {
+        const page = new Adw.PreferencesPage({
+            title: _('Background'),
+            icon_name: 'video-display-symbolic',
+        });
+        window.add(page);
+
+        const group = new Adw.PreferencesGroup({
+            title: _('Animated Background'),
+            description: _('Play a looping video (or GIF/WebP animation) as the desktop background. Non-interactive, sits behind all windows.'),
+        });
+        page.add(group);
+
+        const videoRow = new Adw.ActionRow({
+            title: _('Video File'),
+            subtitle: settings.get_string('background-animated-video') || _('None — static wallpaper'),
+            activatable: false,
+        });
+        const chooseButton = new Gtk.Button({
+            label: _('Choose…'),
+            valign: Gtk.Align.CENTER,
+        });
+        const clearButton = new Gtk.Button({
+            label: _('Clear'),
+            valign: Gtk.Align.CENTER,
+            sensitive: !!settings.get_string('background-animated-video'),
+        });
+        videoRow.add_suffix(clearButton);
+        videoRow.add_suffix(chooseButton);
+        group.add(videoRow);
+
+        const updateVideoSubtitle = () => {
+            const path = settings.get_string('background-animated-video');
+            videoRow.set_subtitle(path || _('None — static wallpaper'));
+            clearButton.set_sensitive(!!path);
+        };
+
+        chooseButton.connect('clicked', () => {
+            const dialog = new Gtk.FileDialog({
+                title: _('Choose Background Video'),
+            });
+            dialog.open(window, null, (d, res) => {
+                try {
+                    const file = dialog.open_finish(res);
+                    if (file) {
+                        settings.set_string('background-animated-video', file.get_path());
+                        updateVideoSubtitle();
+                    }
+                } catch (_e) {}
+            });
+        });
+        clearButton.connect('clicked', () => {
+            settings.set_string('background-animated-video', '');
+            updateVideoSubtitle();
+        });
+        settings.connect('changed::background-animated-video', () => updateVideoSubtitle());
+
+        const fitModel = new Gtk.StringList({
+            strings: [_('Cover (crop, no distortion)'), _('Stretch (fill screen)'), _('Contain (fit inside, bars)')],
+        });
+        const fitRow = new Adw.ComboRow({
+            title: _('Fit'),
+            subtitle: _('How the background fills the screen'),
+            model: fitModel,
+        });
+        const fitValues = ['cover', 'stretch', 'contain'];
+        const fitIndex = Math.max(0, fitValues.indexOf(settings.get_string('background-animated-fit')));
+        fitRow.set_selected(fitIndex);
+        fitRow.connect('notify::selected', () => {
+            const value = fitValues[fitRow.get_selected()];
+            if (value) settings.set_string('background-animated-fit', value);
+        });
+        group.add(fitRow);
     }
 
     _showPickChoiceDialog(window, settings, cls, title, onAdd, onDone) {

@@ -22,6 +22,8 @@ all built in.
 - **Maximize respects gaps**: maximizing a window fills the work area within
   the per-edge gaps instead of flush to the edges; floating windows restore
   their exact original geometry on toggle
+- **Animated background**: play a looping video (or GIF/WebP) as the desktop
+  background — non-interactive, behind all windows, cover/stretch/contain fit
 - **Mouse resize/swap**, **scratchpad**, **popups**, **cursor warp**
 
 ## Install

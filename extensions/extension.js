@@ -3,6 +3,7 @@ import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Gst from 'gi://Gst';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
@@ -268,6 +269,9 @@ export default class TilingWMExtension extends Extension {
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
         this._anyGrabOp = null;
+        this._bgVideo = null;
+        this._bgVideoChangedId = 0;
+        this._bgFitChangedId = 0;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -291,6 +295,7 @@ export default class TilingWMExtension extends Extension {
         this._suppressWorkspaceSwitcherPopup();
         this._initWorkspacePopupWarning();
         this._initDropdownTerminal();
+        this._initBackgroundVideo();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -368,6 +373,15 @@ export default class TilingWMExtension extends Extension {
         this._jpSettingsChangedId = 0;
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
+        this._stopBackgroundVideo();
+        if (this._bgVideoChangedId) {
+            try { this._settings.disconnect(this._bgVideoChangedId); } catch (_e) {}
+            this._bgVideoChangedId = 0;
+        }
+        if (this._bgFitChangedId) {
+            try { this._settings.disconnect(this._bgFitChangedId); } catch (_e) {}
+            this._bgFitChangedId = 0;
+        }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
             GLib.source_remove(this._dropdownPendingId);
@@ -3680,6 +3694,229 @@ export default class TilingWMExtension extends Extension {
         try { win.on_all_workspaces = false; } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
         this._dropdownWin = null;
+    }
+
+    // --- Animated Background ---
+
+    _initBackgroundVideo() {
+        try {
+            this._bgVideoChangedId = this._settings.connect(
+                'changed::background-animated-video',
+                () => this._restartBackgroundVideo());
+        } catch (_e) {
+            this._bgVideoChangedId = 0;
+        }
+        try {
+            this._bgFitChangedId = this._settings.connect(
+                'changed::background-animated-fit',
+                () => this._restartBackgroundVideo());
+        } catch (_e) {
+            this._bgFitChangedId = 0;
+        }
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
+            this._startBackgroundVideo();
+            return false;
+        });
+    }
+
+    _restartBackgroundVideo() {
+        this._stopBackgroundVideo();
+        this._startBackgroundVideo();
+    }
+
+    _backgroundUnionSize() {
+        const monitors = global.display.get_n_monitors();
+        let maxX = 0, maxY = 0;
+        for (let i = 0; i < monitors; i++) {
+            const geom = global.display.get_monitor_geometry(i);
+            maxX = Math.max(maxX, geom.x + geom.width);
+            maxY = Math.max(maxY, geom.y + geom.height);
+        }
+        return { w: maxX, h: maxY };
+    }
+
+    _startBackgroundVideo() {
+        if (this._destroyed || !this._settings) return;
+        if (this._bgVideo) return;
+        const path = this._settings.get_string('background-animated-video');
+        if (!path) return;
+        try { Gst.init(null); } catch (_e) {}
+        const union = this._backgroundUnionSize();
+        if (union.w === 0 || union.h === 0) return;
+
+        const fit = this._settings.get_string('background-animated-fit') || 'cover';
+
+        let texture = null;
+        let actor = null;
+        try {
+            const coglContext = Clutter.get_default_backend().get_cogl_context();
+            texture = Cogl.Texture2D.new_with_size(coglContext, union.w, union.h);
+        } catch (e) {
+            this._debugLog(`background video: texture creation failed: ${e}`);
+            return;
+        }
+        try {
+            actor = new Clutter.Actor({ reactive: false, visible: true });
+            actor.set_size(union.w, union.h);
+            const content = new Clutter.TextureContent({ texture });
+            actor.set_content(content);
+            Main.layoutManager.uiGroup.add_child(actor);
+            Main.layoutManager.uiGroup.set_child_below_sibling(actor, Main.layoutManager.windowGroup);
+        } catch (e) {
+            this._debugLog(`background video: actor creation failed: ${e}`);
+            try { actor && actor.destroy(); } catch (_e2) {}
+            return;
+        }
+
+        const state = { pipeline: null, texture, actor, content, w: union.w, h: union.h, linked: false };
+
+        const onFrame = () => {
+            if (this._destroyed || this._bgVideo !== state) return Gst.FlowReturn.OK;
+            const sink = state.sink;
+            const sample = sink.emit('pull-sample');
+            if (!sample) return Gst.FlowReturn.OK;
+            const buffer = sample.get_buffer();
+            const [ok, info] = buffer.map(Gst.MapFlags.READ);
+            if (!ok) return Gst.FlowReturn.OK;
+            try {
+                const data = info.get_data().get_data();
+                state.texture.set_region(0, 0, 0, 0,
+                    state.w, state.h, state.w, state.h,
+                    Cogl.PixelFormat.RGBA_8888, data);
+                state.content.invalidate();
+                state.actor.queue_redraw();
+            } catch (e) {
+                this._debugLog(`background video: frame upload failed: ${e}`);
+            } finally {
+                buffer.unmap(info);
+            }
+            return Gst.FlowReturn.OK;
+        };
+
+        let pipeline = null;
+        try {
+            pipeline = new Gst.Pipeline();
+            const src = Gst.ElementFactory.make('filesrc', 'src');
+            src.set_property('location', path);
+            const decode = Gst.ElementFactory.make('decodebin', 'dec');
+            pipeline.add(src);
+            pipeline.add(decode);
+            src.link(decode);
+            state.pipeline = pipeline;
+            state.sink = null;
+
+            decode.connect('pad-added', (_dec, pad) => {
+                if (state.linked || this._destroyed) return;
+                const caps = pad.get_current_caps();
+                if (!caps) return;
+                const structure = caps.get_structure(0);
+                if (!structure || structure.get_name() !== 'video/x-raw') return;
+                state.linked = true;
+                const [okW, srcW] = structure.get_int('width');
+                const [okH, srcH] = structure.get_int('height');
+                if (!okW || !okH || srcW <= 0 || srcH <= 0) {
+                    this._stopBackgroundVideo();
+                    return;
+                }
+                const w = state.w, h = state.h;
+                let sw = w, sh = h;
+                let box = null;
+                if (fit === 'cover' || fit === 'contain') {
+                    const scale = fit === 'cover'
+                        ? Math.max(w / srcW, h / srcH)
+                        : Math.min(w / srcW, h / srcH);
+                    sw = Math.round(srcW * scale);
+                    sh = Math.round(srcH * scale);
+                    const leftoverW = w - sw;
+                    const leftoverH = h - sh;
+                    box = Gst.ElementFactory.make('videobox', 'box');
+                    box.set_property('border-alpha', 0);
+                    pipeline.add(box);
+                    if (fit === 'cover') {
+                        box.set_property('left', Math.floor(-leftoverW / 2));
+                        box.set_property('right', Math.ceil(-leftoverW / 2));
+                        box.set_property('top', Math.floor(-leftoverH / 2));
+                        box.set_property('bottom', Math.ceil(-leftoverH / 2));
+                    } else {
+                        box.set_property('left', Math.floor(leftoverW / 2));
+                        box.set_property('right', Math.ceil(leftoverW / 2));
+                        box.set_property('top', Math.floor(leftoverH / 2));
+                        box.set_property('bottom', Math.ceil(leftoverH / 2));
+                    }
+                }
+                const convert = Gst.ElementFactory.make('videoconvert', 'convert');
+                const scaleElem = Gst.ElementFactory.make('videoscale', 'scale');
+                const capsA = Gst.Caps.from_string(`video/x-raw,format=RGBA,width=${sw},height=${sh}`);
+                const capsfA = Gst.ElementFactory.make('capsfilter', 'capsa');
+                capsfA.set_property('caps', capsA);
+                const capsB = Gst.Caps.from_string(`video/x-raw,format=RGBA,width=${w},height=${h}`);
+                const capsfB = Gst.ElementFactory.make('capsfilter', 'capsb');
+                capsfB.set_property('caps', capsB);
+                const sink = Gst.ElementFactory.make('appsink', 'sink');
+                sink.set_property('emit-signals', true);
+                sink.set_property('max-buffers', 1);
+                sink.set_property('drop', true);
+                sink.set_property('sync', false);
+                sink.connect('new-sample', onFrame);
+                state.sink = sink;
+
+                pipeline.add(convert);
+                pipeline.add(scaleElem);
+                pipeline.add(capsfA);
+                pipeline.add(capsfB);
+                pipeline.add(sink);
+                pad.link(convert.get_static_pad('sink'));
+                convert.link(scaleElem);
+                scaleElem.link(capsfA);
+                if (box) {
+                    capsfA.link(box);
+                    box.link(capsfB);
+                } else {
+                    capsfA.link(capsfB);
+                }
+                capsfB.link(sink);
+            });
+
+            const bus = pipeline.get_bus();
+            bus.add_signal_watch();
+            bus.connect('message', (_b, msg) => {
+                if (msg.type === Gst.MessageType.EOS) {
+                    try {
+                        pipeline.seek(1.0, Gst.Format.TIME,
+                            Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                            Gst.SeekType.SET, 0, Gst.SeekType.NONE, -1);
+                    } catch (_e) {}
+                } else if (msg.type === Gst.MessageType.ERROR) {
+                    let err = null;
+                    try { [err] = msg.parse_error(); } catch (_e2) {}
+                    this._debugLog(`background video error: ${err ? err.message : 'unknown'}`);
+                    this._stopBackgroundVideo();
+                }
+            });
+
+            pipeline.set_state(Gst.State.PLAYING);
+            this._bgVideo = state;
+            this._debugLog(`background video: playing ${path} (${union.w}x${union.h}, fit=${fit})`);
+        } catch (e) {
+            this._debugLog(`background video: pipeline failed: ${e}`);
+            this._stopBackgroundVideo();
+        }
+    }
+
+    _stopBackgroundVideo() {
+        const state = this._bgVideo;
+        if (!state) return;
+        this._bgVideo = null;
+        try {
+            if (state.pipeline) {
+                state.pipeline.set_state(Gst.State.NULL);
+            }
+        } catch (_e) {}
+        try {
+            if (state.actor) state.actor.destroy();
+        } catch (_e) {}
+        this._debugLog('background video: stopped');
     }
 
     // --- Scratchpad ---
