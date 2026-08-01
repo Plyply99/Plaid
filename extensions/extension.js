@@ -3801,11 +3801,11 @@ export default class TilingWMExtension extends Extension {
                             const cA = cw / ch;
                             let w, h;
                             if (cA > vA) {
-                                h = ch;
-                                w = ch * vA;
-                            } else {
                                 w = cw;
                                 h = cw / vA;
+                            } else {
+                                h = ch;
+                                w = ch * vA;
                             }
                             clone.set_size(w, h);
                             clone.set_position((cw - w) / 2, (ch - h) / 2);
