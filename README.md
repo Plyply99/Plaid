@@ -16,6 +16,11 @@ all built in.
 - **Keybinds**: focus movement, swaps, resizing, floats, workspaces, scratchpad,
   layout cycling, and more
 - **Float rules**: per-app and per-title floating
+- **Drop-down terminal**: toggle a terminal (configurable command, default
+  ghostty) that drops from the top of the work area at a configurable height,
+  with full Flair and live height updates
+- **Maximize respects gaps**: maximizing a window fills the work area within
+  the per-edge gaps instead of flush to the edges
 - **Mouse resize/swap**, **scratchpad**, **popups**, **cursor warp**
 
 ## Install
@@ -57,6 +62,7 @@ blur, which the stock `Shell.BlurEffect` cannot do.
 - `Super+C` — cycle layout
 - `Super+F` — toggle fullscreen
 - `Super+BackSpace` — scratchpad add/toggle
+- `Super+Shift+Return` — toggle drop-down terminal
 
 ## Development
 

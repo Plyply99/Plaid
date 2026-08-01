@@ -296,6 +296,7 @@ export default class TilingWMExtension extends Extension {
                 for (const win of ws.list_windows()) {
                     if (this._shouldManage(win)) {
                         this._addWindow(win);
+                        this._convertMaximizedToGaps(win);
                     }
                 }
             }
@@ -806,8 +807,12 @@ export default class TilingWMExtension extends Extension {
         const sigIds = [];
         sigIds.push({ emitter: win, id: win.connect('position-changed', () => {
             this._updateBorders();
+            this._convertMaximizedToGaps(win);
         }) });
-        sigIds.push({ emitter: win, id: win.connect('size-changed', () => this._updateBorders()) });
+        sigIds.push({ emitter: win, id: win.connect('size-changed', () => {
+            this._updateBorders();
+            this._convertMaximizedToGaps(win);
+        }) });
         sigIds.push({ emitter: win, id: win.connect('unmanaged', () => this._removeWindow(win)) });
         sigIds.push({ emitter: actor, id: actor.connect('destroy', () => this._removeWindow(win)) });
         sigIds.push({ emitter: win, id: win.connect('workspace-changed', () => {
@@ -1751,6 +1756,9 @@ export default class TilingWMExtension extends Extension {
         if (!win.get_workspace()) return;
         const rect = win.get_frame_rect();
         if (rect.width === 0 || rect.height === 0) return;
+        if (win.is_maximized()) {
+            try { win.unmaximize(); } catch (_e) {}
+        }
         if (this._animTargets) {
             this._animTargets.set(win, { x, y, w, h });
             return;
@@ -1776,6 +1784,25 @@ export default class TilingWMExtension extends Extension {
             w: Math.max(1, workArea.width - left - right),
             h: Math.max(1, workArea.height - top - bottom),
         };
+    }
+
+    _convertMaximizedToGaps(win) {
+        if (this._destroyed || !win) return;
+        if (!this._settings || !this._settings.get_boolean('enabled')) return;
+        if (!this._shouldManage(win)) return;
+        if (win.is_fullscreen() || !win.is_maximized()) return;
+        const ws = win.get_workspace();
+        if (!ws) return;
+        let workArea = null;
+        try {
+            workArea = ws.get_work_area_for_monitor(win.get_monitor());
+        } catch (_e) {}
+        if (!workArea) return;
+        const rect = this._singleWindowRect(workArea);
+        if (!rect) return;
+        this._debugLog(`maximize: converting to gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
+        try { win.unmaximize(); } catch (_e) {}
+        this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
     }
 
     _updateBorders() {
