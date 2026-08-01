@@ -1852,13 +1852,16 @@ export default class TilingWMExtension extends Extension {
 
     _handleFloatMaximize(win) {
         if (this._gappedMaxSet.has(win)) {
-            this._gappedMaxSet.delete(win);
             const saved = this._floatMaxRects.get(win);
             this._floatMaxRects.delete(win);
             try { win.unmaximize(); } catch (_e) {}
             if (saved && saved.w > 0) {
                 this._debugLog(`float maximize: restoring (${saved.x},${saved.y},${saved.w},${saved.h})`);
-                this._moveWindow(win, saved.x, saved.y, saved.w, saved.h);
+                this._applyFloatRect(win, saved.x, saved.y, saved.w, saved.h, () => {
+                    this._gappedMaxSet.delete(win);
+                });
+            } else {
+                this._gappedMaxSet.delete(win);
             }
             return;
         }
@@ -1875,10 +1878,38 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
         const rect = this._singleWindowRect(workArea);
         if (!rect) return;
-        try { win.unmaximize(); } catch (_e) {}
         this._debugLog(`float maximize: gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
-        this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
         this._gappedMaxSet.add(win);
+        this._applyFloatRect(win, rect.x, rect.y, rect.w, rect.h);
+    }
+
+    _applyFloatRect(win, x, y, w, h, onDone) {
+        let retries = 0;
+        const apply = () => {
+            if (this._destroyed) return false;
+            if (!win.get_workspace()) return false;
+            try {
+                if (win.is_maximized()) win.unmaximize();
+            } catch (_e) {}
+            this._moveWindow(win, x, y, w, h);
+            const f = win.get_frame_rect();
+            if (f.x === x && f.y === y && f.width === w && f.height === h) {
+                if (onDone) { try { onDone(); } catch (_e) {} }
+                return false;
+            }
+            retries++;
+            if (retries >= 15) {
+                if (onDone) { try { onDone(); } catch (_e) {} }
+                return false;
+            }
+            return true;
+        };
+        const retry = () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
+        };
+        if (apply())
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
     }
 
     _trackFloatGeometry(win) {
