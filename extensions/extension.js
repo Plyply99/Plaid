@@ -214,6 +214,7 @@ export default class TilingWMExtension extends Extension {
     enable() {
         this._destroyed = false;
         this._settings = this.getSettings();
+        this._ensureBlurModule();
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._windowBorders = new Map();
@@ -342,6 +343,8 @@ export default class TilingWMExtension extends Extension {
         this._windowMasks = null;
         this._removeAllBlurs();
         this._windowBlurs = null;
+        this._blurModulePromise = null;
+        this._blurModule = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
         this._windowWSIndices = null;
@@ -2257,6 +2260,65 @@ export default class TilingWMExtension extends Extension {
         }
         this._windowMasks.delete(win);
     }
+    async _ensureBlurModule() {
+        if (this._blurModulePromise) return this._blurModulePromise;
+        this._blurModule = null;
+        this._blurModulePromise = (async () => {
+            const [libPath] = GLib.filename_from_uri(import.meta.url);
+            const libDir = GLib.path_get_dirname(libPath) + '/lib';
+            try {
+                const Repo = imports.gi.GIRepository;
+                const repo = Repo.Repository.dup_default();
+                this._debugLog(`blur lib dir=${libDir}`);
+                repo.prepend_search_path(libDir);
+                repo.prepend_library_path(libDir);
+            } catch (e) {
+                log(`[plaid] blur lib paths failed: ${e.message}`);
+            }
+
+            const tryImport = async (label, fn) => {
+                try {
+                    const mod = await fn();
+                    this._blurModule = mod;
+                    this._debugLog(`using bundled gnome-rounded-blur (${label})`);
+                    return true;
+                } catch (e) {
+                    this._debugLog(`blur import (${label}) failed: ${e.message}`);
+                    return false;
+                }
+            };
+            let ok = await tryImport('legacy', () => imports.gi.Blur);
+            if (!ok)
+                ok = await tryImport('esm', () => import('gi://Blur'));
+
+            if (!ok) {
+                const typelibEnv = GLib.getenv('GI_TYPELIB_PATH') || '';
+                const libEnv = GLib.getenv('LD_LIBRARY_PATH') || '';
+                if (!typelibEnv.includes(libDir) || !libEnv.includes(libDir)) {
+                    try {
+                        const confDir = GLib.get_home_dir() + '/.config/environment.d';
+                        const confFile = confDir + '/plaid-blur.conf';
+                        if (!GLib.file_test(confFile, GLib.FileTest.EXISTS)) {
+                            GLib.mkdir_with_parents(confDir, 0o755);
+                            const content =
+                                `GI_TYPELIB_PATH=${libDir}\n` +
+                                `LD_LIBRARY_PATH=${libDir}\n`;
+                            GLib.file_set_contents(confFile, content);
+                            this._debugLog('blur library provisioned - relogin to activate');
+                        }
+                    } catch (e) {
+                        log(`[plaid] blur provision failed: ${e.message}`);
+                    }
+                }
+                this._blurModule = null;
+                this._debugLog('bundled blur unavailable, using Shell.BlurEffect');
+            }
+            if (!this._destroyed)
+                this._updateBorders();
+            return this._blurModule;
+        })();
+        return this._blurModulePromise;
+    }
 
     _ensureWindowBlur(win, actor) {
         if (!this._windowBlurs || !actor || !actor.add_effect_with_name) return;
@@ -2292,7 +2354,8 @@ export default class TilingWMExtension extends Extension {
 
         if (!blur) {
             try {
-                blur = new Shell.BlurEffect();
+                const effectClass = this._blurModule ? this._blurModule.BlurEffect : Shell.BlurEffect;
+                blur = new effectClass();
                 blur._bindings = [];
                 const sibling = new St.Widget({
                     reactive: false,
@@ -2356,8 +2419,14 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
 
         try {
-            if (blur.mode !== Shell.BlurMode.BACKGROUND)
-                blur.mode = Shell.BlurMode.BACKGROUND;
+            const blurMode = this._blurModule ? this._blurModule.BlurMode.BACKGROUND : Shell.BlurMode.BACKGROUND;
+            if (blur.mode !== blurMode)
+                blur.mode = blurMode;
+            if (this._blurModule && blur.corner_radius !== undefined) {
+                const cr = this._settings.get_int('border-radius') + 1;
+                if (blur.corner_radius !== cr)
+                    blur.corner_radius = cr;
+            }
             const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
             const radius = Math.round(this._settings.get_int('window-blur-radius') * scale);
             if (blur.radius !== radius)

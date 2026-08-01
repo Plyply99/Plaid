@@ -1,0 +1,9 @@
+gnome-rounded-blur — bundled native blur library with corner-radius support
+
+Source: https://github.com/kancko/gnome-rounded-blur
+A standalone copy of gnome-shell's ShellBlurEffect with a corner mask,
+exposed as the `Blur` GIR namespace. Built against mutter 50.x (see
+build-blur.sh to rebuild after mutter updates).
+
+License: GPL-3.0-or-later (see LICENSE; derived from gnome-shell's
+shell-blur-effect.c, GPL-3).

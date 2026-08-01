@@ -35,6 +35,14 @@ for file in "$SOURCE"/*; do
     sync_file "$file" "$DEST/$(basename "$file")"
 done
 
+if [ -d "$SOURCE/lib" ]; then
+    mkdir -p "$DEST/lib"
+    for file in "$SOURCE"/lib/*; do
+        [ -f "$file" ] || continue
+        sync_file "$file" "$DEST/lib/$(basename "$file")"
+    done
+fi
+
 if [ -d "$SOURCE/schemas" ]; then
     mkdir -p "$DEST/schemas"
     for file in "$SOURCE"/schemas/*; do
