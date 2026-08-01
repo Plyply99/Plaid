@@ -3789,28 +3789,44 @@ export default class TilingWMExtension extends Extension {
                 const orig = Background.BackgroundManager.prototype._createBackgroundActor;
                 if (typeof orig === 'function') {
                     this._origBackgroundManagerCreate = orig;
-                    const getVideoActor = () =>
-                        this._bgVideo ? this._bgVideo.actor : null;
+                    const getVideoState = () => this._bgVideo;
+                    const fitVideoClone = (clone, container) => {
+                        try {
+                            const cw = container.get_width();
+                            const ch = container.get_height();
+                            if (cw <= 0 || ch <= 0) return;
+                            const state = getVideoState();
+                            if (!state) return;
+                            const vA = state.w / state.h;
+                            const cA = cw / ch;
+                            let w, h;
+                            if (cA > vA) {
+                                h = ch;
+                                w = ch * vA;
+                            } else {
+                                w = cw;
+                                h = cw / vA;
+                            }
+                            clone.set_size(w, h);
+                            clone.set_position((cw - w) / 2, (ch - h) / 2);
+                        } catch (_e) {}
+                    };
                     Background.BackgroundManager.prototype._createBackgroundActor = function (...args) {
                         const actor = orig.apply(this, args);
-                        const video = getVideoActor();
+                        const video = getVideoState();
                         if (video && this._container &&
                             this._container !== Main.layoutManager._backgroundGroup) {
                             try {
-                                const clone = new Clutter.Clone({ source: video });
-                                for (let i = 0; i < 4; i++) {
-                                    clone.add_constraint(new Clutter.BindConstraint({
-                                        source: this._container,
-                                        coordinate: i,
-                                        offset: 0,
-                                    }));
-                                }
+                                const clone = new Clutter.Clone({ source: video.actor });
                                 this._container.add_child(clone);
                                 this._container.connect('child-added', () => {
                                     try {
                                         this._container.set_child_above_sibling(clone, null);
                                     } catch (_e) {}
                                 });
+                                this._container.connect('notify::allocation', () =>
+                                    fitVideoClone(clone, this._container));
+                                fitVideoClone(clone, this._container);
                             } catch (_e) {}
                         }
                         return actor;
