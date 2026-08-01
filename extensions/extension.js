@@ -3789,15 +3789,22 @@ export default class TilingWMExtension extends Extension {
                 const orig = Background.BackgroundManager.prototype._createBackgroundActor;
                 if (typeof orig === 'function') {
                     this._origBackgroundManagerCreate = orig;
+                    const self = this;
                     const getVideoState = () => this._bgVideo;
                     const fitVideoClone = (clone, container) => {
                         try {
                             const cw = container.get_width();
                             const ch = container.get_height();
-                            if (cw <= 0 || ch <= 0) return;
                             const state = getVideoState();
-                            if (!state) return;
+                            if (!state) {
+                                this._bgLog(`clone fit: no video state`);
+                                return;
+                            }
                             const vA = state.w / state.h;
+                            if (cw <= 0 || ch <= 0) {
+                                this._bgLog(`clone fit: container ${cw}x${ch} (not laid out yet)`);
+                                return;
+                            }
                             const cA = cw / ch;
                             let w, h;
                             if (cA > vA) {
@@ -3809,7 +3816,10 @@ export default class TilingWMExtension extends Extension {
                             }
                             clone.set_size(w, h);
                             clone.set_position((cw - w) / 2, (ch - h) / 2);
-                        } catch (_e) {}
+                            this._bgLog(`clone fit: container ${cw}x${ch} aspect ${cA.toFixed(3)} -> clone ${Math.round(w)}x${Math.round(h)}`);
+                        } catch (e) {
+                            this._bgLog(`clone fit error: ${e}`);
+                        }
                     };
                     Background.BackgroundManager.prototype._createBackgroundActor = function (...args) {
                         const actor = orig.apply(this, args);
@@ -3826,7 +3836,16 @@ export default class TilingWMExtension extends Extension {
                                 });
                                 this._container.connect('notify::allocation', () =>
                                     fitVideoClone(clone, this._container));
+                                this._container.connect('notify::width', () =>
+                                    fitVideoClone(clone, this._container));
+                                this._container.connect('notify::height', () =>
+                                    fitVideoClone(clone, this._container));
                                 fitVideoClone(clone, this._container);
+                                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                                    if (self._destroyed) return false;
+                                    fitVideoClone(clone, this._container);
+                                    return false;
+                                });
                             } catch (_e) {}
                         }
                         return actor;
