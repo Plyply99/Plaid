@@ -3828,28 +3828,9 @@ export default class TilingWMExtension extends Extension {
                             h = Math.round(h);
                             const name = container.get_name ? container.get_name() : '';
                             const cls = container.constructor ? container.constructor.name : '';
-                            const key = `${cw}x${ch}`;
-                            const now = Date.now();
-                            const changed = key !== clone._bgFitKey;
-                            clone._bgFitKey = key;
-                            const logged = clone._bgFitLogged;
-                            const doLog = (opts && opts.recheck) ||
-                                (changed && (!logged || key !== logged.key || now - logged.t > 250));
-                            const prevRealized = clone._bgPrevRealized;
                             clone.set_size(1, 1);
                             clone.set_position(x, y);
                             clone.set_scale(w, h);
-                            const rw = Math.round(clone.get_width());
-                            const rh = Math.round(clone.get_height());
-                            const rx = Math.round(clone.get_x());
-                            const ry = Math.round(clone.get_y());
-                            if (doLog) {
-                                this._bgLog(`clone fit[${cls} ${name}] container ${cw}x${ch} aspect ${cA.toFixed(3)} ` +
-                                    `-> scale ${w}x${h}@${x},${y} box ${rw}x${rh}@${rx},${ry}` +
-                                    (prevRealized ? ` prev ${prevRealized}` : ''));
-                                clone._bgFitLogged = { key, t: now };
-                            }
-                            clone._bgPrevRealized = `${w}x${h}@${x},${y}`;
                         } catch (e) {
                             this._bgLog(`clone fit error: ${e}`);
                         }
@@ -3911,19 +3892,7 @@ export default class TilingWMExtension extends Extension {
         return { w: maxX, h: maxY };
     }
 
-    _bgLog(...args) {
-        try {
-            const dir = `${GLib.get_home_dir()}/.local/share/plaid`;
-            const parent = Gio.File.new_for_path(dir);
-            if (!parent.query_exists(null)) {
-                try { parent.make_directory_with_parents(null); } catch (_e) {}
-            }
-            const file = Gio.File.new_for_path(`${dir}/background.log`);
-            const stream = file.append_to(Gio.FileCreateFlags.NONE, null);
-            const line = `${new Date().toISOString()} ${args.join(' ')}`;
-            stream.write_all(`${line}\n`, null);
-            try { stream.close(null); } catch (_e) {}
-        } catch (_e) {}
+    _bgLog(..._args) {
     }
 
     _uploadBackgroundFrame(state, data) {
