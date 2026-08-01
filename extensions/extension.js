@@ -2056,6 +2056,7 @@ export default class TilingWMExtension extends Extension {
 
     _ensureWindowBorder(win, actor, frame, isFocused) {
         if (!frame || frame.width === 0 || frame.height === 0) return false;
+        if (this._bgVideo && actor === this._bgVideo.actor) return false;
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
         const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#62a0ea';
@@ -2406,6 +2407,7 @@ export default class TilingWMExtension extends Extension {
 
     _ensureWindowMask(win, actor, radius) {
         if (!this._windowMasks || !actor || !actor.add_effect_with_name) return;
+        if (this._bgVideo && actor === this._bgVideo.actor) return;
         const target = this._unwrapMaskActor(actor, win);
         if (!target || !target.add_effect_with_name) return;
         let effect = this._windowMasks.get(win);
@@ -2635,6 +2637,7 @@ export default class TilingWMExtension extends Extension {
     _ensureWindowBlur(win, actor) {
         if (!this._windowBlurs || !actor || !actor.add_effect_with_name) return;
         if (!this._settings || !this._settings.get_boolean('window-blur')) return;
+        if (this._bgVideo && actor === this._bgVideo.actor) return;
 
         let blur = this._windowBlurs.get(win);
 
@@ -2665,6 +2668,10 @@ export default class TilingWMExtension extends Extension {
         }
 
         if (!blur) {
+            if (actor.get_parent() !== global.window_group) {
+                this._debugLog('blur defer: window mid-transition, next pass will create');
+                return;
+            }
             try {
                 const effectClass = this._blurModule ? this._blurModule.BlurEffect : Shell.BlurEffect;
                 blur = new effectClass();
@@ -2694,6 +2701,10 @@ export default class TilingWMExtension extends Extension {
                 this._windowBlurs.set(win, blur);
                 try {
                     blur._actorDestroyId = actor.connect('destroy', () => this._removeBlur(win));
+                } catch (_e) {}
+                try {
+                    blur._actorParentSetId = actor.connect('parent-set',
+                        () => this._syncBlurStacking());
                 } catch (_e) {}
                 try {
                     const frame = win.get_frame_rect();
@@ -2760,6 +2771,19 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _syncBlurStacking() {
+        if (!this._windowBlurs) return;
+        for (const blur of this._windowBlurs.values()) {
+            if (blur._sibling && blur._sourceActor &&
+                blur._sibling.get_parent() === global.window_group &&
+                blur._sourceActor.get_parent() === global.window_group) {
+                try {
+                    global.window_group.set_child_below_sibling(blur._sibling, blur._sourceActor);
+                } catch (_e) {}
+            }
+        }
+    }
+
     _removeBlur(win) {
         if (!this._windowBlurs) return;
         const blur = this._windowBlurs.get(win);
@@ -2770,6 +2794,13 @@ export default class TilingWMExtension extends Extension {
                 try { a.disconnect(blur._actorDestroyId); } catch (_e) {}
             }
             blur._actorDestroyId = 0;
+        }
+        if (blur._actorParentSetId) {
+            const a = win.get_compositor_private();
+            if (a) {
+                try { a.disconnect(blur._actorParentSetId); } catch (_e) {}
+            }
+            blur._actorParentSetId = 0;
         }
         if (blur._sibling) {
             this._unbindBlurSibling(blur);
@@ -4271,12 +4302,7 @@ export default class TilingWMExtension extends Extension {
             this._handleGrabEnd(metaWindow, grabOp);
         }));
         this._addSignal(global.display, global.display.connect('restacked', () => {
-            if (!this._windowBlurs) return;
-            for (const blur of this._windowBlurs.values()) {
-                if (blur._sibling && blur._sourceActor) {
-                    try { global.window_group.set_child_below_sibling(blur._sibling, blur._sourceActor); } catch (_e) {}
-                }
-            }
+            this._syncBlurStacking();
         }));
     }
 
