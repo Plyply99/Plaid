@@ -278,7 +278,7 @@ export default class TilingWMExtension extends Extension {
         this._connectSignals();
         this._registerKeybindings();
         this._suppressWorkspaceSwitcherPopup();
-        this._scheduleWorkspacePopupWarning();
+        this._initWorkspacePopupWarning();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -335,6 +335,20 @@ export default class TilingWMExtension extends Extension {
             this._layoutPopup = null;
         }
         this._restoreWorkspaceSwitcherPopup();
+        if (this._shellSettings) {
+            if (this._shellSettingsChangedId) {
+                try { this._shellSettings.disconnect(this._shellSettingsChangedId); } catch (_e) {}
+            }
+            this._shellSettings = null;
+        }
+        if (this._jpSettings) {
+            if (this._jpSettingsChangedId) {
+                try { this._jpSettings.disconnect(this._jpSettingsChangedId); } catch (_e) {}
+            }
+            this._jpSettings = null;
+        }
+        this._shellSettingsChangedId = 0;
+        this._jpSettingsChangedId = 0;
         if (this._warningPopupId) {
             GLib.source_remove(this._warningPopupId);
             this._warningPopupId = 0;
@@ -2999,27 +3013,79 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _scheduleWorkspacePopupWarning() {
+    _initWorkspacePopupWarning() {
         try {
-            const shellSettings = new Gio.Settings({ schema_id: 'org.gnome.shell' });
-            if (!shellSettings.get_strv('enabled-extensions')
-                .includes('just-perfection-desktop@just-perfection')) {
-                return;
-            }
-            const jpSettings = new Gio.Settings({
+            this._shellSettings = new Gio.Settings({ schema_id: 'org.gnome.shell' });
+            this._shellSettingsChangedId = this._shellSettings.connect(
+                'changed::enabled-extensions',
+                () => this._updateWorkspacePopupWarning());
+        } catch (_e) {
+            this._shellSettings = null;
+        }
+        try {
+            this._jpSettings = new Gio.Settings({
                 schema_id: 'org.gnome.shell.extensions.just-perfection',
             });
-            if (!jpSettings.get_boolean('workspace-popup')) return;
+            this._jpSettingsChangedId = this._jpSettings.connect(
+                'changed::workspace-popup',
+                () => this._updateWorkspacePopupWarning());
         } catch (_e) {
-            return;
+            this._jpSettings = null;
         }
         this._warningPopupId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
             this._warningPopupId = 0;
             if (this._destroyed) return GLib.SOURCE_REMOVE;
-            this._showWarningPopup('Workspace Popup Hidden',
-                'Another extension is also suppressing this popup — both manage this behavior. Adjust either one to change it.',
-                'Click to dismiss');
+            this._updateWorkspacePopupWarning();
             return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _updateWorkspacePopupWarning() {
+        if (this._destroyed) return;
+        if (!this._jpSettings) {
+            try {
+                this._jpSettings = new Gio.Settings({
+                    schema_id: 'org.gnome.shell.extensions.just-perfection',
+                });
+                this._jpSettingsChangedId = this._jpSettings.connect(
+                    'changed::workspace-popup',
+                    () => this._updateWorkspacePopupWarning());
+            } catch (_e) {}
+        }
+        let overlap = false;
+        try {
+            if (this._shellSettings && this._shellSettings.get_strv('enabled-extensions')
+                .includes('just-perfection-desktop@just-perfection')) {
+                if (this._jpSettings && !this._jpSettings.get_boolean('workspace-popup')) {
+                    overlap = true;
+                }
+            }
+        } catch (_e) {
+            overlap = false;
+        }
+        if (overlap) {
+            if (!this._warningPopup) {
+                this._showWarningPopup('Workspace Popup Hidden',
+                    'Another extension is also suppressing this popup — both manage this behavior. Adjust either one to change it.',
+                    'Click to dismiss');
+            }
+        } else {
+            this._hideWarningPopup();
+        }
+    }
+
+    _hideWarningPopup() {
+        const popup = this._warningPopup;
+        if (!popup) return;
+        this._warningPopup = null;
+        try { popup.remove_all_transitions(); } catch (_e) {}
+        popup.ease({
+            opacity: 0,
+            duration: 200,
+            mode: Clutter.AnimationMode.EASE_IN_QUAD,
+            onComplete: () => {
+                try { popup.destroy(); } catch (_e) {}
+            },
         });
     }
 
