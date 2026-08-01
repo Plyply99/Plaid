@@ -3777,7 +3777,7 @@ export default class TilingWMExtension extends Extension {
             }
             const file = Gio.File.new_for_path(`${dir}/background.log`);
             const stream = file.append_to(Gio.FileCreateFlags.NONE, null);
-            const line = `${new Date().toISOString()} pid=${GLib.get_pid()} ${args.join(' ')}`;
+            const line = `${new Date().toISOString()} ${args.join(' ')}`;
             stream.write_all(`${line}\n`, null);
             try { stream.close(null); } catch (_e) {}
         } catch (_e) {}
@@ -3926,13 +3926,16 @@ export default class TilingWMExtension extends Extension {
     _startBackgroundHardware(state) {
         const params = state.params;
         let filter = '';
-        if (params.fit === 'contain') {
-            filter = `scale=${params.sw}:${params.sh},pad=${state.w}:${state.h}:(ow-iw)/2:(oh-ih)/2`;
+        if (params.fit === 'cover') {
+            filter = `scale_vaapi=${params.sw}:${params.sh},hwdownload,crop=${state.w}:${state.h}:${params.l}:${params.t},format=rgba`;
+        } else if (params.fit === 'contain') {
+            filter = `hwdownload,format=nv12,scale=${params.sw}:${params.sh},pad=${state.w}:${state.h}:(ow-iw)/2:(oh-ih)/2,format=rgba`;
         } else {
-            filter = `scale=${params.sw}:${params.sh},crop=${state.w}:${state.h}:${params.l}:${params.t}`;
+            filter = `scale_vaapi=${state.w}:${state.h},hwdownload,format=rgba`;
         }
         const argv = ['/usr/bin/ffmpeg', '-v', 'error', '-stream_loop', '-1', '-re',
             '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128',
+            '-hwaccel_output_format', 'vaapi',
             '-i', params.path, '-an', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-vf', filter, 'pipe:1'];
         try {
             const launcher = new Gio.SubprocessLauncher({
