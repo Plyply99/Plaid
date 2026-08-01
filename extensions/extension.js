@@ -561,10 +561,12 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(this._settings, this._settings.connect('changed::float-windows', () => {
             this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
+            this._reapplyFloatRules();
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::float-titles', () => {
             this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
+            this._reapplyFloatRules();
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
@@ -820,6 +822,12 @@ export default class TilingWMExtension extends Extension {
         sigIds.push({ emitter: win, id: win.connect('size-changed', () => {
             this._updateBorders();
             this._convertMaximizedToGaps(win);
+        }) });
+        sigIds.push({ emitter: win, id: win.connect('notify::wm-class', () => {
+            this._onWindowIdentityChanged(win);
+        }) });
+        sigIds.push({ emitter: win, id: win.connect('notify::gtk-application-id', () => {
+            this._onWindowIdentityChanged(win);
         }) });
         sigIds.push({ emitter: win, id: win.connect('unmanaged', () => this._removeWindow(win)) });
         sigIds.push({ emitter: actor, id: actor.connect('destroy', () => this._removeWindow(win)) });
@@ -1850,6 +1858,27 @@ export default class TilingWMExtension extends Extension {
         if (nx !== frame.x || ny !== frame.y) {
             this._debugLog(`float gaps: clamping (${frame.x},${frame.y}) -> (${nx},${ny})`);
             try { win.move_frame(true, nx, ny); } catch (_e) {}
+        }
+    }
+
+    _onWindowIdentityChanged(win) {
+        if (this._destroyed || !win) return;
+        if (!this._isFloating(win)) return;
+        const ws = win.get_workspace();
+        if (ws) this._raiseFloatingWindows(ws);
+        this._clampFloatingToGaps(win);
+    }
+
+    _reapplyFloatRules() {
+        if (this._destroyed || !this._settings) return;
+        for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+            const ws = global.workspace_manager.get_workspace_by_index(i);
+            for (const win of ws.list_windows()) {
+                if (this._isFloating(win)) {
+                    this._raiseFloatingWindows(ws);
+                    this._clampFloatingToGaps(win);
+                }
+            }
         }
     }
 
