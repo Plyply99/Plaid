@@ -2672,7 +2672,7 @@ export default class TilingWMExtension extends Extension {
                         ));
                     } catch (_e) {}
                 }
-                global.windowGroup.insert_child_below(sibling, actor);
+                global.window_group.insert_child_below(sibling, actor);
                 sibling.add_effect_with_name(BLUR_EFFECT_NAME, blur);
                 blur._sibling = sibling;
                 blur._sourceActor = actor;
@@ -3756,7 +3756,7 @@ export default class TilingWMExtension extends Extension {
             texture = Cogl.Texture2D.new_with_size(coglContext, union.w, union.h);
         } catch (e) {
             log(`[plaid] background video: texture creation failed: ${e}`);
-            this._showPopup('Animated Background Failed', `Texture creation failed: ${e}`);
+            this._showWarningPopup('Animated Background Failed', `Texture creation failed: ${e}`, 'Click to dismiss');
             return;
         }
         try {
@@ -3764,11 +3764,10 @@ export default class TilingWMExtension extends Extension {
             actor.set_size(union.w, union.h);
             const content = Clutter.TextureContent.new_from_texture(texture, null);
             actor.set_content(content);
-            Main.layoutManager.uiGroup.add_child(actor);
-            Main.layoutManager.uiGroup.set_child_below_sibling(actor, Main.layoutManager.windowGroup);
+            Main.layoutManager._backgroundGroup.add_child(actor);
         } catch (e) {
             log(`[plaid] background video: actor creation failed: ${e}`);
-            this._showPopup('Animated Background Failed', `Actor creation failed: ${e}`);
+            this._showWarningPopup('Animated Background Failed', `Actor creation failed: ${e}`, 'Click to dismiss');
             try { actor && actor.destroy(); } catch (_e2) {}
             return;
         }
@@ -3793,7 +3792,7 @@ export default class TilingWMExtension extends Extension {
                 if (!state.uploadFailedLogged) {
                     state.uploadFailedLogged = true;
                     log(`[plaid] background video: frame upload failed: ${e}`);
-                    this._showPopup('Animated Background Failed', `Frame upload failed: ${e}`);
+                    this._showWarningPopup('Animated Background Failed', `Frame upload failed: ${e}`, 'Click to dismiss');
                 }
             } finally {
                 buffer.unmap(info);
@@ -3817,11 +3816,11 @@ export default class TilingWMExtension extends Extension {
                 }
             } catch (e) {
                 log(`[plaid] background video: discovery failed: ${e}`);
-                this._showPopup('Animated Background Failed', `Could not read video: ${path}`);
+                this._showWarningPopup('Animated Background Failed', `Could not read video: ${path}`, 'Click to dismiss');
             }
             if (srcW <= 0 || srcH <= 0) {
                 log('[plaid] background video: no video stream found');
-                this._showPopup('Animated Background Failed', 'No video stream found in this file');
+                this._showWarningPopup('Animated Background Failed', 'No video stream found in this file', 'Click to dismiss');
                 this._stopBackgroundVideo();
                 return;
             }
@@ -3872,7 +3871,7 @@ export default class TilingWMExtension extends Extension {
                     try { [err] = msg.parse_error(); } catch (_e2) {}
                     const reason = err ? err.message : 'unknown';
                     log(`[plaid] background video error: ${reason}`);
-                    this._showPopup('Animated Background Failed', `Could not play video (missing decoder?): ${reason}`);
+                    this._showWarningPopup('Animated Background Failed', `Could not play video (missing decoder?): ${reason}`, 'Click to dismiss');
                     this._stopBackgroundVideo();
                 }
             });
@@ -3887,7 +3886,7 @@ export default class TilingWMExtension extends Extension {
             this._debugLog(`background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
         } catch (e) {
             log(`[plaid] background video: pipeline failed: ${e}`);
-            this._showPopup('Animated Background Failed', `Pipeline failed: ${e}`);
+            this._showWarningPopup('Animated Background Failed', `Pipeline failed: ${e}`, 'Click to dismiss');
             this._stopBackgroundVideo();
         }
     }
@@ -4025,7 +4024,7 @@ export default class TilingWMExtension extends Extension {
             if (!this._windowBlurs) return;
             for (const blur of this._windowBlurs.values()) {
                 if (blur._sibling && blur._sourceActor) {
-                    try { global.windowGroup.set_child_below_sibling(blur._sibling, blur._sourceActor); } catch (_e) {}
+                    try { global.window_group.set_child_below_sibling(blur._sibling, blur._sourceActor); } catch (_e) {}
                 }
             }
         }));
