@@ -3013,6 +3013,22 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _getJPSettings() {
+        try {
+            const jpExt = Extension.lookupByUUID('just-perfection-desktop@just-perfection');
+            if (!jpExt) {
+                this._debugLog('workspace popup: JP extension not loaded');
+                return null;
+            }
+            const settings = jpExt.getSettings();
+            this._debugLog('workspace popup: JP settings acquired');
+            return settings;
+        } catch (e) {
+            this._debugLog('workspace popup: JP settings lookup failed:', String(e));
+            return null;
+        }
+    }
+
     _initWorkspacePopupWarning() {
         try {
             this._shellSettings = new Gio.Settings({ schema_id: 'org.gnome.shell' });
@@ -3022,15 +3038,11 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._shellSettings = null;
         }
-        try {
-            this._jpSettings = new Gio.Settings({
-                schema_id: 'org.gnome.shell.extensions.just-perfection',
-            });
+        this._jpSettings = this._getJPSettings();
+        if (this._jpSettings) {
             this._jpSettingsChangedId = this._jpSettings.connect(
                 'changed::workspace-popup',
                 () => this._updateWorkspacePopupWarning());
-        } catch (_e) {
-            this._jpSettings = null;
         }
         this._warningPopupId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
             this._warningPopupId = 0;
@@ -3042,29 +3054,39 @@ export default class TilingWMExtension extends Extension {
 
     _updateWorkspacePopupWarning() {
         if (this._destroyed) return;
-        if (!this._jpSettings) {
-            try {
-                this._jpSettings = new Gio.Settings({
-                    schema_id: 'org.gnome.shell.extensions.just-perfection',
-                });
+        const jpExt = Extension.lookupByUUID('just-perfection-desktop@just-perfection');
+        if (!jpExt) {
+            if (this._jpSettings) {
+                if (this._jpSettingsChangedId) {
+                    try { this._jpSettings.disconnect(this._jpSettingsChangedId); } catch (_e) {}
+                }
+                this._jpSettings = null;
+                this._jpSettingsChangedId = 0;
+            }
+        } else if (!this._jpSettings) {
+            this._jpSettings = this._getJPSettings();
+            if (this._jpSettings) {
                 this._jpSettingsChangedId = this._jpSettings.connect(
                     'changed::workspace-popup',
                     () => this._updateWorkspacePopupWarning());
-            } catch (_e) {}
+            }
         }
         let overlap = false;
         try {
-            if (this._shellSettings && this._shellSettings.get_strv('enabled-extensions')
-                .includes('just-perfection-desktop@just-perfection')) {
-                if (this._jpSettings && !this._jpSettings.get_boolean('workspace-popup')) {
-                    overlap = true;
-                }
-            }
-        } catch (_e) {
+            const jpEnabled = !!(this._shellSettings &&
+                this._shellSettings.get_strv('enabled-extensions')
+                    .includes('just-perfection-desktop@just-perfection'));
+            const jpSuppresses = !!(this._jpSettings &&
+                !this._jpSettings.get_boolean('workspace-popup'));
+            overlap = jpEnabled && jpSuppresses;
+            this._debugLog(`workspace popup: jpEnabled=${jpEnabled} jpSuppresses=${jpSuppresses} overlap=${overlap}`);
+        } catch (e) {
             overlap = false;
+            this._debugLog('workspace popup: overlap check error:', String(e));
         }
         if (overlap) {
             if (!this._warningPopup) {
+                this._debugLog('workspace popup: showing warning');
                 this._showWarningPopup('Workspace Popup Hidden',
                     'Another extension is also suppressing this popup — both manage this behavior. Adjust either one to change it.',
                     'Click to dismiss');
