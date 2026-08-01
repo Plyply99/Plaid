@@ -665,6 +665,8 @@ export default class TilingWMExtension extends Extension {
     }
 
     _shouldManage(win) {
+        if (this._dropdownWin === win ||
+            (this._dropdownWaiters && this._dropdownWaiters.has(win))) return false;
         const wms = win.get_wm_class_instance();
         const title = win.get_title();
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
@@ -741,6 +743,7 @@ export default class TilingWMExtension extends Extension {
     _addWindow(win) {
         if (!this._settings) return;
         if (this._windowWorkspaces.has(win)) return;
+        this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
         this._newWindowSet.add(win);
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
@@ -1803,6 +1806,11 @@ export default class TilingWMExtension extends Extension {
 
         const windows = this._getWindowsForWorkspace(ws);
         for (const win of windows) {
+            if (this._dropdownWin === win) {
+                this._removeMask(win);
+                this._removeBlur(win);
+                continue;
+            }
             if (win.is_fullscreen()) {
                 this._removeMask(win);
                 this._removeBlur(win);
@@ -3297,6 +3305,13 @@ export default class TilingWMExtension extends Extension {
             this._dropdownPendingId = 0;
         }
         this._dropdownPending = false;
+        if (this._windowWorkspaces.has(win)) {
+            this._debugLog('dropdown: de-registering window from tiler');
+            this._removeWindow(win);
+        }
+        this._removeMask(win);
+        this._removeBlur(win);
+        this._removeBorder(win);
         this._dropdownWin = win;
         this._dropdownUnmanagedId = win.connect('unmanaged', () => {
             if (this._dropdownWin === win) this._dropdownWin = null;
@@ -3327,6 +3342,7 @@ export default class TilingWMExtension extends Extension {
             const mon = this._dropdownMonitor();
             const heightPct = this._settings.get_int('dropdown-terminal-height') || 33;
             const height = Math.floor(mon.height * heightPct / 100);
+            this._debugLog(`dropdown: monitor=(${mon.x},${mon.y},${mon.width},${mon.height}) hPct=${heightPct} -> rect=(${mon.x},${mon.y},${mon.width},${height})`);
             win.move_resize_frame(true, mon.x, mon.y, mon.width, height);
         } catch (_e) {}
         try { win.unminimize(); } catch (_e) {}
