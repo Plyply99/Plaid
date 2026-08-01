@@ -20,7 +20,8 @@ all built in.
   ghostty) that drops from the top of the work area at a configurable height,
   with full Flair and live height updates
 - **Maximize respects gaps**: maximizing a window fills the work area within
-  the per-edge gaps instead of flush to the edges
+  the per-edge gaps instead of flush to the edges; floating windows restore
+  their exact original geometry on toggle
 - **Mouse resize/swap**, **scratchpad**, **popups**, **cursor warp**
 
 ## Install
