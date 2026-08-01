@@ -3791,20 +3791,16 @@ export default class TilingWMExtension extends Extension {
                     this._origBackgroundManagerCreate = orig;
                     const self = this;
                     const getVideoState = () => this._bgVideo;
-                    const fitVideoClone = (clone, container) => {
+                    const fitVideoClone = (clone, container, opts) => {
                         try {
                             const cw = container.get_width();
                             const ch = container.get_height();
                             const state = getVideoState();
-                            if (!state) {
-                                this._bgLog(`clone fit: no video state`);
+                            if (!state)
                                 return;
-                            }
                             const vA = state.w / state.h;
-                            if (cw <= 0 || ch <= 0) {
-                                this._bgLog(`clone fit: container ${cw}x${ch} (not laid out yet)`);
+                            if (cw <= 0 || ch <= 0)
                                 return;
-                            }
                             const cA = cw / ch;
                             let w, h;
                             if (cA > vA) {
@@ -3814,9 +3810,33 @@ export default class TilingWMExtension extends Extension {
                                 h = ch;
                                 w = ch * vA;
                             }
+                            const x = Math.round((cw - w) / 2);
+                            const y = Math.round((ch - h) / 2);
+                            w = Math.round(w);
+                            h = Math.round(h);
+                            const name = container.get_name ? container.get_name() : '';
+                            const cls = container.constructor ? container.constructor.name : '';
+                            const key = `${cw}x${ch}`;
+                            const now = Date.now();
+                            const changed = key !== clone._bgFitKey;
+                            clone._bgFitKey = key;
+                            const logged = clone._bgFitLogged;
+                            const doLog = (opts && opts.recheck) ||
+                                (changed && (!logged || key !== logged.key || now - logged.t > 250));
+                            const prevRealized = clone._bgPrevRealized;
                             clone.set_size(w, h);
-                            clone.set_position((cw - w) / 2, (ch - h) / 2);
-                            this._bgLog(`clone fit: container ${cw}x${ch} aspect ${cA.toFixed(3)} -> clone ${Math.round(w)}x${Math.round(h)}`);
+                            clone.set_position(x, y);
+                            const rw = Math.round(clone.get_width());
+                            const rh = Math.round(clone.get_height());
+                            const rx = Math.round(clone.get_x());
+                            const ry = Math.round(clone.get_y());
+                            if (doLog) {
+                                this._bgLog(`clone fit[${cls} ${name}] container ${cw}x${ch} aspect ${cA.toFixed(3)} ` +
+                                    `-> req ${w}x${h}@${x},${y} realized ${rw}x${rh}@${rx},${ry}` +
+                                    (prevRealized ? ` prev ${prevRealized}` : ''));
+                                clone._bgFitLogged = { key, t: now };
+                            }
+                            clone._bgPrevRealized = `${rw}x${rh}@${rx},${ry}`;
                         } catch (e) {
                             this._bgLog(`clone fit error: ${e}`);
                         }
@@ -3843,7 +3863,7 @@ export default class TilingWMExtension extends Extension {
                                 fitVideoClone(clone, this._container);
                                 GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                                     if (self._destroyed) return false;
-                                    fitVideoClone(clone, this._container);
+                                    fitVideoClone(clone, this._container, { recheck: true });
                                     return false;
                                 });
                             } catch (_e) {}
