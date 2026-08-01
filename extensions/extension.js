@@ -3799,7 +3799,7 @@ export default class TilingWMExtension extends Extension {
             for (const feature of features) {
                 const name = feature.get_name() || '';
                 if (name.endsWith('dec') || name.endsWith('postproc'))
-                    feature.set_rank(Gst.Rank.PRIMARY + 3);
+                    feature.set_rank(Gst.Rank.NONE);
             }
         } catch (_e) {}
 
@@ -3905,9 +3905,8 @@ export default class TilingWMExtension extends Extension {
                 boxStr = `videobox border-alpha=0 left=${l} right=${r} top=${t} bottom=${b} ! `;
             }
 
-            const decoder = Gst.ElementFactory.find('vaapidecodebin') ? 'vaapidecodebin' : 'decodebin';
             const escaped = path.replace(/"/g, '\\"');
-            const launch = `filesrc location="${escaped}" ! ${decoder} ! videoconvert ! videoscale ` +
+            const launch = `filesrc location="${escaped}" ! decodebin ! videoconvert ! videoscale ` +
                 `! video/x-raw,format=RGBA,width=${sw},height=${sh} ! ${boxStr}` +
                 `video/x-raw,format=RGBA,width=${w},height=${h} ! ` +
                 `appsink name=s emit-signals=false sync=true max-buffers=1 drop=true`;
@@ -3942,7 +3941,7 @@ export default class TilingWMExtension extends Extension {
                 onFrame();
                 return GLib.SOURCE_CONTINUE;
             });
-            log(`[plaid] background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit}, decoder=${decoder})`);
+            log(`[plaid] background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
         } catch (e) {
             log(`[plaid] background video: pipeline failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Pipeline failed: ${e}`, 'Click to dismiss');
