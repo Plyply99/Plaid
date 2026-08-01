@@ -3755,18 +3755,20 @@ export default class TilingWMExtension extends Extension {
             const coglContext = Clutter.get_default_backend().get_cogl_context();
             texture = Cogl.Texture2D.new_with_size(coglContext, union.w, union.h);
         } catch (e) {
-            this._debugLog(`background video: texture creation failed: ${e}`);
+            log(`[plaid] background video: texture creation failed: ${e}`);
+            this._showPopup('Animated Background Failed', `Texture creation failed: ${e}`);
             return;
         }
         try {
             actor = new Clutter.Actor({ reactive: false, visible: true });
             actor.set_size(union.w, union.h);
-            const content = new Clutter.TextureContent({ texture });
+            const content = Clutter.TextureContent.new_from_texture(texture, null);
             actor.set_content(content);
             Main.layoutManager.uiGroup.add_child(actor);
             Main.layoutManager.uiGroup.set_child_below_sibling(actor, Main.layoutManager.windowGroup);
         } catch (e) {
-            this._debugLog(`background video: actor creation failed: ${e}`);
+            log(`[plaid] background video: actor creation failed: ${e}`);
+            this._showPopup('Animated Background Failed', `Actor creation failed: ${e}`);
             try { actor && actor.destroy(); } catch (_e2) {}
             return;
         }
@@ -3880,7 +3882,8 @@ export default class TilingWMExtension extends Extension {
             });
             this._debugLog(`background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
         } catch (e) {
-            this._debugLog(`background video: pipeline failed: ${e}`);
+            log(`[plaid] background video: pipeline failed: ${e}`);
+            this._showPopup('Animated Background Failed', `Pipeline failed: ${e}`);
             this._stopBackgroundVideo();
         }
     }
