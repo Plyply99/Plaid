@@ -4,6 +4,8 @@ import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gst from 'gi://Gst';
+import GstApp from 'gi://GstApp';
+import GstPbutils from 'gi://GstPbutils';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
@@ -3769,18 +3771,17 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const state = { pipeline: null, texture, actor, content, w: union.w, h: union.h, linked: false };
+        const state = { pipeline: null, sink: null, texture, actor, content, w: union.w, h: union.h, pollId: 0 };
 
         const onFrame = () => {
-            if (this._destroyed || this._bgVideo !== state) return Gst.FlowReturn.OK;
-            const sink = state.sink;
-            const sample = sink.emit('pull-sample');
-            if (!sample) return Gst.FlowReturn.OK;
+            if (this._destroyed || this._bgVideo !== state) return;
+            const sample = state.sink.try_pull_sample(0);
+            if (!sample) return;
             const buffer = sample.get_buffer();
             const [ok, info] = buffer.map(Gst.MapFlags.READ);
-            if (!ok) return Gst.FlowReturn.OK;
+            if (!ok) return;
             try {
-                const data = info.get_data().get_data();
+                const data = info.get_data();
                 state.texture.set_region(0, 0, 0, 0,
                     state.w, state.h, state.w, state.h,
                     Cogl.PixelFormat.RGBA_8888, data);
@@ -3791,92 +3792,60 @@ export default class TilingWMExtension extends Extension {
             } finally {
                 buffer.unmap(info);
             }
-            return Gst.FlowReturn.OK;
         };
 
-        let pipeline = null;
         try {
-            pipeline = new Gst.Pipeline();
-            const src = Gst.ElementFactory.make('filesrc', 'src');
-            src.set_property('location', path);
-            const decode = Gst.ElementFactory.make('decodebin', 'dec');
-            pipeline.add(src);
-            pipeline.add(decode);
-            src.link(decode);
+            let srcW = 0, srcH = 0;
+            try {
+                const discoverer = new GstPbutils.Discoverer();
+                const info = discoverer.discover_uri(`file://${path}`);
+                const streams = info.get_video_streams();
+                if (streams.length > 0) {
+                    const structure = streams[0].get_caps().get_structure(0);
+                    const [okW, w] = structure.get_int('width');
+                    const [okH, h] = structure.get_int('height');
+                    if (okW && okH) { srcW = w; srcH = h; }
+                }
+            } catch (e) {
+                this._debugLog(`background video: discovery failed: ${e}`);
+            }
+            if (srcW <= 0 || srcH <= 0) {
+                this._debugLog('background video: no video stream found');
+                this._stopBackgroundVideo();
+                return;
+            }
+
+            const w = state.w, h = state.h;
+            let sw = w, sh = h;
+            let boxStr = '';
+            if (fit === 'cover' || fit === 'contain') {
+                const scale = fit === 'cover'
+                    ? Math.max(w / srcW, h / srcH)
+                    : Math.min(w / srcW, h / srcH);
+                sw = Math.round(srcW * scale);
+                sh = Math.round(srcH * scale);
+                const leftoverW = w - sw;
+                const leftoverH = h - sh;
+                const l = fit === 'cover'
+                    ? Math.floor(-leftoverW / 2) : Math.floor(leftoverW / 2);
+                const r = fit === 'cover'
+                    ? Math.ceil(-leftoverW / 2) : Math.ceil(leftoverW / 2);
+                const t = fit === 'cover'
+                    ? Math.floor(-leftoverH / 2) : Math.floor(leftoverH / 2);
+                const b = fit === 'cover'
+                    ? Math.ceil(-leftoverH / 2) : Math.ceil(leftoverH / 2);
+                boxStr = `videobox border-alpha=0 left=${l} right=${r} top=${t} bottom=${b} ! `;
+            }
+
+            const escaped = path.replace(/"/g, '\\"');
+            const launch = `filesrc location="${escaped}" ! decodebin ! videoconvert ! videoscale ` +
+                `! video/x-raw,format=RGBA,width=${sw},height=${sh} ! ${boxStr}` +
+                `video/x-raw,format=RGBA,width=${w},height=${h} ! ` +
+                `appsink name=s emit-signals=false sync=true max-buffers=1 drop=true`;
+
+            const pipeline = Gst.parse_launch(launch);
             state.pipeline = pipeline;
-            state.sink = null;
-
-            decode.connect('pad-added', (_dec, pad) => {
-                if (state.linked || this._destroyed) return;
-                const caps = pad.get_current_caps();
-                if (!caps) return;
-                const structure = caps.get_structure(0);
-                if (!structure || structure.get_name() !== 'video/x-raw') return;
-                state.linked = true;
-                const [okW, srcW] = structure.get_int('width');
-                const [okH, srcH] = structure.get_int('height');
-                if (!okW || !okH || srcW <= 0 || srcH <= 0) {
-                    this._stopBackgroundVideo();
-                    return;
-                }
-                const w = state.w, h = state.h;
-                let sw = w, sh = h;
-                let box = null;
-                if (fit === 'cover' || fit === 'contain') {
-                    const scale = fit === 'cover'
-                        ? Math.max(w / srcW, h / srcH)
-                        : Math.min(w / srcW, h / srcH);
-                    sw = Math.round(srcW * scale);
-                    sh = Math.round(srcH * scale);
-                    const leftoverW = w - sw;
-                    const leftoverH = h - sh;
-                    box = Gst.ElementFactory.make('videobox', 'box');
-                    box.set_property('border-alpha', 0);
-                    pipeline.add(box);
-                    if (fit === 'cover') {
-                        box.set_property('left', Math.floor(-leftoverW / 2));
-                        box.set_property('right', Math.ceil(-leftoverW / 2));
-                        box.set_property('top', Math.floor(-leftoverH / 2));
-                        box.set_property('bottom', Math.ceil(-leftoverH / 2));
-                    } else {
-                        box.set_property('left', Math.floor(leftoverW / 2));
-                        box.set_property('right', Math.ceil(leftoverW / 2));
-                        box.set_property('top', Math.floor(leftoverH / 2));
-                        box.set_property('bottom', Math.ceil(leftoverH / 2));
-                    }
-                }
-                const convert = Gst.ElementFactory.make('videoconvert', 'convert');
-                const scaleElem = Gst.ElementFactory.make('videoscale', 'scale');
-                const capsA = Gst.Caps.from_string(`video/x-raw,format=RGBA,width=${sw},height=${sh}`);
-                const capsfA = Gst.ElementFactory.make('capsfilter', 'capsa');
-                capsfA.set_property('caps', capsA);
-                const capsB = Gst.Caps.from_string(`video/x-raw,format=RGBA,width=${w},height=${h}`);
-                const capsfB = Gst.ElementFactory.make('capsfilter', 'capsb');
-                capsfB.set_property('caps', capsB);
-                const sink = Gst.ElementFactory.make('appsink', 'sink');
-                sink.set_property('emit-signals', true);
-                sink.set_property('max-buffers', 1);
-                sink.set_property('drop', true);
-                sink.set_property('sync', false);
-                sink.connect('new-sample', onFrame);
-                state.sink = sink;
-
-                pipeline.add(convert);
-                pipeline.add(scaleElem);
-                pipeline.add(capsfA);
-                pipeline.add(capsfB);
-                pipeline.add(sink);
-                pad.link(convert.get_static_pad('sink'));
-                convert.link(scaleElem);
-                scaleElem.link(capsfA);
-                if (box) {
-                    capsfA.link(box);
-                    box.link(capsfB);
-                } else {
-                    capsfA.link(capsfB);
-                }
-                capsfB.link(sink);
-            });
+            state.sink = pipeline.get_by_name('s');
 
             const bus = pipeline.get_bus();
             bus.add_signal_watch();
@@ -3897,7 +3866,12 @@ export default class TilingWMExtension extends Extension {
 
             pipeline.set_state(Gst.State.PLAYING);
             this._bgVideo = state;
-            this._debugLog(`background video: playing ${path} (${union.w}x${union.h}, fit=${fit})`);
+            state.pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+                if (this._destroyed || this._bgVideo !== state) return GLib.SOURCE_REMOVE;
+                onFrame();
+                return GLib.SOURCE_CONTINUE;
+            });
+            this._debugLog(`background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
         } catch (e) {
             this._debugLog(`background video: pipeline failed: ${e}`);
             this._stopBackgroundVideo();
@@ -3908,6 +3882,10 @@ export default class TilingWMExtension extends Extension {
         const state = this._bgVideo;
         if (!state) return;
         this._bgVideo = null;
+        if (state.pollId) {
+            try { GLib.source_remove(state.pollId); } catch (_e) {}
+            state.pollId = 0;
+        }
         try {
             if (state.pipeline) {
                 state.pipeline.set_state(Gst.State.NULL);
