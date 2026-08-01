@@ -3257,8 +3257,12 @@ export default class TilingWMExtension extends Extension {
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
         const command = this._settings.get_string('dropdown-terminal-command') || '';
         const bin = command.trim().split(/\s+/)[0] || '';
-        const cls = win.get_wm_class_instance();
-        if (!bin || !cls || cls.toLowerCase() !== bin.toLowerCase()) return false;
+        const instance = (win.get_wm_class_instance() || '').toLowerCase();
+        const cls = (win.get_wm_class() || '').toLowerCase();
+        if (!bin || !(instance.includes(bin) || cls.includes(bin))) {
+            this._debugLog(`dropdown: window created, no match (instance=${instance} class=${cls})`);
+            return false;
+        }
         if (this._dropdownPendingId) {
             GLib.source_remove(this._dropdownPendingId);
             this._dropdownPendingId = 0;
@@ -3270,7 +3274,7 @@ export default class TilingWMExtension extends Extension {
         });
         this._configureDropdownTerminal(win);
         this._showDropdownTerminal(win);
-        this._debugLog(`dropdown: claimed ${cls}`);
+        this._debugLog(`dropdown: claimed ${instance || cls}`);
         return true;
     }
 
