@@ -263,6 +263,9 @@ export default class TilingWMExtension extends Extension {
         this._dropdownPendingId = 0;
         this._dropdownWaiters = new Map();
         this._dropdownSettingsChangedId = 0;
+        this._dropdownLocked = false;
+        this._dropdownStealId = 0;
+        this._dropdownStageEventId = 0;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -358,6 +361,11 @@ export default class TilingWMExtension extends Extension {
         this._jpSettingsChangedId = 0;
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
+        this._releaseDropdownLock();
+        if (this._dropdownStageEventId) {
+            try { global.stage.disconnect(this._dropdownStageEventId); } catch (_e) {}
+            this._dropdownStageEventId = 0;
+        }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
             GLib.source_remove(this._dropdownPendingId);
@@ -494,6 +502,7 @@ export default class TilingWMExtension extends Extension {
                 this._keyboardFocusChange = false;
                 if (win) this._moveCursorToWindow(win);
             }
+            this._handleDropdownFocusSteal();
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
             this._updateDropOverlaySize();
@@ -3256,6 +3265,12 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._dropdownSettingsChangedId = 0;
         }
+        try {
+            this._dropdownStageEventId = global.stage.connect(
+                'event', (_actor, event) => this._onDropdownStageEvent(event));
+        } catch (_e) {
+            this._dropdownStageEventId = 0;
+        }
     }
 
     _toggleDropdownTerminal() {
@@ -3264,6 +3279,7 @@ export default class TilingWMExtension extends Extension {
             if (win.minimized) {
                 this._showDropdownTerminal(win);
             } else {
+                this._releaseDropdownLock();
                 try { win.minimize(); } catch (_e) {}
             }
             return;
@@ -3348,7 +3364,10 @@ export default class TilingWMExtension extends Extension {
         this._removeBorder(win);
         this._dropdownWin = win;
         this._dropdownUnmanagedId = win.connect('unmanaged', () => {
-            if (this._dropdownWin === win) this._dropdownWin = null;
+            if (this._dropdownWin === win) {
+                this._dropdownWin = null;
+                this._releaseDropdownLock();
+            }
         });
         this._configureDropdownTerminal(win);
         this._showDropdownTerminal(win);
@@ -3377,6 +3396,60 @@ export default class TilingWMExtension extends Extension {
         try { win.make_above(); } catch (_e) {}
         try { win.activate(global.get_current_time()); } catch (_e) {}
         this._applyDropdownEffects(win);
+        this._dropdownLocked = true;
+    }
+
+    _releaseDropdownLock() {
+        this._dropdownLocked = false;
+        if (this._dropdownStealId) {
+            GLib.source_remove(this._dropdownStealId);
+            this._dropdownStealId = 0;
+        }
+    }
+
+    _handleDropdownFocusSteal() {
+        if (this._destroyed || !this._dropdownLocked) return;
+        if (!this._settings.get_boolean('dropdown-terminal-focus-lock')) return;
+        const win = this._dropdownWin;
+        if (!win || win.minimized) return;
+        if (global.display.focus_window === win) return;
+        try {
+            if (Main.overview && Main.overview.visible) return;
+        } catch (_e) {}
+        if (this._dropdownStealId) return;
+        this._dropdownStealId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+            this._dropdownStealId = 0;
+            const w = this._dropdownWin;
+            if (!w || w.minimized) return GLib.SOURCE_REMOVE;
+            if (global.display.focus_window === w) return GLib.SOURCE_REMOVE;
+            try {
+                this._debugLog('dropdown: focus stolen back');
+                w.activate(global.get_current_time());
+            } catch (_e) {}
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _onDropdownStageEvent(event) {
+        if (this._destroyed) return Clutter.EVENT_PROPAGATE;
+        if (event.type() !== Clutter.EventType.BUTTON_PRESS) return Clutter.EVENT_PROPAGATE;
+        if (!this._settings.get_boolean('dropdown-terminal-click-dismiss')) return Clutter.EVENT_PROPAGATE;
+        const win = this._dropdownWin;
+        if (!win || win.minimized) return Clutter.EVENT_PROPAGATE;
+        try {
+            if (Main.overview && Main.overview.visible) return Clutter.EVENT_PROPAGATE;
+        } catch (_e) {}
+        const [x, y] = event.get_coords();
+        const frame = win.get_frame_rect();
+        const pad = 8;
+        if (x >= frame.x - pad && x <= frame.x + frame.width + pad &&
+            y >= frame.y - pad && y <= frame.y + frame.height + pad) {
+            return Clutter.EVENT_PROPAGATE;
+        }
+        this._debugLog('dropdown: click outside, dismissing');
+        this._releaseDropdownLock();
+        try { win.minimize(); } catch (_e) {}
+        return Clutter.EVENT_PROPAGATE;
     }
 
     _dropdownRect() {
@@ -3451,6 +3524,7 @@ export default class TilingWMExtension extends Extension {
             try { win.disconnect(this._dropdownUnmanagedId); } catch (_e) {}
             this._dropdownUnmanagedId = 0;
         }
+        this._releaseDropdownLock();
         this._removeBorder(win);
         this._removeMask(win);
         this._removeBlur(win);
