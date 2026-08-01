@@ -379,12 +379,12 @@ export default class TilingWMExtension extends Extension {
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
         this._stopBackgroundVideo();
-        if (this._origBackgroundManagerInit) {
+        if (this._origBackgroundManagerCreate) {
             try {
-                Background.BackgroundManager.prototype._init =
-                    this._origBackgroundManagerInit;
+                Background.BackgroundManager.prototype._createBackgroundActor =
+                    this._origBackgroundManagerCreate;
             } catch (_e) {}
-            this._origBackgroundManagerInit = null;
+            this._origBackgroundManagerCreate = null;
         }
         if (this._bgVideoChangedId) {
             try { this._settings.disconnect(this._bgVideoChangedId); } catch (_e) {}
@@ -3785,32 +3785,40 @@ export default class TilingWMExtension extends Extension {
             this._bgFitChangedId = 0;
         }
         try {
-            if (!this._origBackgroundManagerInit && Background.BackgroundManager) {
-                const orig = Background.BackgroundManager.prototype._init;
-                this._origBackgroundManagerInit = orig;
-                const getVideoActor = () =>
-                    this._bgVideo ? this._bgVideo.actor : null;
-                Background.BackgroundManager.prototype._init = function (...args) {
-                    orig.apply(this, args);
-                    const container = args[0] && args[0].container;
-                    const video = getVideoActor();
-                    if (container && video && container !== Main.layoutManager._backgroundGroup) {
-                        try {
-                            const clone = new Clutter.Clone({ source: video });
-                            for (let i = 0; i < 4; i++) {
-                                clone.add_constraint(new Clutter.BindConstraint({
-                                    source: container,
-                                    coordinate: i,
-                                    offset: 0,
-                                }));
-                            }
-                            container.add_child(clone);
-                        } catch (_e) {}
-                    }
-                };
+            if (!this._origBackgroundManagerCreate && Background.BackgroundManager) {
+                const orig = Background.BackgroundManager.prototype._createBackgroundActor;
+                if (typeof orig === 'function') {
+                    this._origBackgroundManagerCreate = orig;
+                    const getVideoActor = () =>
+                        this._bgVideo ? this._bgVideo.actor : null;
+                    Background.BackgroundManager.prototype._createBackgroundActor = function (...args) {
+                        const actor = orig.apply(this, args);
+                        const video = getVideoActor();
+                        if (video && this._container &&
+                            this._container !== Main.layoutManager._backgroundGroup) {
+                            try {
+                                const clone = new Clutter.Clone({ source: video });
+                                for (let i = 0; i < 4; i++) {
+                                    clone.add_constraint(new Clutter.BindConstraint({
+                                        source: this._container,
+                                        coordinate: i,
+                                        offset: 0,
+                                    }));
+                                }
+                                this._container.add_child(clone);
+                                this._container.connect('child-added', () => {
+                                    try {
+                                        this._container.set_child_above_sibling(clone, null);
+                                    } catch (_e) {}
+                                });
+                            } catch (_e) {}
+                        }
+                        return actor;
+                    };
+                }
             }
         } catch (_e) {
-            this._origBackgroundManagerInit = null;
+            this._origBackgroundManagerCreate = null;
         }
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
