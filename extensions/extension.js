@@ -3768,9 +3768,42 @@ export default class TilingWMExtension extends Extension {
         return { w: maxX, h: maxY };
     }
 
+    _bgLog(...args) {
+        try {
+            const dir = `${GLib.get_home_dir()}/.local/share/plaid`;
+            const parent = Gio.File.new_for_path(dir);
+            if (!parent.query_exists(null)) {
+                try { parent.make_directory_with_parents(null); } catch (_e) {}
+            }
+            const file = Gio.File.new_for_path(`${dir}/background.log`);
+            const stream = file.append_to(Gio.FileCreateFlags.NONE, null);
+            const line = `${new Date().toISOString()} pid=${GLib.get_pid()} ${args.join(' ')}`;
+            stream.write_all(`${line}\n`, null);
+            try { stream.close(null); } catch (_e) {}
+        } catch (_e) {}
+    }
+
+    _uploadBackgroundFrame(state, data) {
+        try {
+            state.texture.set_region(0, 0, 0, 0,
+                state.w, state.h, state.w, state.h,
+                Cogl.PixelFormat.RGBA_8888, state.w * 4, data);
+            state.content.invalidate();
+            state.actor.queue_redraw();
+        } catch (e) {
+            if (!state.uploadFailedLogged) {
+                state.uploadFailedLogged = true;
+                log(`[plaid] background video: frame upload failed: ${e}`);
+                this._bgLog(`frame upload failed: ${e}`);
+                this._showWarningPopup('Animated Background Failed', `Frame upload failed: ${e}`, 'Click to dismiss');
+            }
+        }
+    }
+
     _startBackgroundVideo() {
         const path = this._settings ? this._settings.get_string('background-animated-video') : '';
         log(`[plaid] background video: start (path=${path})`);
+        this._bgLog(`start (path=${path})`);
         if (this._destroyed || !this._settings) return;
         if (this._bgVideo) {
             log('[plaid] background video: already running');
@@ -3793,6 +3826,7 @@ export default class TilingWMExtension extends Extension {
 
         const fit = this._settings.get_string('background-animated-fit') || 'cover';
 
+        // In-process vaapi is unsafe (compositor freeze); pin the va plugin to NONE.
         try {
             const registry = Gst.Registry.get();
             const features = registry.get_feature_list_by_plugin('va');
@@ -3819,10 +3853,12 @@ export default class TilingWMExtension extends Extension {
             }
         } catch (e) {
             log(`[plaid] background video: discovery failed: ${e}`);
+            this._bgLog(`discovery failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Could not read video: ${path}`, 'Click to dismiss');
         }
         if (srcW <= 0 || srcH <= 0) {
             log('[plaid] background video: no video stream found');
+            this._bgLog('no video stream found');
             this._showWarningPopup('Animated Background Failed', 'No video stream found in this file', 'Click to dismiss');
             this._stopBackgroundVideo();
             return;
@@ -3832,6 +3868,22 @@ export default class TilingWMExtension extends Extension {
         const w = Math.min(capW, union.w);
         const h = Math.max(1, Math.round(w * union.h / union.w));
 
+        let sw = w, sh = h;
+        let l = 0, r = 0, t = 0, b = 0;
+        if (fit === 'cover' || fit === 'contain') {
+            const scale = fit === 'cover'
+                ? Math.max(w / srcW, h / srcH)
+                : Math.min(w / srcW, h / srcH);
+            sw = Math.round(srcW * scale);
+            sh = Math.round(srcH * scale);
+            const leftoverW = w - sw;
+            const leftoverH = h - sh;
+            l = fit === 'cover' ? Math.floor(-leftoverW / 2) : Math.floor(leftoverW / 2);
+            r = fit === 'cover' ? Math.ceil(-leftoverW / 2) : Math.ceil(leftoverW / 2);
+            t = fit === 'cover' ? Math.floor(-leftoverH / 2) : Math.floor(leftoverH / 2);
+            b = fit === 'cover' ? Math.ceil(-leftoverH / 2) : Math.ceil(leftoverH / 2);
+        }
+
         let texture = null;
         let actor = null;
         let content = null;
@@ -3840,6 +3892,7 @@ export default class TilingWMExtension extends Extension {
             texture = Cogl.Texture2D.new_with_size(coglContext, w, h);
         } catch (e) {
             log(`[plaid] background video: texture creation failed: ${e}`);
+            this._bgLog(`texture creation failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Texture creation failed: ${e}`, 'Click to dismiss');
             return;
         }
@@ -3851,66 +3904,155 @@ export default class TilingWMExtension extends Extension {
             Main.layoutManager._backgroundGroup.add_child(actor);
         } catch (e) {
             log(`[plaid] background video: actor creation failed: ${e}`);
+            this._bgLog(`actor creation failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Actor creation failed: ${e}`, 'Click to dismiss');
             try { actor && actor.destroy(); } catch (_e2) {}
             return;
         }
 
-        const state = { pipeline: null, sink: null, texture, actor, content, w, h, pollId: 0, uploadFailedLogged: false };
-
-        const onFrame = () => {
-            if (this._destroyed || this._bgVideo !== state) return;
-            const sample = state.sink.try_pull_sample(0);
-            if (!sample) return;
-            const buffer = sample.get_buffer();
-            const [ok, info] = buffer.map(Gst.MapFlags.READ);
-            if (!ok) return;
-            try {
-                const data = info.get_data();
-                state.texture.set_region(0, 0, 0, 0,
-                    state.w, state.h, state.w, state.h,
-                    Cogl.PixelFormat.RGBA_8888, state.w * 4, data);
-                state.content.invalidate();
-                state.actor.queue_redraw();
-            } catch (e) {
-                if (!state.uploadFailedLogged) {
-                    state.uploadFailedLogged = true;
-                    log(`[plaid] background video: frame upload failed: ${e}`);
-                    this._showWarningPopup('Animated Background Failed', `Frame upload failed: ${e}`, 'Click to dismiss');
-                }
-            } finally {
-                buffer.unmap(info);
-            }
+        const state = {
+            pipeline: null, sink: null, texture, actor, content,
+            w, h, pollId: 0, uploadFailedLogged: false,
+            helper: null, helperPipe: null, helperFrames: 0,
+            frameAccum: null, frameOffset: 0, firstFrameId: 0,
+            fallbackStarted: false,
+            params: { path, fit, sw, sh, l, r, t, b },
         };
+        this._bgVideo = state;
 
+        this._startBackgroundHardware(state);
+    }
+
+    _startBackgroundHardware(state) {
+        const params = state.params;
+        let filter = '';
+        if (params.fit === 'contain') {
+            filter = `scale=${params.sw}:${params.sh},pad=${state.w}:${state.h}:(ow-iw)/2:(oh-ih)/2`;
+        } else {
+            filter = `scale=${params.sw}:${params.sh},crop=${state.w}:${state.h}:${params.l}:${params.t}`;
+        }
+        const argv = ['/usr/bin/ffmpeg', '-v', 'error', '-stream_loop', '-1', '-re',
+            '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128',
+            '-i', params.path, '-an', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-vf', filter, 'pipe:1'];
         try {
-            let sw = w, sh = h;
-            let boxStr = '';
-            if (fit === 'cover' || fit === 'contain') {
-                const scale = fit === 'cover'
-                    ? Math.max(w / srcW, h / srcH)
-                    : Math.min(w / srcW, h / srcH);
-                sw = Math.round(srcW * scale);
-                sh = Math.round(srcH * scale);
-                const leftoverW = w - sw;
-                const leftoverH = h - sh;
-                const l = fit === 'cover'
-                    ? Math.floor(-leftoverW / 2) : Math.floor(leftoverW / 2);
-                const r = fit === 'cover'
-                    ? Math.ceil(-leftoverW / 2) : Math.ceil(leftoverW / 2);
-                const t = fit === 'cover'
-                    ? Math.floor(-leftoverH / 2) : Math.floor(leftoverH / 2);
-                const b = fit === 'cover'
-                    ? Math.ceil(-leftoverH / 2) : Math.ceil(leftoverH / 2);
-                boxStr = `videobox border-alpha=0 left=${l} right=${r} top=${t} bottom=${b} ! `;
-            }
+            const launcher = new Gio.SubprocessLauncher({
+                flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            });
+            launcher.setenv('LIBVA_DRIVER_NAME', 'radeonsi', true);
+            state.helper = launcher.spawnv(argv);
+            this._bgLog(`hardware: spawned ffmpeg (filter=${filter})`);
+            state.frameAccum = new Uint8Array(state.w * state.h * 4);
+            state.frameOffset = 0;
+            state.helperPipe = state.helper.get_stdout_pipe();
+            this._readBackgroundFrames(state);
 
-            const escaped = path.replace(/"/g, '\\"');
+            const errPipe = state.helper.get_stderr_pipe();
+            const readErr = () => {
+                errPipe.read_bytes_async(4096, GLib.PRIORITY_DEFAULT, null, (stream, res) => {
+                    try {
+                        const bytes = stream.read_bytes_finish(res);
+                        if (bytes.get_size() === 0) return;
+                        this._bgLog(`ffmpeg: ${String(bytes.get_data())}`.trimEnd());
+                        readErr();
+                    } catch (_e) {}
+                });
+            };
+            readErr();
+
+            state.firstFrameId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+                state.firstFrameId = 0;
+                if (this._destroyed || this._bgVideo !== state) return GLib.SOURCE_REMOVE;
+                if (state.helperFrames === 0 && !state.fallbackStarted) {
+                    this._bgLog('hardware: no frames within 5s, falling back to software');
+                    this._fallbackToSoftware(state);
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+
+            state.helper.wait_check_async(null, (sub, res) => {
+                let ok = false;
+                try { ok = sub.get_if_exited() && sub.get_exit_status() === 0; } catch (_e) {}
+                if (this._destroyed || this._bgVideo !== state) return;
+                if (!state.fallbackStarted) {
+                    this._bgLog(`hardware: ffmpeg exited (ok=${ok}), falling back to software`);
+                    this._fallbackToSoftware(state);
+                }
+            });
+        } catch (e) {
+            this._bgLog(`hardware: spawn failed: ${e}`);
+            this._fallbackToSoftware(state);
+        }
+    }
+
+    _readBackgroundFrames(state) {
+        const frameSize = state.w * state.h * 4;
+        const read = () => {
+            if (this._destroyed || this._bgVideo !== state || !state.helperPipe) return;
+            const remaining = frameSize - state.frameOffset;
+            state.helperPipe.read_bytes_async(remaining, GLib.PRIORITY_DEFAULT, null, (stream, res) => {
+                if (this._destroyed || this._bgVideo !== state) return;
+                try {
+                    const bytes = stream.read_bytes_finish(res);
+                    const size = bytes.get_size();
+                    if (size === 0) {
+                        if (!state.fallbackStarted) {
+                            this._bgLog('hardware: EOF before full frame, falling back to software');
+                            this._fallbackToSoftware(state);
+                        }
+                        return;
+                    }
+                    state.frameAccum.set(bytes.get_data(), state.frameOffset);
+                    state.frameOffset += size;
+                    if (state.frameOffset >= frameSize) {
+                        state.helperFrames++;
+                        this._uploadBackgroundFrame(state, state.frameAccum);
+                        if (state.helperFrames === 1)
+                            this._bgLog('hardware: first frame rendered');
+                        if (state.helperFrames % 300 === 0)
+                            this._bgLog(`hardware: ${state.helperFrames} frames`);
+                        state.frameOffset = 0;
+                    }
+                    read();
+                } catch (_e) {
+                    if (!state.fallbackStarted) {
+                        this._bgLog('hardware: read error, falling back to software');
+                        this._fallbackToSoftware(state);
+                    }
+                }
+            });
+        };
+        read();
+    }
+
+    _fallbackToSoftware(state) {
+        if (state.fallbackStarted) return;
+        state.fallbackStarted = true;
+        if (state.firstFrameId) {
+            try { GLib.source_remove(state.firstFrameId); } catch (_e) {}
+            state.firstFrameId = 0;
+        }
+        state.helperPipe = null;
+        if (state.helper) {
+            try { state.helper.force_exit(); } catch (_e) {}
+            state.helper = null;
+        }
+        this._bgLog('software: starting fallback');
+        this._startBackgroundSoftware(state);
+    }
+
+    _startBackgroundSoftware(state) {
+        const params = state.params;
+        try {
+            let sw = params.sw, sh = params.sh;
+            let boxStr = '';
+            if (params.fit === 'cover' || params.fit === 'contain') {
+                boxStr = `videobox border-alpha=0 left=${params.l} right=${params.r} top=${params.t} bottom=${params.b} ! `;
+            }
+            const escaped = params.path.replace(/"/g, '\\"');
             const launch = `filesrc location="${escaped}" ! decodebin ! videoconvert ! videoscale ` +
                 `! video/x-raw,format=RGBA,width=${sw},height=${sh} ! ${boxStr}` +
-                `video/x-raw,format=RGBA,width=${w},height=${h} ! ` +
+                `video/x-raw,format=RGBA,width=${state.w},height=${state.h} ! ` +
                 `appsink name=s emit-signals=false sync=true max-buffers=1 drop=true`;
-
             const pipeline = Gst.parse_launch(launch);
             state.pipeline = pipeline;
             state.sink = pipeline.get_by_name('s');
@@ -3929,21 +4071,31 @@ export default class TilingWMExtension extends Extension {
                     try { [err] = msg.parse_error(); } catch (_e2) {}
                     const reason = err ? err.message : 'unknown';
                     log(`[plaid] background video error: ${reason}`);
-                    this._showWarningPopup('Animated Background Failed', `Could not play video (missing decoder?): ${reason}`, 'Click to dismiss');
+                    this._bgLog(`software error: ${reason}`);
+                    this._showWarningPopup('Animated Background Failed', `Could not play video: ${reason}`, 'Click to dismiss');
                     this._stopBackgroundVideo();
                 }
             });
 
             pipeline.set_state(Gst.State.PLAYING);
-            this._bgVideo = state;
             state.pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
                 if (this._destroyed || this._bgVideo !== state) return GLib.SOURCE_REMOVE;
-                onFrame();
+                const sample = state.sink.try_pull_sample(0);
+                if (sample) {
+                    const buffer = sample.get_buffer();
+                    const [ok, info] = buffer.map(Gst.MapFlags.READ);
+                    if (ok) {
+                        try { this._uploadBackgroundFrame(state, info.get_data()); }
+                        finally { buffer.unmap(info); }
+                    }
+                }
                 return GLib.SOURCE_CONTINUE;
             });
-            log(`[plaid] background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
+            this._bgLog(`software: playing (${state.w}x${state.h}, fit=${params.fit})`);
+            log(`[plaid] background video: playing ${params.path} -> ${state.w}x${state.h} (software)`);
         } catch (e) {
-            log(`[plaid] background video: pipeline failed: ${e}`);
+            log(`[plaid] background video: software pipeline failed: ${e}`);
+            this._bgLog(`software failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Pipeline failed: ${e}`, 'Click to dismiss');
             this._stopBackgroundVideo();
         }
@@ -3957,14 +4109,24 @@ export default class TilingWMExtension extends Extension {
             try { GLib.source_remove(state.pollId); } catch (_e) {}
             state.pollId = 0;
         }
+        if (state.firstFrameId) {
+            try { GLib.source_remove(state.firstFrameId); } catch (_e) {}
+            state.firstFrameId = 0;
+        }
         try {
             if (state.pipeline) {
                 state.pipeline.set_state(Gst.State.NULL);
             }
         } catch (_e) {}
+        if (state.helper) {
+            try { state.helper.force_exit(); } catch (_e) {}
+            state.helper = null;
+        }
+        state.helperPipe = null;
         try {
             if (state.actor) state.actor.destroy();
         } catch (_e) {}
+        this._bgLog('stopped');
         this._debugLog('background video: stopped');
     }
 
