@@ -11,6 +11,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as WorkspaceAnimation from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup } from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -378,6 +379,13 @@ export default class TilingWMExtension extends Extension {
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
         this._stopBackgroundVideo();
+        if (this._origWorkspaceBackgroundInit) {
+            try {
+                WorkspaceAnimation.WorkspaceBackground.prototype._init =
+                    this._origWorkspaceBackgroundInit;
+            } catch (_e) {}
+            this._origWorkspaceBackgroundInit = null;
+        }
         if (this._bgVideoChangedId) {
             try { this._settings.disconnect(this._bgVideoChangedId); } catch (_e) {}
             this._bgVideoChangedId = 0;
@@ -3744,6 +3752,25 @@ export default class TilingWMExtension extends Extension {
                 () => this._restartBackgroundVideo());
         } catch (_e) {
             this._bgFitChangedId = 0;
+        }
+        try {
+            if (!this._origWorkspaceBackgroundInit && WorkspaceAnimation.WorkspaceBackground) {
+                const orig = WorkspaceAnimation.WorkspaceBackground.prototype._init;
+                this._origWorkspaceBackgroundInit = orig;
+                const getVideoActor = () =>
+                    this._bgVideo ? this._bgVideo.actor : null;
+                WorkspaceAnimation.WorkspaceBackground.prototype._init = function (...args) {
+                    orig.apply(this, args);
+                    const video = getVideoActor();
+                    if (video) {
+                        try {
+                            this.add_child(new Clutter.Clone({ source: video }));
+                        } catch (_e) {}
+                    }
+                };
+            }
+        } catch (_e) {
+            this._origWorkspaceBackgroundInit = null;
         }
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;

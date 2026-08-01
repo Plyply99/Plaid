@@ -888,7 +888,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const group = new Adw.PreferencesGroup({
             title: _('Animated Background'),
-            description: _('Play a looping video (or GIF/WebP animation) as the desktop background. Non-interactive, sits behind all windows.'),
+            description: _('Plays looping video (or GIF/WebP) as the desktop background — non-interactive, behind all windows. Hardware-accelerated via VA-API when available (decoded and scaled on the GPU at up to 1080p-class, keeping the shell light), with automatic software fallback. Common formats — H.264, HEVC, VP9, AV1 — work out of the box.'),
         });
         page.add(group);
 
