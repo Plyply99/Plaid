@@ -3739,13 +3739,27 @@ export default class TilingWMExtension extends Extension {
     }
 
     _startBackgroundVideo() {
+        const path = this._settings ? this._settings.get_string('background-animated-video') : '';
+        log(`[plaid] background video: start (path=${path})`);
         if (this._destroyed || !this._settings) return;
-        if (this._bgVideo) return;
-        const path = this._settings.get_string('background-animated-video');
-        if (!path) return;
-        try { Gst.init(null); } catch (_e) {}
+        if (this._bgVideo) {
+            log('[plaid] background video: already running');
+            return;
+        }
+        if (!path) {
+            log('[plaid] background video: no path set');
+            return;
+        }
+        try {
+            Gst.init(null);
+        } catch (e) {
+            log(`[plaid] background video: Gst.init failed: ${e}`);
+        }
         const union = this._backgroundUnionSize();
-        if (union.w === 0 || union.h === 0) return;
+        if (union.w === 0 || union.h === 0) {
+            log('[plaid] background video: zero monitor size');
+            return;
+        }
 
         const fit = this._settings.get_string('background-animated-fit') || 'cover';
 
@@ -3883,7 +3897,7 @@ export default class TilingWMExtension extends Extension {
                 onFrame();
                 return GLib.SOURCE_CONTINUE;
             });
-            this._debugLog(`background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
+            log(`[plaid] background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
         } catch (e) {
             log(`[plaid] background video: pipeline failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Pipeline failed: ${e}`, 'Click to dismiss');
