@@ -3793,12 +3793,51 @@ export default class TilingWMExtension extends Extension {
 
         const fit = this._settings.get_string('background-animated-fit') || 'cover';
 
+        try {
+            const registry = Gst.Registry.get();
+            const features = registry.get_feature_list_by_plugin('va');
+            for (const feature of features) {
+                const name = feature.get_name() || '';
+                if (name.endsWith('dec') || name.endsWith('postproc'))
+                    feature.set_rank(Gst.Rank.PRIMARY + 3);
+            }
+        } catch (_e) {}
+
+        let srcW = 0, srcH = 0;
+        try {
+            const discoverer = new GstPbutils.Discoverer();
+            let uri = null;
+            try { uri = Gst.uri_construct('file', path); } catch (_e2) {}
+            if (!uri) uri = `file://${path}`;
+            const info = discoverer.discover_uri(uri);
+            const streams = info.get_video_streams();
+            if (streams.length > 0) {
+                const structure = streams[0].get_caps().get_structure(0);
+                const [okW, w] = structure.get_int('width');
+                const [okH, h] = structure.get_int('height');
+                if (okW && okH) { srcW = w; srcH = h; }
+            }
+        } catch (e) {
+            log(`[plaid] background video: discovery failed: ${e}`);
+            this._showWarningPopup('Animated Background Failed', `Could not read video: ${path}`, 'Click to dismiss');
+        }
+        if (srcW <= 0 || srcH <= 0) {
+            log('[plaid] background video: no video stream found');
+            this._showWarningPopup('Animated Background Failed', 'No video stream found in this file', 'Click to dismiss');
+            this._stopBackgroundVideo();
+            return;
+        }
+
+        const capW = 1920;
+        const w = Math.min(capW, union.w);
+        const h = Math.max(1, Math.round(w * union.h / union.w));
+
         let texture = null;
         let actor = null;
         let content = null;
         try {
             const coglContext = Clutter.get_default_backend().get_cogl_context();
-            texture = Cogl.Texture2D.new_with_size(coglContext, union.w, union.h);
+            texture = Cogl.Texture2D.new_with_size(coglContext, w, h);
         } catch (e) {
             log(`[plaid] background video: texture creation failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Texture creation failed: ${e}`, 'Click to dismiss');
@@ -3817,7 +3856,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const state = { pipeline: null, sink: null, texture, actor, content, w: union.w, h: union.h, pollId: 0, uploadFailedLogged: false };
+        const state = { pipeline: null, sink: null, texture, actor, content, w, h, pollId: 0, uploadFailedLogged: false };
 
         const onFrame = () => {
             if (this._destroyed || this._bgVideo !== state) return;
@@ -3845,32 +3884,6 @@ export default class TilingWMExtension extends Extension {
         };
 
         try {
-            let srcW = 0, srcH = 0;
-            try {
-                const discoverer = new GstPbutils.Discoverer();
-                let uri = null;
-                try { uri = Gst.uri_construct('file', path); } catch (_e2) {}
-                if (!uri) uri = `file://${path}`;
-                const info = discoverer.discover_uri(uri);
-                const streams = info.get_video_streams();
-                if (streams.length > 0) {
-                    const structure = streams[0].get_caps().get_structure(0);
-                    const [okW, w] = structure.get_int('width');
-                    const [okH, h] = structure.get_int('height');
-                    if (okW && okH) { srcW = w; srcH = h; }
-                }
-            } catch (e) {
-                log(`[plaid] background video: discovery failed: ${e}`);
-                this._showWarningPopup('Animated Background Failed', `Could not read video: ${path}`, 'Click to dismiss');
-            }
-            if (srcW <= 0 || srcH <= 0) {
-                log('[plaid] background video: no video stream found');
-                this._showWarningPopup('Animated Background Failed', 'No video stream found in this file', 'Click to dismiss');
-                this._stopBackgroundVideo();
-                return;
-            }
-
-            const w = state.w, h = state.h;
             let sw = w, sh = h;
             let boxStr = '';
             if (fit === 'cover' || fit === 'contain') {
@@ -3892,8 +3905,9 @@ export default class TilingWMExtension extends Extension {
                 boxStr = `videobox border-alpha=0 left=${l} right=${r} top=${t} bottom=${b} ! `;
             }
 
+            const decoder = Gst.ElementFactory.find('vaapidecodebin') ? 'vaapidecodebin' : 'decodebin';
             const escaped = path.replace(/"/g, '\\"');
-            const launch = `filesrc location="${escaped}" ! decodebin ! videoconvert ! videoscale ` +
+            const launch = `filesrc location="${escaped}" ! ${decoder} ! videoconvert ! videoscale ` +
                 `! video/x-raw,format=RGBA,width=${sw},height=${sh} ! ${boxStr}` +
                 `video/x-raw,format=RGBA,width=${w},height=${h} ! ` +
                 `appsink name=s emit-signals=false sync=true max-buffers=1 drop=true`;
@@ -3923,12 +3937,12 @@ export default class TilingWMExtension extends Extension {
 
             pipeline.set_state(Gst.State.PLAYING);
             this._bgVideo = state;
-            state.pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            state.pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
                 if (this._destroyed || this._bgVideo !== state) return GLib.SOURCE_REMOVE;
                 onFrame();
                 return GLib.SOURCE_CONTINUE;
             });
-            log(`[plaid] background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit})`);
+            log(`[plaid] background video: playing ${path} (${srcW}x${srcH} -> ${w}x${h}, fit=${fit}, decoder=${decoder})`);
         } catch (e) {
             log(`[plaid] background video: pipeline failed: ${e}`);
             this._showWarningPopup('Animated Background Failed', `Pipeline failed: ${e}`, 'Click to dismiss');
