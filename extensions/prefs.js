@@ -556,7 +556,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const ddtCommandRow = new Adw.EntryRow({
             title: _('Terminal Command'),
-            subtitle: _('Command launched by the drop-down terminal keybind (e.g. ghostty, kitty)'),
         });
         ddtCommandRow.set_text(settings.get_string('dropdown-terminal-command'));
         ddtGroup.add(ddtCommandRow);
