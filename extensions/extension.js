@@ -298,6 +298,8 @@ export default class TilingWMExtension extends Extension {
                         this._addWindow(win);
                         this._convertMaximizedToGaps(win);
                     }
+                    if (this._isFloating(win))
+                        this._clampFloatingToGaps(win);
                 }
             }
             this._retileAll();
@@ -476,15 +478,21 @@ export default class TilingWMExtension extends Extension {
                     const ws = win.get_workspace();
                     if (ws) this._raiseFloatingWindows(ws);
                 };
+                const doClamp = () => {
+                    if (this._destroyed) return;
+                    this._clampFloatingToGaps(win);
+                };
                 const actor = win.get_compositor_private();
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
                         doRaise();
+                        doClamp();
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         doRaise();
+                        doClamp();
                         return false;
                     });
                 }
@@ -1805,6 +1813,46 @@ export default class TilingWMExtension extends Extension {
         this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
     }
 
+    _clampFloatingToGaps(win) {
+        if (this._destroyed || !win) return;
+        if (!this._settings || !this._settings.get_boolean('enabled')) return;
+        if (!this._isFloating(win)) return;
+        if (win.is_fullscreen() || win.is_maximized()) return;
+        const ws = win.get_workspace();
+        if (!ws) return;
+        let workArea = null;
+        try {
+            workArea = ws.get_work_area_for_monitor(win.get_monitor());
+        } catch (_e) {}
+        if (!workArea) return;
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) return;
+        const top = this._settings.get_int('single-gap-top');
+        const bottom = this._settings.get_int('single-gap-bottom');
+        const left = this._settings.get_int('single-gap-left');
+        const right = this._settings.get_int('single-gap-right');
+        const innerX = workArea.x + left;
+        const innerY = workArea.y + top;
+        const innerW = Math.max(1, workArea.width - left - right);
+        const innerH = Math.max(1, workArea.height - top - bottom);
+        let nx = frame.x;
+        let ny = frame.y;
+        if (frame.width >= innerW) {
+            nx = innerX;
+        } else {
+            nx = Math.max(innerX, Math.min(nx, innerX + innerW - frame.width));
+        }
+        if (frame.height >= innerH) {
+            ny = innerY;
+        } else {
+            ny = Math.max(innerY, Math.min(ny, innerY + innerH - frame.height));
+        }
+        if (nx !== frame.x || ny !== frame.y) {
+            this._debugLog(`float gaps: clamping (${frame.x},${frame.y}) -> (${nx},${ny})`);
+            try { win.move_frame(true, nx, ny); } catch (_e) {}
+        }
+    }
+
     _updateBorders() {
         if (!this._settings || this._destroyed) return;
         this._scheduleBorders();
@@ -2891,6 +2939,7 @@ export default class TilingWMExtension extends Extension {
             this._toggleFloatWindows.delete(focused);
         } else {
             this._toggleFloatWindows.add(focused);
+            this._clampFloatingToGaps(focused);
         }
         const ws = focused.get_workspace();
         if (!ws) return;
