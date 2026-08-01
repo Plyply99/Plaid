@@ -3261,6 +3261,7 @@ export default class TilingWMExtension extends Extension {
         if (this._tryClaimDropdown(win)) return true;
         if (this._dropdownWaiters.has(win)) return false;
         this._debugLog('dropdown: window created, waiting for identity');
+        try { win.skip_taskbar = true; } catch (_e) {}
         const notifyIds = [];
         const cleanup = () => {
             for (const id of notifyIds) {
@@ -3307,7 +3308,9 @@ export default class TilingWMExtension extends Extension {
     }
 
     _clearDropdownWaiters() {
-        for (const cleanup of this._dropdownWaiters.values()) {
+        for (const win of [...this._dropdownWaiters.keys()]) {
+            try { win.skip_taskbar = false; } catch (_e) {}
+            const cleanup = this._dropdownWaiters.get(win);
             try { cleanup(); } catch (_e) {}
         }
         this._dropdownWaiters.clear();
@@ -3341,6 +3344,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _clearDropdownWindow() {
+        this._clearDropdownWaiters();
         const win = this._dropdownWin;
         if (!win) return;
         if (this._dropdownUnmanagedId) {
