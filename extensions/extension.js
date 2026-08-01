@@ -9,6 +9,7 @@ import St from 'gi://St';
 import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
+import { WorkspaceSwitcherPopup } from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const LAYOUT_NAMES = {
@@ -253,6 +254,9 @@ export default class TilingWMExtension extends Extension {
         this._swapTarget = null;
         this._layoutPopup = null;
         this._layoutPopupHideId = 0;
+        this._warningPopup = null;
+        this._warningPopupId = 0;
+        this._origWorkspaceSwitcherDisplay = null;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -273,6 +277,8 @@ export default class TilingWMExtension extends Extension {
         this._newWindowSet = new Set();
         this._connectSignals();
         this._registerKeybindings();
+        this._suppressWorkspaceSwitcherPopup();
+        this._scheduleWorkspacePopupWarning();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -327,6 +333,16 @@ export default class TilingWMExtension extends Extension {
             try { this._layoutPopup.remove_all_transitions(); } catch (_e) {}
             try { this._layoutPopup.destroy(); } catch (_e) {}
             this._layoutPopup = null;
+        }
+        this._restoreWorkspaceSwitcherPopup();
+        if (this._warningPopupId) {
+            GLib.source_remove(this._warningPopupId);
+            this._warningPopupId = 0;
+        }
+        if (this._warningPopup) {
+            try { this._warningPopup.remove_all_transitions(); } catch (_e) {}
+            try { this._warningPopup.destroy(); } catch (_e) {}
+            this._warningPopup = null;
         }
         this._scratchpadWindows = null;
         this._scratchpadVisible = false;
@@ -2958,6 +2974,124 @@ export default class TilingWMExtension extends Extension {
                 });
             }
             return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // --- Workspace Switcher Popup ---
+
+    _suppressWorkspaceSwitcherPopup() {
+        try {
+            this._origWorkspaceSwitcherDisplay = WorkspaceSwitcherPopup.prototype.display;
+            WorkspaceSwitcherPopup.prototype.display = function (index) {
+                this.destroy();
+            };
+        } catch (_e) {
+            this._origWorkspaceSwitcherDisplay = null;
+        }
+    }
+
+    _restoreWorkspaceSwitcherPopup() {
+        if (this._origWorkspaceSwitcherDisplay) {
+            try {
+                WorkspaceSwitcherPopup.prototype.display = this._origWorkspaceSwitcherDisplay;
+            } catch (_e) {}
+            this._origWorkspaceSwitcherDisplay = null;
+        }
+    }
+
+    _scheduleWorkspacePopupWarning() {
+        try {
+            const shellSettings = new Gio.Settings({ schema_id: 'org.gnome.shell' });
+            if (!shellSettings.get_strv('enabled-extensions')
+                .includes('just-perfection-desktop@just-perfection')) {
+                return;
+            }
+            const jpSettings = new Gio.Settings({
+                schema_id: 'org.gnome.shell.extensions.just-perfection',
+            });
+            if (!jpSettings.get_boolean('workspace-popup')) return;
+        } catch (_e) {
+            return;
+        }
+        this._warningPopupId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+            this._warningPopupId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._showWarningPopup('Workspace Popup Hidden',
+                'Another extension is also suppressing this popup — both manage this behavior. Adjust either one to change it.',
+                'Click to dismiss');
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _showWarningPopup(title, subtitle, hint) {
+        if (this._warningPopup) {
+            try { this._warningPopup.remove_all_transitions(); } catch (_e) {}
+            try { this._warningPopup.destroy(); } catch (_e) {}
+            this._warningPopup = null;
+        }
+
+        const monitors = global.display.get_n_monitors();
+        let maxX = 0, maxY = 0;
+        for (let i = 0; i < monitors; i++) {
+            const geom = global.display.get_monitor_geometry(i);
+            maxX = Math.max(maxX, geom.x + geom.width);
+            maxY = Math.max(maxY, geom.y + geom.height);
+        }
+        const bottomMargin = Math.floor(maxY * 0.70);
+
+        const box = new St.BoxLayout({
+            vertical: true,
+            style: `background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px; spacing: 4px; margin-top: ${bottomMargin}px;`,
+        });
+        box.add_child(new St.Label({
+            text: title,
+            style: 'font-size: 20px; font-weight: bold; color: #ffffff;',
+        }));
+        if (subtitle) {
+            box.add_child(new St.Label({
+                text: subtitle,
+                style: 'font-size: 14px; color: rgba(255, 255, 255, 0.8);',
+            }));
+        }
+        if (hint) {
+            box.add_child(new St.Label({
+                text: hint,
+                style: 'font-size: 12px; color: rgba(255, 255, 255, 0.5);',
+            }));
+        }
+
+        const popup = new St.Bin({
+            child: box,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+        });
+        this._warningPopup = popup;
+        popup.set_position(0, 0);
+        popup.set_size(maxX, maxY);
+        Main.layoutManager.uiGroup.add_child(popup);
+
+        popup.connect('button-press-event', () => {
+            if (this._warningPopup !== popup) return;
+            popup.remove_all_transitions();
+            popup.ease({
+                opacity: 0,
+                duration: 200,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                onComplete: () => {
+                    if (this._warningPopup === popup) {
+                        try { this._warningPopup.destroy(); } catch (_e) {}
+                        this._warningPopup = null;
+                    }
+                },
+            });
+        });
+
+        popup.opacity = 0;
+        popup.ease({
+            opacity: 255,
+            duration: 150,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
     }
 
