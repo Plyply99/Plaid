@@ -350,5 +350,25 @@
       <description>Restore the focused scratchpad window to its original workspace and position</description>
     </key>
 
+    <!-- Drop-Down Terminal -->
+    <key name="dropdown-terminal-command" type="s">
+      <default>'ghostty'</default>
+      <summary>Drop-down terminal command</summary>
+      <description>Command used to launch the drop-down terminal. The drop-down terminal keybind toggles this terminal on and off.</description>
+    </key>
+
+    <key name="dropdown-terminal-height" type="i">
+      <default>33</default>
+      <range min="20" max="80"/>
+      <summary>Drop-down terminal height</summary>
+      <description>Height of the drop-down terminal as a percentage of the screen height</description>
+    </key>
+
+    <key name="dropdown-terminal" type="as">
+      <default><![CDATA[['<Super><Shift>Return']]]></default>
+      <summary>Toggle drop-down terminal</summary>
+      <description>Show or hide the drop-down terminal on the active monitor</description>
+    </key>
+
   </schema>
 </schemalist>

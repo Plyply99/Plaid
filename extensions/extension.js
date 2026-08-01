@@ -257,6 +257,11 @@ export default class TilingWMExtension extends Extension {
         this._warningPopup = null;
         this._warningPopupId = 0;
         this._origWorkspaceSwitcherDisplay = null;
+        this._dropdownWin = null;
+        this._dropdownUnmanagedId = 0;
+        this._dropdownPending = false;
+        this._dropdownPendingId = 0;
+        this._dropdownSettingsChangedId = 0;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -279,6 +284,7 @@ export default class TilingWMExtension extends Extension {
         this._registerKeybindings();
         this._suppressWorkspaceSwitcherPopup();
         this._initWorkspacePopupWarning();
+        this._initDropdownTerminal();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -349,6 +355,16 @@ export default class TilingWMExtension extends Extension {
         }
         this._shellSettingsChangedId = 0;
         this._jpSettingsChangedId = 0;
+        this._clearDropdownWindow();
+        this._dropdownPending = false;
+        if (this._dropdownPendingId) {
+            GLib.source_remove(this._dropdownPendingId);
+            this._dropdownPendingId = 0;
+        }
+        if (this._dropdownSettingsChangedId) {
+            try { this._settings.disconnect(this._dropdownSettingsChangedId); } catch (_e) {}
+            this._dropdownSettingsChangedId = 0;
+        }
         if (this._warningPopupId) {
             GLib.source_remove(this._warningPopupId);
             this._warningPopupId = 0;
@@ -423,6 +439,7 @@ export default class TilingWMExtension extends Extension {
 
     _connectSignals() {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
+            if (this._handleDropdownWindowCreated(win)) return;
             if (this._shouldManage(win)) {
                 this._addWindow(win);
                 const doRetile = () => {
@@ -2553,6 +2570,7 @@ export default class TilingWMExtension extends Extension {
             { key: 'scratchpad-toggle', fn: () => this._scratchpadToggle() },
             { key: 'scratchpad-add', fn: () => this._scratchpadAdd() },
             { key: 'scratchpad-remove', fn: () => this._scratchpadRemove() },
+            { key: 'dropdown-terminal', fn: () => this._toggleDropdownTerminal() },
         ];
 
         for (const { key, fn } of bindings) {
@@ -2573,6 +2591,7 @@ export default class TilingWMExtension extends Extension {
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
             'toggle-float', 'toggle-tiling', 'center-window', 'pick-float-window',
             'cycle-layout', 'scratchpad-toggle', 'scratchpad-add', 'scratchpad-remove',
+            'dropdown-terminal',
         ];
         for (const key of keys) {
             Main.wm.removeKeybinding(key);
@@ -3181,6 +3200,118 @@ export default class TilingWMExtension extends Extension {
             duration: 150,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
+    }
+
+    // --- Drop-Down Terminal ---
+
+    _initDropdownTerminal() {
+        try {
+            this._dropdownSettingsChangedId = this._settings.connect(
+                'changed::dropdown-terminal-command',
+                () => this._clearDropdownWindow());
+        } catch (_e) {
+            this._dropdownSettingsChangedId = 0;
+        }
+    }
+
+    _toggleDropdownTerminal() {
+        const win = this._dropdownWin;
+        if (win) {
+            if (win.minimized) {
+                this._showDropdownTerminal(win);
+            } else {
+                try { win.minimize(); } catch (_e) {}
+            }
+            return;
+        }
+        const command = this._settings.get_string('dropdown-terminal-command');
+        if (!command) return;
+        this._dropdownPending = true;
+        if (this._dropdownPendingId) GLib.source_remove(this._dropdownPendingId);
+        this._dropdownPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+            this._dropdownPendingId = 0;
+            this._dropdownPending = false;
+            return GLib.SOURCE_REMOVE;
+        });
+        let appInfo = null;
+        try {
+            appInfo = Gio.AppInfo.create_from_commandline(
+                command, null, Gio.AppInfoCreateFlags.NONE);
+        } catch (_e) {}
+        if (!appInfo) {
+            this._dropdownPending = false;
+            this._showPopup('Failed to Launch Terminal', `Could not start command: ${command}`);
+            return;
+        }
+        this._debugLog(`dropdown: launching ${command}`);
+        try {
+            appInfo.launch([], null);
+        } catch (_e) {
+            this._dropdownPending = false;
+            this._showPopup('Failed to Launch Terminal', `Could not start command: ${command}`);
+        }
+    }
+
+    _handleDropdownWindowCreated(win) {
+        if (!this._dropdownPending || !win) return false;
+        if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
+        const command = this._settings.get_string('dropdown-terminal-command') || '';
+        const bin = command.trim().split(/\s+/)[0] || '';
+        const cls = win.get_wm_class_instance();
+        if (!bin || !cls || cls.toLowerCase() !== bin.toLowerCase()) return false;
+        if (this._dropdownPendingId) {
+            GLib.source_remove(this._dropdownPendingId);
+            this._dropdownPendingId = 0;
+        }
+        this._dropdownPending = false;
+        this._dropdownWin = win;
+        this._dropdownUnmanagedId = win.connect('unmanaged', () => {
+            if (this._dropdownWin === win) this._dropdownWin = null;
+        });
+        this._configureDropdownTerminal(win);
+        this._showDropdownTerminal(win);
+        this._debugLog(`dropdown: claimed ${cls}`);
+        return true;
+    }
+
+    _configureDropdownTerminal(win) {
+        try { win.skip_taskbar = true; } catch (_e) {}
+        try { win.on_all_workspaces = true; } catch (_e) {}
+        try { win.make_above(); } catch (_e) {}
+    }
+
+    _showDropdownTerminal(win) {
+        try {
+            const mon = this._dropdownMonitor();
+            const heightPct = this._settings.get_int('dropdown-terminal-height') || 33;
+            const height = Math.floor(mon.height * heightPct / 100);
+            win.move_resize_frame(true, mon.x, mon.y, mon.width, height);
+        } catch (_e) {}
+        try { win.unminimize(); } catch (_e) {}
+        try { win.make_above(); } catch (_e) {}
+        try { win.activate(global.get_current_time()); } catch (_e) {}
+    }
+
+    _dropdownMonitor() {
+        let idx = global.display.get_current_monitor();
+        try {
+            const focus = global.display.focus_window;
+            if (focus && focus.get_monitor() >= 0) idx = focus.get_monitor();
+        } catch (_e) {}
+        return global.display.get_monitor_geometry(idx);
+    }
+
+    _clearDropdownWindow() {
+        const win = this._dropdownWin;
+        if (!win) return;
+        if (this._dropdownUnmanagedId) {
+            try { win.disconnect(this._dropdownUnmanagedId); } catch (_e) {}
+            this._dropdownUnmanagedId = 0;
+        }
+        try { win.skip_taskbar = false; } catch (_e) {}
+        try { win.on_all_workspaces = false; } catch (_e) {}
+        try { win.unmake_above(); } catch (_e) {}
+        this._dropdownWin = null;
     }
 
     // --- Scratchpad ---

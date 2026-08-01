@@ -548,6 +548,33 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         };
         updateBlurVisibility();
         settings.connect('changed::window-blur', () => updateBlurVisibility());
+
+        const ddtGroup = new Adw.PreferencesGroup({
+            title: _('Drop-Down Terminal'),
+        });
+        page.add(ddtGroup);
+
+        const ddtCommandRow = new Adw.EntryRow({
+            title: _('Terminal Command'),
+            subtitle: _('Command launched by the drop-down terminal keybind (e.g. ghostty, kitty)'),
+        });
+        ddtCommandRow.set_text(settings.get_string('dropdown-terminal-command'));
+        ddtGroup.add(ddtCommandRow);
+        settings.bind('dropdown-terminal-command', ddtCommandRow, 'text', Gio.SettingsBindFlags.DEFAULT);
+
+        const ddtHeightRow = new Adw.SpinRow({
+            title: _('Terminal Height'),
+            subtitle: _('Height of the drop-down terminal as a percentage of the screen'),
+            adjustment: new Gtk.Adjustment({
+                lower: 20,
+                upper: 80,
+                step_increment: 1,
+                page_increment: 5,
+                value: settings.get_int('dropdown-terminal-height'),
+            }),
+        });
+        ddtGroup.add(ddtHeightRow);
+        settings.bind('dropdown-terminal-height', ddtHeightRow, 'value', Gio.SettingsBindFlags.DEFAULT);
     }
 
     _buildColorRow(settings, key, title) {
