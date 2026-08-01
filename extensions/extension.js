@@ -3380,16 +3380,25 @@ export default class TilingWMExtension extends Extension {
     }
 
     _dropdownRect() {
-        const mon = this._dropdownMonitor();
-        const heightPct = this._settings.get_int('dropdown-terminal-height') || 33;
-        const height = Math.floor(mon.height * heightPct / 100);
-        let panelHeight = 0;
+        let workArea = null;
+        let mon = null;
         try {
-            panelHeight = Math.max(0, Main.panel.get_height() || 48);
-        } catch (_e) {
-            panelHeight = 48;
-        }
-        return { x: mon.x, y: mon.y + panelHeight, width: mon.width, height };
+            const idx = this._dropdownMonitorIndex();
+            const ws = global.workspace_manager.get_active_workspace();
+            if (ws) {
+                workArea = ws.get_work_area_for_monitor(idx);
+                if (workArea && workArea.width === 0) workArea = null;
+            }
+            if (!workArea) {
+                mon = global.display.get_monitor_geometry(idx);
+            }
+        } catch (_e) {}
+        const base = workArea || mon;
+        if (!base || base.width === 0) return null;
+        const heightPct = this._settings.get_int('dropdown-terminal-height') || 33;
+        const height = Math.floor(base.height * heightPct / 100);
+        this._debugLog(`dropdown: workArea=(${base.x},${base.y},${base.width},${base.height}) hPct=${heightPct} -> rect=(${base.x},${base.y},${base.width},${height})`);
+        return { x: base.x, y: base.y, width: base.width, height };
     }
 
     _positionDropdownTerminal(win) {
@@ -3425,13 +3434,13 @@ export default class TilingWMExtension extends Extension {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
     }
 
-    _dropdownMonitor() {
+    _dropdownMonitorIndex() {
         let idx = global.display.get_current_monitor();
         try {
             const focus = global.display.focus_window;
             if (focus && focus.get_monitor() >= 0) idx = focus.get_monitor();
         } catch (_e) {}
-        return global.display.get_monitor_geometry(idx);
+        return idx;
     }
 
     _clearDropdownWindow() {
