@@ -289,6 +289,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkCoalesceId = 0;
         this._backgroundAppParkRetryId = 0;
         this._backgroundAppParkCount = 0;
+        this._backgroundAppParkingWs = null;
         this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
@@ -4058,9 +4059,9 @@ export default class TilingWMExtension extends Extension {
     _configureBackgroundApp(win) {
         try { win.skip_taskbar = true; } catch (_e) {}
         try { win.skip_pager = true; } catch (_e) {}
-        try { win.stick(); } catch (_e) {}
+        try { win.unstick(); } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
-        this._parkBackgroundApp(win);
+        this._parkBackgroundAppOnWorkspace(win);
         this._startBackgroundAppParkWatch(win);
         this._ensureBackgroundAppClone(win);
         try {
@@ -4071,7 +4072,7 @@ export default class TilingWMExtension extends Extension {
                         try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
                         this._backgroundAppFirstFrameId = 0;
                     }
-                    this._parkBackgroundApp(win);
+                    this._parkBackgroundAppOnWorkspace(win);
                     this._ensureBackgroundAppClone(win);
                 });
             }
@@ -4097,13 +4098,12 @@ export default class TilingWMExtension extends Extension {
                     return GLib.SOURCE_REMOVE;
                 }
                 this._backgroundAppParkCount++;
-                this._parkBackgroundApp(win);
+                this._parkBackgroundAppOnWorkspace(win);
                 return GLib.SOURCE_REMOVE;
             });
         };
         const ids = [
             { emitter: win, id: win.connect('size-changed', pending) },
-            { emitter: win, id: win.connect('position-changed', pending) },
         ];
         this._backgroundAppParkIds = ids;
         this._backgroundAppParkWatchTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
@@ -4135,7 +4135,7 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _parkBackgroundApp(win) {
+    _parkBackgroundAppOnWorkspace(win) {
         if (!win) return;
         const ws = win.get_workspace() || global.workspace_manager.get_active_workspace();
         if (!ws) return;
@@ -4143,44 +4143,25 @@ export default class TilingWMExtension extends Extension {
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
         if (!workArea || workArea.width === 0) return;
-        const target = {
-            x: -workArea.width,
-            y: workArea.y,
-            w: workArea.width,
-            h: workArea.height,
-        };
 
-        if (this._backgroundAppParkRetryId) {
-            GLib.source_remove(this._backgroundAppParkRetryId);
-            this._backgroundAppParkRetryId = 0;
+        if (!this._backgroundAppParkingWs) {
+            const n = global.workspace_manager.get_n_workspaces();
+            let last = null;
+            try { last = global.workspace_manager.get_workspace_by_index(n - 1); } catch (_e) {}
+            if (last && last.list_windows().length === 0)
+                this._backgroundAppParkingWs = last;
+            else
+                this._backgroundAppParkingWs =
+                    global.workspace_manager.append_new_workspace(false, this._currentTime());
+            this._debugLog(`background app: parking workspace index=${this._wsIndex(this._backgroundAppParkingWs)}`);
         }
-
-        let retries = 0;
-        const apply = () => {
-            if (this._destroyed) return false;
-            try {
-                win.move_frame(false, target.x, target.y);
-            } catch (_e) {}
-            const frame = win.get_frame_rect();
-            if (frame.width > 0 && frame.x + frame.width <= 0) {
-                this._debugLog(`background app: parked at (${frame.x},${frame.y},${frame.width},${frame.height})`);
-                return false;
-            }
-            retries++;
-            if (retries >= 20) {
-                this._debugLog(`background app: park gave up, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
-                return false;
-            }
-            return true;
-        };
-        const retry = () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
-            return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
-        };
-        if (apply()) {
-            this._backgroundAppParkRetryId =
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
-        }
+        try {
+            if (win.get_workspace() !== this._backgroundAppParkingWs)
+                win.change_workspace(this._backgroundAppParkingWs);
+        } catch (_e) {}
+        try {
+            win.move_resize_frame(true, workArea.x, workArea.y, workArea.width, workArea.height);
+        } catch (_e) {}
     }
 
     _ensureBackgroundAppClone(win) {
@@ -4290,6 +4271,14 @@ export default class TilingWMExtension extends Extension {
             this._closeBackgroundAppWindow(win);
         this._backgroundAppWin = null;
         this._backgroundAppProc = null;
+        if (this._backgroundAppParkingWs) {
+            const ws = this._backgroundAppParkingWs;
+            this._backgroundAppParkingWs = null;
+            try {
+                if (ws.list_windows().length === 0)
+                    global.workspace_manager.remove_workspace(ws, this._currentTime());
+            } catch (_e) {}
+        }
     }
 
     _closeBackgroundAppWindow(win) {
