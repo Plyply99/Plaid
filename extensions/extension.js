@@ -1677,6 +1677,7 @@ export default class TilingWMExtension extends Extension {
         const axisSize = isH ? w : h;
         const split = Math.floor((axisSize - gap) * node.ratio);
         const secondSize = axisSize - split - gap;
+        if (split < 0 || secondSize < 0) return;
         if (isH) {
             this._bspLayout(node.first, x, y, split, h, gap, skipWindow);
             this._bspLayout(node.second, x + split + gap, y, secondSize, h, gap, skipWindow);
@@ -1694,6 +1695,12 @@ export default class TilingWMExtension extends Extension {
         if (this._bspFindPath(node.second, win, path)) return true;
         path.pop();
         return false;
+    }
+
+    _bspFindLeaf(node, win) {
+        if (!node) return null;
+        if (node.type === 'leaf') return node.window === win ? node : null;
+        return this._bspFindLeaf(node.first, win) || this._bspFindLeaf(node.second, win);
     }
 
     _bspSwapWindows(node, winA, winB) {
@@ -4115,16 +4122,18 @@ export default class TilingWMExtension extends Extension {
 
                         if (this._grabResizeNodeW) {
                             const axis = this._grabResizeNodeW._w;
-                            if (axis > 0) {
-                                this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85,
-                                    this._grabInitialRatioW + (dx * this._grabWidthSign) / (axis - gap)));
+                            if (axis - gap > 0) {
+                                const raw = this._grabInitialRatioW + (dx * this._grabWidthSign) / (axis - gap);
+                                if (Number.isFinite(raw))
+                                    this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85, raw));
                             }
                         }
                         if (this._grabResizeNodeH) {
                             const axis = this._grabResizeNodeH._h;
-                            if (axis > 0) {
-                                this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85,
-                                    this._grabInitialRatioH + (dy * this._grabHeightSign) / (axis - gap)));
+                            if (axis - gap > 0) {
+                                const raw = this._grabInitialRatioH + (dy * this._grabHeightSign) / (axis - gap);
+                                if (Number.isFinite(raw))
+                                    this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85, raw));
                             }
                         }
                     }
@@ -4144,7 +4153,8 @@ export default class TilingWMExtension extends Extension {
                             if (layout === 'centered-master-stack' && idx > 0)
                                 ratioDelta *= 2;
                             const newRatio = this._grabInitialMasterRatio + ratioDelta;
-                            this._masterRatios.set(ws, Math.max(0.15, Math.min(0.85, newRatio)));
+                            if (Number.isFinite(newRatio))
+                                this._masterRatios.set(ws, Math.max(0.15, Math.min(0.85, newRatio)));
                         }
                     }
                     if (this._grabHeightSign !== 0) {
@@ -4192,6 +4202,25 @@ export default class TilingWMExtension extends Extension {
                 }
 
                 this._moveTiledExcept(metaWindow);
+                const boundary = this._grabBoundaryRect(metaWindow, ws, layout, workArea, gap);
+                if (boundary) {
+                    const f = metaWindow.get_frame_rect();
+                    let nx = f.x, ny = f.y, nw = f.width, nh = f.height;
+                    const wOut = this._grabWidthSign > 0
+                        ? (f.x + f.width > boundary.x + boundary.w + 1)
+                        : this._grabWidthSign < 0
+                            ? (f.x < boundary.x - 1 || f.x + f.width > boundary.x + boundary.w + 1)
+                            : false;
+                    const hOut = this._grabHeightSign > 0
+                        ? (f.y + f.height > boundary.y + boundary.h + 1)
+                        : this._grabHeightSign < 0
+                            ? (f.y < boundary.y - 1 || f.y + f.height > boundary.y + boundary.h + 1)
+                            : false;
+                    if (wOut) { nx = boundary.x; nw = boundary.w; }
+                    if (hOut) { ny = boundary.y; nh = boundary.h; }
+                    if (wOut || hOut)
+                        this._safeMove(metaWindow, nx, ny, nw, nh);
+                }
                 this._updateBordersDuringGrab();
             } else if (mode === 'move') {
                 this._updateMoveDragPreview(metaWindow);
@@ -4233,8 +4262,100 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _grabBoundaryRect(win, ws, layout, workArea, gap) {
+        if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
+        const areaX = workArea.x + gap;
+        const areaY = workArea.y + gap;
+        const areaW = workArea.width - gap * 2;
+        const areaH = workArea.height - gap * 2;
+        if (areaW <= 0 || areaH <= 0) return null;
+
+        if (layout === 'dwindle') {
+            const tree = this._bspGetTree(ws);
+            if (!tree) return null;
+            const leaf = this._bspFindLeaf(tree, win);
+            if (!leaf || leaf._w === undefined) return null;
+            const r = { x: leaf._x, y: leaf._y, w: leaf._w, h: leaf._h };
+            if (!(r.w > 0) || !(r.h > 0) || !Number.isFinite(r.x + r.y + r.w + r.h)) return null;
+            return r;
+        }
+
+        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+        const idx = tiled.indexOf(win);
+        if (idx === -1) return null;
+        if (tiled.length === 1) {
+            const r = { x: areaX, y: areaY, w: areaW, h: areaH };
+            return r;
+        }
+
+        const masterRatio = this._getMasterRatio(ws);
+        const numStack = tiled.length - 1;
+        const stackRatios = this._getStackRatios(ws);
+
+        let masterX, masterW, stackX, stackW, stackIdx, colCount, colWeights;
+        if (layout === 'centered-master-stack') {
+            masterW = Math.floor((areaW - gap * 2) * masterRatio);
+            masterX = areaX + Math.floor((areaW - masterW) / 2);
+            if (idx === 0) {
+                const r = { x: masterX, y: areaY, w: masterW, h: areaH };
+                return r;
+            }
+            const leftCount = Math.ceil(numStack / 2);
+            const stackIdxIn = idx - 1;
+            if (stackIdxIn < leftCount) {
+                stackX = areaX;
+                stackW = masterX - areaX - gap;
+                stackIdx = stackIdxIn;
+                colCount = leftCount;
+            } else {
+                stackX = masterX + masterW + gap;
+                stackW = areaX + areaW - stackX;
+                stackIdx = stackIdxIn - leftCount;
+                colCount = numStack - leftCount;
+            }
+            colWeights = [];
+            for (let i = 0; i < colCount; i++)
+                colWeights.push(stackRatios.has(stackIdxIn - stackIdx + i) ? stackRatios.get(stackIdxIn - stackIdx + i) : 1.0);
+        } else {
+            masterW = Math.floor((areaW - gap) * masterRatio);
+            masterX = areaX;
+            if (idx === 0) {
+                const r = { x: areaX, y: areaY, w: masterW, h: areaH };
+                return r;
+            }
+            stackX = areaX + masterW + gap;
+            stackW = areaW - masterW - gap;
+            stackIdx = idx - 1;
+            colCount = numStack;
+            colWeights = [];
+            for (let i = 0; i < colCount; i++)
+                colWeights.push(stackRatios.has(i) ? stackRatios.get(i) : 1.0);
+        }
+
+        if (stackW <= 0 || colCount === 0) return null;
+        const totalWeight = colWeights.reduce((a, b) => a + b, 0);
+        if (!(totalWeight > 0) || !Number.isFinite(totalWeight)) return null;
+        const totalColH = areaH - gap * (colCount - 1);
+        let y = areaY;
+        for (let i = 0; i < colCount; i++) {
+            const isLast = i === colCount - 1;
+            const h = isLast
+                ? (areaY + areaH - y)
+                : Math.floor(totalColH * colWeights[i] / totalWeight);
+            if (i === stackIdx) {
+                const r = { x: stackX, y, w: stackW, h };
+                if (!(r.w > 0) || !(r.h > 0) || !Number.isFinite(r.x + r.y + r.w + r.h)) return null;
+                return r;
+            }
+            y += h + gap;
+        }
+        return null;
+    }
+
     _safeMove(win, x, y, w, h) {
         if (!win || win.is_fullscreen() || !win.get_workspace()) return;
+        if (!(w > 0) || !(h > 0)) return;
+        if (!Number.isFinite(x + y + w + h)) return;
         if (this._animTargets) {
             this._animTargets.set(win, { x, y, w, h });
             return;
