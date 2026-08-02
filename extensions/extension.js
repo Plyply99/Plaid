@@ -4269,10 +4269,15 @@ export default class TilingWMExtension extends Extension {
     _refitBackgroundApp(win) {
         if (!win) return;
         const monitor = global.display.get_primary_monitor();
-        const mon = global.display.get_monitor_geometry(monitor);
-        if (!mon || mon.width === 0) return;
+        const ws = global.workspace_manager.get_active_workspace();
+        let rect = null;
+        if (ws && ws.get_work_area_for_monitor) {
+            try { rect = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
+        }
+        if (!rect) rect = global.display.get_monitor_geometry(monitor);
+        if (!rect || rect.width === 0) return;
         try {
-            win.move_resize_frame(true, mon.x, mon.y, mon.width, mon.height);
+            win.move_resize_frame(true, rect.x, rect.y, rect.width, rect.height);
             const f = win.get_frame_rect();
             this._debugLog(`background app: fitted to (${f.x},${f.y},${f.width},${f.height})`);
         } catch (_e) {}

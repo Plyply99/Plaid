@@ -114,13 +114,16 @@ class XClassHint(ctypes.Structure):
 
 
 def _class_matches(dpy, window, target):
+    if not target:
+        return False
     cls = XClassHint()
     if not X11.XGetClassHint(dpy, window, ctypes.byref(cls)):
         return False
+    target = target.lower()
     for candidate in (cls.res_name, cls.res_class):
         if candidate:
             try:
-                if candidate.decode(errors="ignore").lower() == target:
+                if target in candidate.decode(errors="ignore").lower():
                     return True
             except Exception:
                 pass
@@ -153,9 +156,12 @@ def _get_pid(dpy, window):
 def _find_window(dpy, window, target, target_pid):
     """Return (exact_pid_match, first_class_match)."""
     first_match = 0
-    if _class_matches(dpy, window, target):
+    if target and _class_matches(dpy, window, target):
         first_match = window
-        if target_pid is not None and _get_pid(dpy, window) == target_pid:
+
+    if target_pid is not None:
+        pid = _get_pid(dpy, window)
+        if pid is not None and pid == target_pid:
             return window, first_match
 
     root_return = Window()
