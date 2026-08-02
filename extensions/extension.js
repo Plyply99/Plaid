@@ -255,6 +255,8 @@ export default class TilingWMExtension extends Extension {
         this._grabInitialMasterRatio = 0;
         this._grabInitialStackRatios = null;
         this._liveResizeId = 0;
+        this._grabSizeChangedId = 0;
+        this._grabPositionChangedId = 0;
         this._layoutPopup = null;
         this._layoutPopupHideId = 0;
         this._warningPopup = null;
@@ -343,7 +345,7 @@ export default class TilingWMExtension extends Extension {
             GLib.source_remove(id);
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
         this._stopLiveResizeLoop();
-        this._stopLiveResizeLoop();
+        this._disconnectGrabBoundaryHooks();
         this._restoreMutterDefaults();
         this._removeAllBorders();
         this._hideDropPreview();
@@ -4028,6 +4030,13 @@ export default class TilingWMExtension extends Extension {
             this._grabInitialStackRatios = new Map(sr);
 
             this._startGrabLoop(metaWindow, 'resize');
+            this._disconnectGrabBoundaryHooks();
+            try {
+                this._grabSizeChangedId = metaWindow.connect('size-changed', () =>
+                    this._enforceGrabBoundary(metaWindow));
+                this._grabPositionChangedId = metaWindow.connect('position-changed', () =>
+                    this._enforceGrabBoundary(metaWindow));
+            } catch (_e) {}
         } else if (this._isMoveGrab(grabOp) && !this._isFloating(metaWindow)) {
             this._startGrabLoop(metaWindow, 'move');
         } else {
@@ -4066,6 +4075,7 @@ export default class TilingWMExtension extends Extension {
 
         this._hideDropPreview();
         this._stopLiveResizeLoop();
+        this._disconnectGrabBoundaryHooks();
         this._grabOp = null;
         this._grabWindow = null;
         this._grabInitialStackRatios = null;
@@ -4203,25 +4213,7 @@ export default class TilingWMExtension extends Extension {
                 }
 
                 this._moveTiledExcept(metaWindow);
-                const boundary = this._windowSlotRect(metaWindow, ws, layout, workArea, gap);
-                if (boundary) {
-                    const f = metaWindow.get_frame_rect();
-                    let nx = f.x, ny = f.y, nw = f.width, nh = f.height;
-                    const wOut = this._grabWidthSign > 0
-                        ? (f.x + f.width > boundary.x + boundary.w + 1)
-                        : this._grabWidthSign < 0
-                            ? (f.x < boundary.x - 1 || f.x + f.width > boundary.x + boundary.w + 1)
-                            : false;
-                    const hOut = this._grabHeightSign > 0
-                        ? (f.y + f.height > boundary.y + boundary.h + 1)
-                        : this._grabHeightSign < 0
-                            ? (f.y < boundary.y - 1 || f.y + f.height > boundary.y + boundary.h + 1)
-                            : false;
-                    if (wOut) { nx = boundary.x; nw = boundary.w; }
-                    if (hOut) { ny = boundary.y; nh = boundary.h; }
-                    if (wOut || hOut)
-                        this._safeMove(metaWindow, nx, ny, nw, nh);
-                }
+                this._enforceGrabBoundary(metaWindow);
                 this._updateBordersDuringGrab();
             } else if (mode === 'move') {
                 this._updateMoveDragPreview(metaWindow);
@@ -4351,6 +4343,55 @@ export default class TilingWMExtension extends Extension {
             y += h + gap;
         }
         return null;
+    }
+
+    _enforceGrabBoundary(win) {
+        try {
+            if (this._destroyed || !this._grabOp || !win) return;
+            const ws = win.get_workspace();
+            if (!ws) return;
+            const gap = this._settings.get_int('gap');
+            const monitor = global.display.get_primary_monitor();
+            let workArea = null;
+            try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
+            if (!workArea || workArea.width === 0) return;
+            const layout = this._getWorkspaceLayout(ws);
+            const boundary = this._windowSlotRect(win, ws, layout, workArea, gap);
+            if (!boundary) return;
+            const f = win.get_frame_rect();
+            if (f.width === 0 || f.height === 0) return;
+            let nx = f.x, ny = f.y, nw = f.width, nh = f.height;
+            const wOut = this._grabWidthSign > 0
+                ? (f.x + f.width > boundary.x + boundary.w + 1)
+                : this._grabWidthSign < 0
+                    ? (f.x < boundary.x - 1 || f.x + f.width > boundary.x + boundary.w + 1)
+                    : false;
+            const hOut = this._grabHeightSign > 0
+                ? (f.y + f.height > boundary.y + boundary.h + 1)
+                : this._grabHeightSign < 0
+                    ? (f.y < boundary.y - 1 || f.y + f.height > boundary.y + boundary.h + 1)
+                    : false;
+            if (wOut) { nx = boundary.x; nw = boundary.w; }
+            if (hOut) { ny = boundary.y; nh = boundary.h; }
+            if (wOut || hOut)
+                this._safeMove(win, nx, ny, nw, nh);
+        } catch (_e) {}
+    }
+
+    _disconnectGrabBoundaryHooks() {
+        const win = this._grabWindow;
+        if (this._grabSizeChangedId) {
+            if (win) {
+                try { win.disconnect(this._grabSizeChangedId); } catch (_e) {}
+            }
+            this._grabSizeChangedId = 0;
+        }
+        if (this._grabPositionChangedId) {
+            if (win) {
+                try { win.disconnect(this._grabPositionChangedId); } catch (_e) {}
+            }
+            this._grabPositionChangedId = 0;
+        }
     }
 
     _maybeReassertSlot(win) {
