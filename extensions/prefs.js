@@ -580,6 +580,12 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         page.add(bgAppGroup);
 
+        const bgAppEnabledRow = new Adw.SwitchRow({
+            title: _('Enabled'),
+        });
+        bgAppGroup.add(bgAppEnabledRow);
+        settings.bind('background-app-enabled', bgAppEnabledRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const bgAppRow = new Adw.ActionRow({
             title: _('Command'),
             subtitle: _('Pinned behind all windows as a live desktop background. Looks best with frameless windows.'),
@@ -592,6 +598,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         bgAppRow.add_suffix(bgAppEntry);
         bgAppGroup.add(bgAppRow);
         settings.bind('background-app', bgAppEntry, 'text', Gio.SettingsBindFlags.DEFAULT);
+
+        const updateBgAppSensitivity = () => {
+            const enabled = settings.get_boolean('background-app-enabled');
+            bgAppRow.set_sensitive(enabled);
+        };
+        updateBgAppSensitivity();
+        settings.connect('changed::background-app-enabled', () => updateBgAppSensitivity());
     }
 
     _buildColorRow(settings, key, title) {

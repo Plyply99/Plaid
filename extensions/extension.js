@@ -277,6 +277,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppPendingId = 0;
         this._backgroundAppUnmanagedId = 0;
         this._backgroundAppSettingsChangedId = 0;
+        this._backgroundAppEnabledChangedId = 0;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
         this._anyGrabOp = null;
@@ -390,6 +391,10 @@ export default class TilingWMExtension extends Extension {
         if (this._backgroundAppSettingsChangedId) {
             try { this._settings.disconnect(this._backgroundAppSettingsChangedId); } catch (_e) {}
             this._backgroundAppSettingsChangedId = 0;
+        }
+        if (this._backgroundAppEnabledChangedId) {
+            try { this._settings.disconnect(this._backgroundAppEnabledChangedId); } catch (_e) {}
+            this._backgroundAppEnabledChangedId = 0;
         }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
@@ -3886,11 +3891,22 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._backgroundAppSettingsChangedId = 0;
         }
+        try {
+            this._backgroundAppEnabledChangedId = this._settings.connect(
+                'changed::background-app-enabled',
+                () => {
+                    this._clearBackgroundApp();
+                    this._launchBackgroundApp();
+                });
+        } catch (_e) {
+            this._backgroundAppEnabledChangedId = 0;
+        }
         this._launchBackgroundApp();
     }
 
     _launchBackgroundApp() {
         if (this._destroyed || !this._settings) return;
+        if (!this._settings.get_boolean('background-app-enabled')) return;
         const command = this._settings.get_string('background-app');
         if (!command) return;
         this._backgroundAppPending = true;
