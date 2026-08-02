@@ -9,7 +9,10 @@ import St from 'gi://St';
 import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
-import { WorkspaceSwitcherPopup } from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
+import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
+    from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
+import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspacesView.js';
+import * as WorkspaceModule from 'resource:///org/gnome/shell/ui/workspace.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const LAYOUT_NAMES = {
@@ -290,7 +293,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkRetryId = 0;
         this._backgroundAppParkCount = 0;
         this._backgroundAppParkingWs = null;
-        this._backgroundAppWorkspaceHiding = null;
+        this._backgroundAppHiding = null;
         this._backgroundAppParkingFixId = 0;
         this._backgroundAppParkingLastRelocate = 0;
         this._dynamicWsWarned = false;
@@ -4201,7 +4204,7 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
             this._debugLog(`background app: parking ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
-            this._applyBackgroundAppWorkspaceHiding();
+            this._applyBackgroundAppHiding();
         }
         try {
             if (win.get_workspace() !== this._backgroundAppParkingWs)
@@ -4212,26 +4215,93 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
     }
 
-    _applyBackgroundAppWorkspaceHiding() {
-        if (this._backgroundAppWorkspaceHiding || !this._backgroundAppParkingWs) return;
-        const orig = global.workspace_manager.get_workspaces;
+    _applyBackgroundAppHiding() {
+        if (this._backgroundAppHiding || !this._backgroundAppParkingWs) return;
         const self = this;
-        const wrapped = function () {
-            const list = orig.call(global.workspace_manager);
-            if (!list) return [];
-            return list.filter(ws => ws !== self._backgroundAppParkingWs);
+        const origGetNeighbor = Meta.Workspace.prototype.get_neighbor;
+        const wrappedGetNeighbor = function (direction) {
+            const neighbor = origGetNeighbor.call(this, direction);
+            if (!neighbor || neighbor === this) return neighbor;
+            if (neighbor === self._backgroundAppParkingWs) {
+                const next = origGetNeighbor.call(neighbor, direction);
+                if (next && next !== neighbor) return next;
+                return this;
+            }
+            return neighbor;
         };
-        global.workspace_manager.get_workspaces = wrapped;
-        this._backgroundAppWorkspaceHiding = { orig, wrapped };
-        this._debugLog('background app: hiding parking workspace from switcher/overview');
+        const origUpdateWorkspaces =
+            WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces;
+        const wrappedUpdateWorkspaces = function () {
+            const parkingIdx = self._backgroundAppParkingWs ?
+                self._wsIndex(self._backgroundAppParkingWs) : -1;
+            const wm = global.workspace_manager;
+            const n = wm.n_workspaces;
+            const displayList = [];
+            for (let i = 0; i < n; i++) {
+                if (i === parkingIdx) continue;
+                displayList.push(wm.get_workspace_by_index(i));
+            }
+            for (let j = 0; j < displayList.length; j++) {
+                const metaWorkspace = displayList[j];
+                let workspace;
+                if (j >= this._workspaces.length) {
+                    workspace = new WorkspaceModule.Workspace(
+                        metaWorkspace, this._monitorIndex, this._overviewAdjustment);
+                    this.add_child(workspace);
+                    this._workspaces[j] = workspace;
+                } else {
+                    workspace = this._workspaces[j];
+                    if (workspace.metaWorkspace !== metaWorkspace) {
+                        workspace.destroy();
+                        this._workspaces.splice(j, 1);
+                    }
+                }
+            }
+            for (let j = this._workspaces.length - 1; j >= displayList.length; j--) {
+                this._workspaces[j].destroy();
+                this._workspaces.splice(j, 1);
+            }
+            this._updateWorkspacesState();
+            this._updateVisibility();
+            this._raiseActiveWorkspace();
+        };
+        const origRedisplay = MonitorWorkspaceSwitcherPopup.prototype.redisplay;
+        const wrappedRedisplay = function (activeWorkspaceIndex) {
+            const parkingIdx = self._backgroundAppParkingWs ?
+                self._wsIndex(self._backgroundAppParkingWs) : -1;
+            const wm = global.workspace_manager;
+            this._list.destroy_all_children();
+            for (let i = 0; i < wm.n_workspaces; i++) {
+                if (i === parkingIdx) continue;
+                const indicator = new St.Bin({ style_class: 'ws-switcher-indicator' });
+                if (i === activeWorkspaceIndex)
+                    indicator.add_style_pseudo_class('active');
+                this._list.add_child(indicator);
+            }
+        };
+        Meta.Workspace.prototype.get_neighbor = wrappedGetNeighbor;
+        WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces = wrappedUpdateWorkspaces;
+        MonitorWorkspaceSwitcherPopup.prototype.redisplay = wrappedRedisplay;
+        this._backgroundAppHiding = {
+            origGetNeighbor, wrappedGetNeighbor,
+            origUpdateWorkspaces, wrappedUpdateWorkspaces,
+            origRedisplay, wrappedRedisplay,
+        };
+        this._debugLog('background app: hiding parking workspace from overview, switcher, cycling');
     }
 
-    _restoreBackgroundAppWorkspaceHiding() {
-        const h = this._backgroundAppWorkspaceHiding;
+    _restoreBackgroundAppHiding() {
+        const h = this._backgroundAppHiding;
         if (!h) return;
-        if (global.workspace_manager.get_workspaces === h.wrapped)
-            global.workspace_manager.get_workspaces = h.orig;
-        this._backgroundAppWorkspaceHiding = null;
+        try {
+            if (Meta.Workspace.prototype.get_neighbor === h.wrappedGetNeighbor)
+                Meta.Workspace.prototype.get_neighbor = h.origGetNeighbor;
+            if (WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces === h.wrappedUpdateWorkspaces)
+                WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces = h.origUpdateWorkspaces;
+            if (MonitorWorkspaceSwitcherPopup.prototype.redisplay === h.wrappedRedisplay)
+                MonitorWorkspaceSwitcherPopup.prototype.redisplay = h.origRedisplay;
+        } catch (_e) {}
+        this._backgroundAppHiding = null;
     }
 
     _raiseBackgroundAppClone() {
@@ -4268,12 +4338,7 @@ export default class TilingWMExtension extends Extension {
             const w = global.workspace_manager.get_workspace_by_index(i);
             if (w === this._backgroundAppParkingWs) parkingIdx = i;
         }
-        let gapOk = false;
-        if (parkingIdx > 0) {
-            const gapWs = global.workspace_manager.get_workspace_by_index(parkingIdx - 1);
-            if (gapWs && gapWs.list_windows().length === 0) gapOk = true;
-        }
-        const zoneOk = parkingIdx === n - 1 && gapOk;
+        const zoneOk = parkingIdx === n - 2;
         if (!zoneOk) {
             const now = Date.now();
             if (now - (this._backgroundAppParkingLastRelocate || 0) < 1000)
@@ -4282,7 +4347,7 @@ export default class TilingWMExtension extends Extension {
             const oldParking = this._backgroundAppParkingWs;
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)} (old ws=${this._wsIndex(oldParking)} kept as gap)`);
+            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)} (old ws=${this._wsIndex(oldParking)} kept)`);
             try {
                 if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
                     this._backgroundAppWin.change_workspace(this._backgroundAppParkingWs);
@@ -4407,7 +4472,7 @@ export default class TilingWMExtension extends Extension {
             this._closeBackgroundAppWindow(win);
         this._backgroundAppWin = null;
         this._backgroundAppProc = null;
-        this._restoreBackgroundAppWorkspaceHiding();
+        this._restoreBackgroundAppHiding();
         try {
             if (this._backgroundAppParkingWs &&
                 this._backgroundAppParkingWs.list_windows().length === 0)
