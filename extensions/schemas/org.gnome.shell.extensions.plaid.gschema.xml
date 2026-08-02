@@ -169,7 +169,7 @@
 
     <!-- Float window patterns (WM_CLASS instance names) -->
     <key name="float-windows" type="as">
-      <default><![CDATA[['gimp', 'steam', 'vlc', 'io.github.bugaevc.wl-clipboard']]]></default>
+      <default><![CDATA[['gimp', 'vlc', 'io.github.bugaevc.wl-clipboard']]]></default>
       <summary>Window class instances that should float</summary>
       <description>Lowercase WM_CLASS instance names that should not be tiled</description>
     </key>
