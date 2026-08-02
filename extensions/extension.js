@@ -237,6 +237,11 @@ export default class TilingWMExtension extends Extension {
         this._windowBorders = new Map();
         this._windowMasks = new Map();
         this._windowBlurs = new Map();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
+            try { this._purgeOrphanBlurs(); } catch (_e) {}
+            return false;
+        });
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
         this._windowWSIndices = new Map();
@@ -447,9 +452,9 @@ export default class TilingWMExtension extends Extension {
         this._gappedMaxSet = null;
         this._anyGrabOp = null;
         this._windowBorders = null;
-        this._removeAllMasks();
+        try { this._removeAllMasks(); } catch (_e) {}
         this._windowMasks = null;
-        this._removeAllBlurs();
+        try { this._removeAllBlurs(); } catch (_e) {}
         this._windowBlurs = null;
         this._blurModulePromise = null;
         this._blurModule = null;
@@ -2010,10 +2015,10 @@ export default class TilingWMExtension extends Extension {
 
     _doUpdateBorders() {
         if (!this._settings) return;
-        this._removeAllBorders();
+        try { this._removeAllBorders(); } catch (_e) {}
         if (!this._settings.get_boolean('enabled')) {
-            this._removeAllMasks();
-            this._removeAllBlurs();
+            try { this._removeAllMasks(); } catch (_e) {}
+            try { this._removeAllBlurs(); } catch (_e) {}
             return;
         }
 
@@ -2053,11 +2058,13 @@ export default class TilingWMExtension extends Extension {
                 continue;
         }
 
-        if (!roundedCorners || borderRadius <= 0)
-            this._removeAllMasks();
+        if (!roundedCorners || borderRadius <= 0) {
+            try { this._removeAllMasks(); } catch (_e) {}
+        }
 
-        if (!blurEnabled)
-            this._removeAllBlurs();
+        if (!blurEnabled) {
+            try { this._removeAllBlurs(); } catch (_e) {}
+        }
 
         if (this._dropdownWin)
             this._applyDropdownEffects(this._dropdownWin);
@@ -2785,14 +2792,34 @@ export default class TilingWMExtension extends Extension {
 
     _syncBlurStacking() {
         if (!this._windowBlurs) return;
-        for (const blur of this._windowBlurs.values()) {
-            if (blur._sibling && blur._sourceActor &&
-                blur._sibling.get_parent() === global.window_group &&
-                blur._sourceActor.get_parent() === global.window_group) {
-                try {
-                    global.window_group.set_child_below_sibling(blur._sibling, blur._sourceActor);
-                } catch (_e) {}
-            }
+        const monitors = global.display.get_n_monitors();
+        let monitorW = 0, monitorH = 0;
+        for (let i = 0; i < monitors; i++) {
+            const geom = global.display.get_monitor_geometry(i);
+            monitorW = Math.max(monitorW, geom.x + geom.width);
+            monitorH = Math.max(monitorH, geom.y + geom.height);
+        }
+        for (const [win, blur] of this._windowBlurs.entries()) {
+            const sibling = blur._sibling;
+            const source = blur._sourceActor;
+            if (!sibling || !source) continue;
+            if (sibling.get_parent() !== global.window_group ||
+                source.get_parent() !== global.window_group) continue;
+            try {
+                const sW = sibling.get_width();
+                const sH = sibling.get_height();
+                const aW = source.get_width();
+                const aH = source.get_height();
+                const mismatched = sW > monitorW + 64 || sH > monitorH + 64 ||
+                    Math.abs(sW - aW) > aW * 0.15 + 64 ||
+                    Math.abs(sH - aH) > aH * 0.15 + 64;
+                if (mismatched) {
+                    this._removeBlur(win);
+                    this._ensureWindowBlur(win, win.get_compositor_private() || source);
+                } else {
+                    global.window_group.set_child_below_sibling(sibling, source);
+                }
+            } catch (_e) {}
         }
     }
 
@@ -2836,8 +2863,20 @@ export default class TilingWMExtension extends Extension {
     _removeAllMasks() {
         if (!this._windowMasks) return;
         for (const win of [...this._windowMasks.keys()])
-        this._removeMask(win);
-        this._removeBlur(win);
+            this._removeMask(win);
+    }
+
+    _purgeOrphanBlurs() {
+        if (!this._windowBlurs) return;
+        const tracked = new Set();
+        for (const blur of this._windowBlurs.values())
+            if (blur._sibling) tracked.add(blur._sibling);
+        for (const child of global.window_group.get_children()) {
+            if (!child || !child.get_effect || child.get_effect(BLUR_EFFECT_NAME) === null) continue;
+            if (!tracked.has(child)) {
+                try { child.destroy(); } catch (_e) {}
+            }
+        }
     }
 
     _updateDropOverlaySize() {
