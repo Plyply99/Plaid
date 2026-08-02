@@ -4132,13 +4132,17 @@ export default class TilingWMExtension extends Extension {
         try { win.stick(); } catch (_e) {}
         this._refitBackgroundApp(win);
         this._scheduleBackgroundAppLower();
-        this._spawnBackgroundAppInputHelper(win);
         this._applyBackgroundAppAnimPatch();
         const refit = () => {
             if (this._destroyed) return;
             if (win !== this._backgroundAppWin) return;
             this._refitBackgroundApp(win);
             this._scheduleBackgroundAppLower();
+        };
+        const neutralize = () => {
+            if (this._destroyed) return;
+            if (win !== this._backgroundAppWin) return;
+            this._spawnBackgroundAppInputHelper(win);
         };
         this._backgroundAppRefitIds = [
             { emitter: win, id: win.connect('size-changed', refit) },
@@ -4153,9 +4157,19 @@ export default class TilingWMExtension extends Extension {
                         this._backgroundAppFirstFrameId = 0;
                     }
                     refit();
+                    // The client (ghostty/GTK) finishes realizing its window
+                    // lazily; neutralize only after it has painted its first
+                    // frame, and again shortly after, to survive any late
+                    // client-side reset of WM_HINTS/WM_PROTOCOLS/shape.
+                    neutralize();
                 });
             }
         } catch (_e) {}
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            neutralize();
+            return GLib.SOURCE_REMOVE;
+        });
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             refit();
@@ -4172,14 +4186,16 @@ export default class TilingWMExtension extends Extension {
             }
             const wmClass = (win.get_wm_class_instance() || '').toLowerCase();
             if (!wmClass) return;
+            let pid = 0;
+            try { pid = win.get_pid(); } catch (_e) {}
             const proc = Gio.Subprocess.new(
-                ['python3', helper, wmClass],
+                ['python3', helper, wmClass, String(pid || '')],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
             proc.communicate_utf8_async(null, null, (p, res) => {
                 try {
-                    const [, , stderr] = p.communicate_utf8_finish(res);
+                    const [, stdout, stderr] = p.communicate_utf8_finish(res);
                     const ok = p.get_successful();
-                    this._debugLog(`background app: input helper ${ok ? 'ok' : 'failed'} ${(stderr || '').trim()}`);
+                    this._debugLog(`background app: input helper ${ok ? 'ok' : 'failed'} ${(stdout || stderr || '').trim()}`);
                 } catch (e) {
                     this._debugLog(`background app: input helper error: ${e.message}`);
                 }

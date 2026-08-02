@@ -9,8 +9,13 @@ candidate (no raise/flash on workspace switches, no focus steal).
 Zero dependencies: plain ctypes against libX11 and libXext, which are
 present on any system with XWayland.
 
-Usage: plaid-input-free.py <wm-class-instance>
-Exit codes: 0 ok, 1 window not found, 2 environment failure.
+Usage: plaid-input-free.py <wm-class-instance> [pid]
+The window is matched by WM_CLASS and, when a PID is given, by the
+exact _NET_WM_PID. After applying, the script reads the properties back
+and reports whether the neutralization is in place.
+
+Exit codes: 0 applied and verified; 1 window not found; 2 environment
+failure; 3 applied but verification failed (see stdout).
 """
 
 import ctypes
@@ -46,6 +51,8 @@ X11.XGetClassHint.restype = ctypes.c_int
 X11.XGetClassHint.argtypes = [Display, Window, ctypes.c_void_p]
 X11.XSetWMHints.restype = ctypes.c_int
 X11.XSetWMHints.argtypes = [Display, Window, ctypes.c_void_p]
+X11.XGetWMHints.restype = ctypes.c_void_p
+X11.XGetWMHints.argtypes = [Display, Window]
 X11.XInternAtom.restype = Window
 X11.XInternAtom.argtypes = [Display, ctypes.c_char_p, ctypes.c_int]
 X11.XGetWMProtocols.restype = ctypes.c_int
@@ -55,6 +62,15 @@ X11.XGetWMProtocols.argtypes = [
 ]
 X11.XSetWMProtocols.restype = ctypes.c_int
 X11.XSetWMProtocols.argtypes = [Display, Window, ctypes.POINTER(Window), ctypes.c_int]
+X11.XGetWindowProperty.restype = ctypes.c_int
+X11.XGetWindowProperty.argtypes = [
+    Display, Window, Window, ctypes.c_long, ctypes.c_long, ctypes.c_int,
+    Window, ctypes.POINTER(Window), ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+]
+X11.XFetchName.restype = ctypes.c_int
+X11.XFetchName.argtypes = [Display, Window, ctypes.POINTER(ctypes.c_char_p)]
 X11.XFlush.restype = ctypes.c_int
 X11.XFlush.argtypes = [Display]
 X11.XCloseDisplay.restype = ctypes.c_int
@@ -65,10 +81,15 @@ XEXT.XShapeCombineRectangles.argtypes = [
     Display, Window, ctypes.c_int, ctypes.c_int, ctypes.c_int,
     ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
 ]
+XEXT.XShapeGetRectangles.restype = ctypes.c_void_p
+XEXT.XShapeGetRectangles.argtypes = [
+    Display, Window, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+]
 
 ShapeInput = 2
 ShapeSet = 0
 InputHint = 1 << 0
+XA_CARDINAL = 6
 
 
 class XWMHints(ctypes.Structure):
@@ -92,16 +113,50 @@ class XClassHint(ctypes.Structure):
     ]
 
 
-def _find_window(dpy, window, target):
+def _class_matches(dpy, window, target):
     cls = XClassHint()
-    if X11.XGetClassHint(dpy, window, ctypes.byref(cls)):
-        for candidate in (cls.res_name, cls.res_class):
-            if candidate:
-                try:
-                    if candidate.decode(errors="ignore").lower() == target:
-                        return window
-                except Exception:
-                    pass
+    if not X11.XGetClassHint(dpy, window, ctypes.byref(cls)):
+        return False
+    for candidate in (cls.res_name, cls.res_class):
+        if candidate:
+            try:
+                if candidate.decode(errors="ignore").lower() == target:
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+def _get_pid(dpy, window):
+    atom = X11.XInternAtom(dpy, b"_NET_WM_PID", True)
+    if not atom:
+        return None
+    actual_type = Window()
+    actual_format = ctypes.c_int()
+    nitems = ctypes.c_ulong()
+    bytes_after = ctypes.c_ulong()
+    prop = ctypes.POINTER(ctypes.c_ubyte)()
+    if X11.XGetWindowProperty(dpy, window, atom, 0, 1, False, XA_CARDINAL,
+                              ctypes.byref(actual_type), ctypes.byref(actual_format),
+                              ctypes.byref(nitems), ctypes.byref(bytes_after),
+                              ctypes.byref(prop)) != 0:
+        return None
+    if not prop or nitems.value == 0:
+        if prop:
+            X11.XFree(prop)
+        return None
+    pid = ctypes.cast(prop, ctypes.POINTER(Window)).contents.value
+    X11.XFree(prop)
+    return pid
+
+
+def _find_window(dpy, window, target, target_pid):
+    """Return (exact_pid_match, first_class_match)."""
+    first_match = 0
+    if _class_matches(dpy, window, target):
+        first_match = window
+        if target_pid is not None and _get_pid(dpy, window) == target_pid:
+            return window, first_match
 
     root_return = Window()
     parent_return = Window()
@@ -110,21 +165,42 @@ def _find_window(dpy, window, target):
     if X11.XQueryTree(dpy, window, ctypes.byref(root_return),
                       ctypes.byref(parent_return), ctypes.byref(children),
                       ctypes.byref(n_children)):
-        found = 0
+        exact = 0
+        fallback = 0
         for i in range(n_children.value):
-            found = _find_window(dpy, children[i], target)
-            if found:
+            e, f = _find_window(dpy, children[i], target, target_pid)
+            if e:
+                exact = e
                 break
+            if f and not fallback:
+                fallback = f
         if children:
             X11.XFree(children)
-        return found
-    return 0
+        if exact:
+            return exact, first_match
+        return 0, (fallback or first_match)
+    return 0, first_match
+
+
+def _window_title(dpy, window):
+    name = ctypes.c_char_p()
+    if X11.XFetchName(dpy, window, ctypes.byref(name)) and name.value:
+        title = name.value.decode(errors="ignore")
+        X11.XFree(name)
+        return title
+    return ""
 
 
 def main():
     target = (sys.argv[1] if len(sys.argv) > 1 else "").lower()
     if not target:
         return 2
+    target_pid = None
+    if len(sys.argv) > 2 and sys.argv[2]:
+        try:
+            target_pid = int(sys.argv[2])
+        except ValueError:
+            target_pid = None
 
     dpy = X11.XOpenDisplay(None)
     if not dpy:
@@ -133,7 +209,8 @@ def main():
     root = X11.XDefaultRootWindow(dpy)
     window = 0
     for _ in range(10):
-        window = _find_window(dpy, root, target)
+        exact, fallback = _find_window(dpy, root, target, target_pid)
+        window = exact or fallback
         if window:
             break
         time.sleep(0.2)
@@ -141,6 +218,10 @@ def main():
     if not window:
         X11.XCloseDisplay(dpy)
         return 1
+
+    title = _window_title(dpy, window)
+    pid = _get_pid(dpy, window)
+    print(f"matched window=0x{window:x} title={title!r} pid={pid}")
 
     hints = XWMHints()
     hints.flags = InputHint
@@ -161,10 +242,42 @@ def main():
             X11.XSetWMProtocols(dpy, window, arr, len(kept))
 
     XEXT.XShapeCombineRectangles(dpy, window, ShapeInput, 0, 0, None, 0, ShapeSet)
-
     X11.XFlush(dpy)
+
+    hints_p = X11.XGetWMHints(dpy, window)
+    input_ok = False
+    if hints_p:
+        h = ctypes.cast(hints_p, ctypes.POINTER(XWMHints)).contents
+        input_ok = bool(h.flags & InputHint) and not h.input
+        X11.XFree(hints_p)
+
+    take_focus_gone = True
+    n_protocols = ctypes.c_int(0)
+    protocols = ctypes.POINTER(Window)()
+    if X11.XGetWMProtocols(dpy, window, ctypes.byref(protocols),
+                           ctypes.byref(n_protocols)):
+        for i in range(n_protocols.value):
+            if protocols[i] == wm_take_focus:
+                take_focus_gone = False
+        if protocols:
+            X11.XFree(protocols)
+
+    n_rects = ctypes.c_int(0)
+    ordering = ctypes.c_int(0)
+    rects = XEXT.XShapeGetRectangles(dpy, window, ShapeInput,
+                                     ctypes.byref(n_rects), ctypes.byref(ordering))
+    shape_empty = n_rects.value == 0
+    if rects:
+        X11.XFree(rects)
+
     X11.XCloseDisplay(dpy)
-    return 0
+
+    print(f"verify: input=False {'OK' if input_ok else 'FAIL'}, "
+          f"no-WM_TAKE_FOCUS {'OK' if take_focus_gone else 'FAIL'}, "
+          f"empty-input-region {'OK' if shape_empty else 'FAIL'}")
+    if input_ok and take_focus_gone and shape_empty:
+        return 0
+    return 3
 
 
 if __name__ == "__main__":
