@@ -3822,7 +3822,7 @@ export default class TilingWMExtension extends Extension {
         });
         this._configureDropdownTerminal(win);
         this._showDropdownTerminal(win);
-        this._debugLog(`dropdown: claimed ${instance || cls}`);
+        this._debugLog(`dropdown: claimed ${win.get_wm_class_instance() || win.get_wm_class() || ''}`);
         return true;
     }
 
@@ -4220,6 +4220,12 @@ export default class TilingWMExtension extends Extension {
                     });
                 }
             } catch (_e) {}
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
+                this._positionBackgroundAppClone();
+                return GLib.SOURCE_REMOVE;
+            });
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 if (this._destroyed) return false;
                 this._ensureBackgroundAppClone(win);
@@ -4379,6 +4385,9 @@ export default class TilingWMExtension extends Extension {
                 }
                 this._backgroundAppParkCount++;
                 this._parkBackgroundAppOnWorkspace(win);
+                // The clone computed its scale when the source was still 0x0;
+                // re-allocate it so Clutter re-syncs the stretch to full-bleed.
+                this._positionBackgroundAppClone();
                 return GLib.SOURCE_REMOVE;
             });
         };
