@@ -286,6 +286,9 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppGroupAddedId = 0;
         this._backgroundAppParkIds = null;
         this._backgroundAppParkWatchTimeoutId = 0;
+        this._backgroundAppParkCoalesceId = 0;
+        this._backgroundAppParkRetryId = 0;
+        this._backgroundAppParkCount = 0;
         this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
@@ -4070,9 +4073,24 @@ export default class TilingWMExtension extends Extension {
     _startBackgroundAppParkWatch(win) {
         this._disconnectBackgroundAppParkWatch();
         if (!win) return;
+        this._backgroundAppParkCount = 0;
+        const pending = () => {
+            if (this._backgroundAppParkCoalesceId) return;
+            this._backgroundAppParkCoalesceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+                this._backgroundAppParkCoalesceId = 0;
+                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                if (this._backgroundAppParkCount >= 15) {
+                    this._disconnectBackgroundAppParkWatch();
+                    return GLib.SOURCE_REMOVE;
+                }
+                this._backgroundAppParkCount++;
+                this._parkBackgroundApp(win);
+                return GLib.SOURCE_REMOVE;
+            });
+        };
         const ids = [
-            { emitter: win, id: win.connect('size-changed', () => this._parkBackgroundApp(win)) },
-            { emitter: win, id: win.connect('position-changed', () => this._parkBackgroundApp(win)) },
+            { emitter: win, id: win.connect('size-changed', pending) },
+            { emitter: win, id: win.connect('position-changed', pending) },
         ];
         this._backgroundAppParkIds = ids;
         this._backgroundAppParkWatchTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
@@ -4087,6 +4105,15 @@ export default class TilingWMExtension extends Extension {
             GLib.source_remove(this._backgroundAppParkWatchTimeoutId);
             this._backgroundAppParkWatchTimeoutId = 0;
         }
+        if (this._backgroundAppParkCoalesceId) {
+            GLib.source_remove(this._backgroundAppParkCoalesceId);
+            this._backgroundAppParkCoalesceId = 0;
+        }
+        if (this._backgroundAppParkRetryId) {
+            GLib.source_remove(this._backgroundAppParkRetryId);
+            this._backgroundAppParkRetryId = 0;
+        }
+        this._backgroundAppParkCount = 0;
         if (this._backgroundAppParkIds) {
             for (const { emitter, id } of this._backgroundAppParkIds) {
                 try { emitter.disconnect(id); } catch (_e) {}
@@ -4103,55 +4130,32 @@ export default class TilingWMExtension extends Extension {
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
         if (!workArea || workArea.width === 0) return;
-        const mon = global.display.get_monitor_geometry(monitor);
-        if (!mon) return;
+        const target = {
+            x: -workArea.width,
+            y: workArea.y,
+            w: workArea.width,
+            h: workArea.height,
+        };
 
-        const dirs = [
-            { name: 'below', x: workArea.x, y: workArea.y + workArea.height, w: workArea.width, h: workArea.height },
-            { name: 'right', x: workArea.x + workArea.width, y: workArea.y, w: workArea.width, h: workArea.height },
-            { name: 'above', x: workArea.x, y: -workArea.height, w: workArea.width, h: workArea.height },
-            { name: 'left', x: -workArea.width, y: workArea.y, w: workArea.width, h: workArea.height },
-        ];
-
-        const isOff = (f) => f.x + f.width <= mon.x || f.x >= mon.x + mon.width ||
-            f.y + f.height <= mon.y || f.y >= mon.y + mon.height;
-
-        let target = null;
-        for (const d of dirs) {
-            for (const userOp of [false, true]) {
-                try {
-                    win.move_resize_frame(userOp, d.x, d.y, d.w, d.h);
-                } catch (_e) {}
-                const f = win.get_frame_rect();
-                const off = isOff(f);
-                this._debugLog(`background app: park dir=${d.name} userOp=${userOp} -> frame=(${f.x},${f.y},${f.width},${f.height}) off=${off}`);
-                if (off) {
-                    target = d;
-                    break;
-                }
-            }
-            if (target) break;
-        }
-
-        if (!target) {
-            this._debugLog('background app: park failed — no direction lands fully off-screen');
-            return;
+        if (this._backgroundAppParkRetryId) {
+            GLib.source_remove(this._backgroundAppParkRetryId);
+            this._backgroundAppParkRetryId = 0;
         }
 
         let retries = 0;
         const apply = () => {
             if (this._destroyed) return false;
             try {
-                win.move_resize_frame(true, target.x, target.y, target.w, target.h);
+                win.move_resize_frame(false, target.x, target.y, target.w, target.h);
             } catch (_e) {}
             const frame = win.get_frame_rect();
-            if (isOff(frame)) {
-                this._debugLog(`background app: parked via ${target.name} at (${frame.x},${frame.y},${frame.width},${frame.height})`);
+            if (frame.x + frame.width <= 0) {
+                this._debugLog(`background app: parked at (${frame.x},${frame.y},${frame.width},${frame.height})`);
                 return false;
             }
             retries++;
             if (retries >= 20) {
-                this._debugLog(`background app: park settle gave up, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
+                this._debugLog(`background app: park gave up, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
                 return false;
             }
             return true;
@@ -4160,8 +4164,10 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
         };
-        if (apply())
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
+        if (apply()) {
+            this._backgroundAppParkRetryId =
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
+        }
     }
 
     _ensureBackgroundAppClone(win) {
