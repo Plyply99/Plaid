@@ -4103,30 +4103,55 @@ export default class TilingWMExtension extends Extension {
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
         if (!workArea || workArea.width === 0) return;
-        const target = {
-            x: -workArea.width,
-            y: workArea.y,
-            w: workArea.width,
-            h: workArea.height,
-        };
+        const mon = global.display.get_monitor_geometry(monitor);
+        if (!mon) return;
+
+        const dirs = [
+            { name: 'below', x: workArea.x, y: workArea.y + workArea.height, w: workArea.width, h: workArea.height },
+            { name: 'right', x: workArea.x + workArea.width, y: workArea.y, w: workArea.width, h: workArea.height },
+            { name: 'above', x: workArea.x, y: -workArea.height, w: workArea.width, h: workArea.height },
+            { name: 'left', x: -workArea.width, y: workArea.y, w: workArea.width, h: workArea.height },
+        ];
+
+        const isOff = (f) => f.x + f.width <= mon.x || f.x >= mon.x + mon.width ||
+            f.y + f.height <= mon.y || f.y >= mon.y + mon.height;
+
+        let target = null;
+        for (const d of dirs) {
+            for (const userOp of [false, true]) {
+                try {
+                    win.move_resize_frame(userOp, d.x, d.y, d.w, d.h);
+                } catch (_e) {}
+                const f = win.get_frame_rect();
+                const off = isOff(f);
+                this._debugLog(`background app: park dir=${d.name} userOp=${userOp} -> frame=(${f.x},${f.y},${f.width},${f.height}) off=${off}`);
+                if (off) {
+                    target = d;
+                    break;
+                }
+            }
+            if (target) break;
+        }
+
+        if (!target) {
+            this._debugLog('background app: park failed — no direction lands fully off-screen');
+            return;
+        }
+
         let retries = 0;
         const apply = () => {
             if (this._destroyed) return false;
-            const before = win.get_frame_rect();
-            this._debugLog(`background app: park target=(${target.x},${target.y},${target.w},${target.h}) before=(${before.x},${before.y},${before.width},${before.height}) try=${retries}`);
             try {
                 win.move_resize_frame(true, target.x, target.y, target.w, target.h);
             } catch (_e) {}
             const frame = win.get_frame_rect();
-            const done = frame.x === target.x && frame.y === target.y &&
-                frame.width === target.w && frame.height === target.h;
-            if (done) {
-                this._debugLog(`background app: parked at (${frame.x},${frame.y},${frame.width},${frame.height})`);
+            if (isOff(frame)) {
+                this._debugLog(`background app: parked via ${target.name} at (${frame.x},${frame.y},${frame.width},${frame.height})`);
                 return false;
             }
             retries++;
             if (retries >= 20) {
-                this._debugLog(`background app: park gave up after ${retries} tries, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
+                this._debugLog(`background app: park settle gave up, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
                 return false;
             }
             return true;
