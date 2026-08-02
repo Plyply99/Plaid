@@ -4193,14 +4193,8 @@ export default class TilingWMExtension extends Extension {
         if (!mon || mon.width === 0) return;
 
         if (!this._backgroundAppParkingWs) {
-            const n = global.workspace_manager.get_n_workspaces();
-            let last = null;
-            try { last = global.workspace_manager.get_workspace_by_index(n - 1); } catch (_e) {}
-            if (last && last.list_windows().length === 0)
-                this._backgroundAppParkingWs = last;
-            else
-                this._backgroundAppParkingWs =
-                    global.workspace_manager.append_new_workspace(false, this._currentTime());
+            this._backgroundAppParkingWs =
+                global.workspace_manager.append_new_workspace(false, this._currentTime());
             this._debugLog(`background app: parking workspace index=${this._wsIndex(this._backgroundAppParkingWs)}`);
         }
         try {
@@ -4225,18 +4219,22 @@ export default class TilingWMExtension extends Extension {
 
     _reassertBackgroundAppParking() {
         if (this._destroyed || !this._backgroundAppWin) return;
-        if (!this._backgroundAppParkingWs) return;
-        let alive = false;
-        for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+        if (!this._backgroundAppParkingWs) {
+            this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
+            return;
+        }
+        const n = global.workspace_manager.get_n_workspaces();
+        let idx = -1;
+        for (let i = 0; i < n; i++) {
             if (global.workspace_manager.get_workspace_by_index(i) === this._backgroundAppParkingWs) {
-                alive = true;
+                idx = i;
                 break;
             }
         }
-        if (!alive) {
-            this._backgroundAppParkingWs = null;
-            this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
-            return;
+        if (idx !== n - 1) {
+            this._backgroundAppParkingWs =
+                global.workspace_manager.append_new_workspace(false, this._currentTime());
+            this._debugLog(`background app: parking relocated to index=${this._wsIndex(this._backgroundAppParkingWs)}`);
         }
         try {
             if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
