@@ -290,6 +290,8 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkRetryId = 0;
         this._backgroundAppParkCount = 0;
         this._backgroundAppParkingWs = null;
+        this._backgroundAppParkingFixId = 0;
+        this._backgroundAppParkingLastRelocate = 0;
         this._dynamicWsWarned = false;
         this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
@@ -598,10 +600,10 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('workspace-added', (_m, index) => {
             const ws = global.workspace_manager.get_workspace_by_index(index);
             this._workspaceOrders.set(ws, []);
-            this._reassertBackgroundAppParking();
+            this._scheduleBackgroundAppParkingFix();
         }));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('workspace-removed', () => {
-            this._reassertBackgroundAppParking();
+            this._scheduleBackgroundAppParkingFix();
             for (const [workspace] of this._workspaceOrders) {
                 let valid = false;
                 for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
@@ -4217,6 +4219,17 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
     }
 
+    _scheduleBackgroundAppParkingFix() {
+        if (this._destroyed || !this._backgroundAppWin) return;
+        if (this._backgroundAppParkingFixId) return;
+        this._backgroundAppParkingFixId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+            this._backgroundAppParkingFixId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._reassertBackgroundAppParking();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     _reassertBackgroundAppParking() {
         if (this._destroyed || !this._backgroundAppWin) return;
         if (!this._backgroundAppParkingWs) {
@@ -4232,6 +4245,10 @@ export default class TilingWMExtension extends Extension {
             }
         }
         if (idx !== n - 1) {
+            const now = Date.now();
+            if (now - (this._backgroundAppParkingLastRelocate || 0) < 1000)
+                return;
+            this._backgroundAppParkingLastRelocate = now;
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
             this._debugLog(`background app: parking relocated to index=${this._wsIndex(this._backgroundAppParkingWs)}`);
@@ -4316,6 +4333,10 @@ export default class TilingWMExtension extends Extension {
         }
         this._backgroundAppPending = false;
         this._disconnectBackgroundAppParkWatch();
+        if (this._backgroundAppParkingFixId) {
+            GLib.source_remove(this._backgroundAppParkingFixId);
+            this._backgroundAppParkingFixId = 0;
+        }
         if (this._backgroundAppClone) {
             try { this._backgroundAppClone.destroy(); } catch (_e) {}
             this._backgroundAppClone = null;
