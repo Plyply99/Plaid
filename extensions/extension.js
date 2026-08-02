@@ -280,6 +280,9 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppSettingsChangedId = 0;
         this._backgroundAppEnabledChangedId = 0;
         this._backgroundAppRestartId = 0;
+        this._backgroundAppProc = null;
+        this._backgroundAppFirstFrameId = 0;
+        this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
         this._anyGrabOp = null;
@@ -458,6 +461,7 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = null;
         this._lastRetileTimes = null;
         this._lastFocusedPerWorkspace = null;
+        this._lastRealFocusedWindow = null;
         this._savedRects = null;
         this._signals = null;
         this._grabInitialMasterRatio = 0;
@@ -555,9 +559,11 @@ export default class TilingWMExtension extends Extension {
             this._updateBorders();
             const win = global.display.focus_window;
             if (win) {
-                const ws = win.get_workspace();
-                if (ws && win !== this._backgroundAppWin)
-                    this._lastFocusedPerWorkspace.set(ws, win);
+                if (win !== this._backgroundAppWin) {
+                    this._lastRealFocusedWindow = win;
+                    const ws = win.get_workspace();
+                    if (ws) this._lastFocusedPerWorkspace.set(ws, win);
+                }
             }
             if (this._backgroundAppWin && win === this._backgroundAppWin)
                 this._restoreFocusFromBackgroundApp();
@@ -3932,20 +3938,14 @@ export default class TilingWMExtension extends Extension {
             }
             return GLib.SOURCE_REMOVE;
         });
-        let appInfo = null;
-        try {
-            appInfo = Gio.AppInfo.create_from_commandline(
-                command, null, Gio.AppInfoCreateFlags.NONE);
-        } catch (_e) {}
-        if (!appInfo) {
-            this._backgroundAppPending = false;
-            return;
-        }
         this._debugLog(`background app: launching ${command}`);
         try {
-            appInfo.launch([], null);
-        } catch (_e) {
+            this._backgroundAppProc = Gio.Subprocess.new(
+                ['/bin/sh', '-c', command], Gio.SubprocessFlags.NONE);
+        } catch (e) {
             this._backgroundAppPending = false;
+            this._backgroundAppProc = null;
+            this._debugLog(`background app: spawn failed: ${e.message}`);
         }
     }
 
@@ -4016,8 +4016,25 @@ export default class TilingWMExtension extends Extension {
         try { win.sticky = true; } catch (_e) {}
         try { win.on_all_workspaces = true; } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
-        try { win.lower(); } catch (_e) {}
+        this._lowerBackgroundApp();
         this._fillBackgroundApp(win);
+        try {
+            const actor = win.get_compositor_private();
+            if (actor) {
+                this._backgroundAppFirstFrameId = actor.connect('first-frame', () => {
+                    if (this._backgroundAppFirstFrameId) {
+                        try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
+                        this._backgroundAppFirstFrameId = 0;
+                    }
+                    this._lowerBackgroundApp();
+                });
+            }
+        } catch (_e) {}
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
+            this._lowerBackgroundApp();
+            return false;
+        });
     }
 
     _fillBackgroundApp(win) {
@@ -4040,17 +4057,22 @@ export default class TilingWMExtension extends Extension {
     _lowerBackgroundApp() {
         const win = this._backgroundAppWin;
         if (!win) return;
+        try { win.lower(); } catch (_e) {}
         try {
-            if (win.get_compositor_private())
-                win.lower();
+            const actor = win.get_compositor_private();
+            if (actor && actor.get_parent() === global.window_group)
+                global.window_group.set_child_below_sibling(actor, null);
         } catch (_e) {}
     }
 
     _restoreFocusFromBackgroundApp() {
         if (this._destroyed || !this._backgroundAppWin) return;
+        this._lowerBackgroundApp();
         const ws = global.workspace_manager.get_active_workspace();
-        if (!ws) return;
-        const prev = this._lastFocusedPerWorkspace.get(ws);
+        let prev = this._lastRealFocusedWindow;
+        if (!prev || !prev.get_compositor_private()) {
+            if (ws) prev = this._lastFocusedPerWorkspace.get(ws);
+        }
         if (!prev || prev === this._backgroundAppWin) return;
         if (!prev.get_compositor_private()) return;
         this._debugLog('background app: stealing focus back');
@@ -4076,7 +4098,7 @@ export default class TilingWMExtension extends Extension {
             const waiter = this._backgroundAppWaiter;
             this._backgroundAppWaiter = null;
             try { waiter.cleanup(false); } catch (_e) {}
-            try { waiter.win.close(this._currentTime()); } catch (_e) {}
+            this._closeBackgroundAppWindow(waiter.win);
         }
         const win = this._backgroundAppWin;
         if (this._backgroundAppUnmanagedId) {
@@ -4085,10 +4107,29 @@ export default class TilingWMExtension extends Extension {
             }
             this._backgroundAppUnmanagedId = 0;
         }
-        if (win) {
-            try { win.close(this._currentTime()); } catch (_e) {}
+        if (this._backgroundAppFirstFrameId && win) {
+            try {
+                const actor = win.get_compositor_private();
+                if (actor) actor.disconnect(this._backgroundAppFirstFrameId);
+            } catch (_e) {}
+            this._backgroundAppFirstFrameId = 0;
         }
+        if (win)
+            this._closeBackgroundAppWindow(win);
         this._backgroundAppWin = null;
+        this._backgroundAppProc = null;
+    }
+
+    _closeBackgroundAppWindow(win) {
+        if (!win) return;
+        try { win.delete(this._currentTime()); } catch (_e) {}
+        const proc = this._backgroundAppProc;
+        if (proc) {
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                try { proc.force_exit(); } catch (_e) {}
+                return GLib.SOURCE_REMOVE;
+            });
+        }
     }
 
     // --- Scratchpad ---
