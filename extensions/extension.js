@@ -4502,6 +4502,40 @@ export default class TilingWMExtension extends Extension {
             origRedisplay, wrappedRedisplay,
             origAddThumbnails, wrappedAddThumbnails,
         };
+        // Sweep cards/thumbnails that were built before the wraps were armed:
+        // the parking append fires the shell's rebuild synchronously, ahead of
+        // this apply, so the add-time wrappers never saw them.
+        try {
+            const controls = Main.overview._overview.controls;
+            const parkingWs = this._backgroundAppParkingWs;
+            const display = controls && controls._workspacesDisplay;
+            if (display && display._workspacesViews) {
+                for (const view of display._workspacesViews) {
+                    for (let i = view._workspaces.length - 1; i >= 0; i--) {
+                        const card = view._workspaces[i];
+                        if (card && card.metaWorkspace === parkingWs) {
+                            view._workspaces.splice(i, 1);
+                            try { card.destroy(); } catch (_e) {}
+                        }
+                    }
+                }
+            }
+            const thumbs = controls && controls._workspacesThumbnails;
+            if (thumbs) {
+                const hideParkingThumb = (box) => {
+                    if (!box || !box._thumbnails) return;
+                    for (const t of box._thumbnails) {
+                        if (t.metaWorkspace === parkingWs)
+                            t.visible = false;
+                    }
+                };
+                hideParkingThumb(thumbs);
+                if (thumbs.get_children) {
+                    for (const child of thumbs.get_children())
+                        hideParkingThumb(child);
+                }
+            }
+        } catch (_e) {}
         this._debugLog('background app: hiding parking workspace from overview, switcher, cycling');
     }
 
