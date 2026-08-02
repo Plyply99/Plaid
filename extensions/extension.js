@@ -4404,6 +4404,73 @@ export default class TilingWMExtension extends Extension {
             this._updateWorkspacesState();
             this.queue_relayout();
         };
+        const origGetFirstFitAllWorkspaceBox =
+            WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox;
+        const wrappedGetFirstFitAllWorkspaceBox = function (box, spacing, vertical) {
+            // The original sizes the row from the real workspace count; with
+            // the parking hidden the display count is what the cards need.
+            const nWorkspaces = this._workspaces.length;
+            const [width, height] = box.get_size();
+            const [workspace] = this._workspaces;
+            const fitAllBox = new Clutter.ActorBox();
+            let [x1, y1] = box.get_origin();
+            if (vertical) {
+                const availableHeight = height - spacing * (nWorkspaces + 1);
+                let workspaceHeight = availableHeight / nWorkspaces;
+                const [, workspaceWidth] = workspace.get_preferred_width(workspaceHeight);
+                y1 = spacing;
+                if (workspaceWidth > width) {
+                    [, workspaceHeight] = workspace.get_preferred_height(width);
+                    y1 += Math.max((availableHeight - workspaceHeight * nWorkspaces) / 2, 0);
+                }
+                fitAllBox.set_size(width, workspaceHeight);
+            } else {
+                const availableWidth = width - spacing * (nWorkspaces + 1);
+                let workspaceWidth = availableWidth / nWorkspaces;
+                const [, workspaceHeight] = workspace.get_preferred_height(workspaceWidth);
+                x1 = spacing;
+                if (workspaceHeight > height) {
+                    [, workspaceWidth] = workspace.get_preferred_width(height);
+                    x1 += Math.max((availableWidth - workspaceWidth * nWorkspaces) / 2, 0);
+                }
+                fitAllBox.set_size(workspaceWidth, height);
+            }
+            fitAllBox.set_origin(x1, y1);
+            return fitAllBox;
+        };
+        const origGetFirstFitSingleWorkspaceBox =
+            WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox;
+        const wrappedGetFirstFitSingleWorkspaceBox = function (box, spacing, vertical) {
+            // The scroll adjustment lives in display space (the wrapped
+            // _scrollToActive writes display indices); clamp against the
+            // display count so the row never overshoots the last card.
+            const [width, height] = box.get_size();
+            const [workspace] = this._workspaces;
+            const rtl = this.text_direction === Clutter.TextDirection.RTL;
+            const adj = this._scrollAdjustment;
+            const currentWorkspace = vertical || !rtl
+                ? Math.min(adj.value, this._workspaces.length - 1)
+                : Math.min(adj.upper - adj.value - 1, this._workspaces.length - 1);
+            let [x1, y1] = box.get_origin();
+            if (vertical) {
+                const [, workspaceHeight] = workspace.get_preferred_height(width);
+                y1 += (height - workspaceHeight) / 2;
+                y1 -= currentWorkspace * (workspaceHeight + spacing);
+            } else {
+                const [, workspaceWidth] = workspace.get_preferred_width(height);
+                x1 += (width - workspaceWidth) / 2;
+                x1 -= currentWorkspace * (workspaceWidth + spacing);
+            }
+            const fitSingleBox = new Clutter.ActorBox({x1, y1});
+            if (vertical) {
+                const [, workspaceHeight] = workspace.get_preferred_height(width);
+                fitSingleBox.set_size(width, workspaceHeight);
+            } else {
+                const [, workspaceWidth] = workspace.get_preferred_width(height);
+                fitSingleBox.set_size(workspaceWidth, height);
+            }
+            return fitSingleBox;
+        };
         const origRedisplay = MonitorWorkspaceSwitcherPopup.prototype.redisplay;
         const wrappedRedisplay = function (activeWorkspaceIndex) {
             const parkingIdx = self._backgroundAppParkingWs ?
@@ -4437,6 +4504,8 @@ export default class TilingWMExtension extends Extension {
         WorkspacesViewModule.WorkspacesView.prototype._scrollToActive = wrappedScrollToActive;
         WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = wrappedUpdateVisibility;
         WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged = wrappedOnScrollAdjustmentChanged;
+        WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox = wrappedGetFirstFitAllWorkspaceBox;
+        WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox = wrappedGetFirstFitSingleWorkspaceBox;
         MonitorWorkspaceSwitcherPopup.prototype.redisplay = wrappedRedisplay;
         WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = wrappedAddThumbnails;
         this._backgroundAppHiding = {
@@ -4446,6 +4515,8 @@ export default class TilingWMExtension extends Extension {
             origScrollToActive, wrappedScrollToActive,
             origUpdateVisibility, wrappedUpdateVisibility,
             origOnScrollAdjustmentChanged, wrappedOnScrollAdjustmentChanged,
+            origGetFirstFitAllWorkspaceBox, wrappedGetFirstFitAllWorkspaceBox,
+            origGetFirstFitSingleWorkspaceBox, wrappedGetFirstFitSingleWorkspaceBox,
             origRedisplay, wrappedRedisplay,
             origAddThumbnails, wrappedAddThumbnails,
         };
@@ -4468,6 +4539,10 @@ export default class TilingWMExtension extends Extension {
                 WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = h.origUpdateVisibility;
             if (WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged === h.wrappedOnScrollAdjustmentChanged)
                 WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged = h.origOnScrollAdjustmentChanged;
+            if (WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox === h.wrappedGetFirstFitAllWorkspaceBox)
+                WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox = h.origGetFirstFitAllWorkspaceBox;
+            if (WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox === h.wrappedGetFirstFitSingleWorkspaceBox)
+                WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox = h.origGetFirstFitSingleWorkspaceBox;
             if (MonitorWorkspaceSwitcherPopup.prototype.redisplay === h.wrappedRedisplay)
                 MonitorWorkspaceSwitcherPopup.prototype.redisplay = h.origRedisplay;
             if (WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails === h.wrappedAddThumbnails)
