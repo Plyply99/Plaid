@@ -4028,13 +4028,22 @@ export default class TilingWMExtension extends Extension {
             }
             return GLib.SOURCE_REMOVE;
         });
-        this._debugLog(`background app: launching (xwayland) ${command}`);
+        this._debugLog(`background app: launching ${command}`);
+        const flatpak = this._isFlatpakCommand(command);
+        this._backgroundAppXwayland = !flatpak;
         try {
-            const wrapped = this._wrapBackgroundAppCommand(command);
+            let spawnCmd;
+            if (flatpak) {
+                // The sandbox rebuilds its environment and cannot reach
+                // XWayland — run native Wayland and use the clone fallback.
+                this._debugLog('background app: flatpak command (clone fallback path)');
+                spawnCmd = `env PLAID_BGAPP=1 ${command}`;
+            } else {
+                spawnCmd =
+                    `env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET GDK_BACKEND=x11 PLAID_BGAPP=1 ${command}`;
+            }
             this._backgroundAppProc = Gio.Subprocess.new(
-                ['/bin/sh', '-c',
-                    `env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET GDK_BACKEND=x11 PLAID_BGAPP=1 ${wrapped}`],
-                Gio.SubprocessFlags.NONE);
+                ['/bin/sh', '-c', spawnCmd], Gio.SubprocessFlags.NONE);
         } catch (e) {
             this._backgroundAppPending = false;
             this._backgroundAppProc = null;
@@ -4042,22 +4051,9 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _wrapBackgroundAppCommand(command) {
-        const tokens = command.trim().split(/\s+/);
-        if (tokens.length >= 2 && tokens[0] === 'flatpak' && tokens[1] === 'run') {
-            // The flatpak sandbox rebuilds its environment (bwrap --clearenv),
-            // so host-side GDK_BACKEND overrides never reach the app. Inject
-            // flatpak's own --env mechanism to force XWayland inside the sandbox.
-            const flags = [
-                '--env=GDK_BACKEND=x11',
-                '--env=WAYLAND_DISPLAY=',
-                '--env=WAYLAND_SOCKET=',
-                '--env=DISPLAY=:0',
-            ];
-            this._debugLog('background app: flatpak command wrapped for XWayland');
-            return `flatpak run ${flags.join(' ')} ${tokens.slice(2).join(' ')}`;
-        }
-        return command;
+    _isFlatpakCommand(command) {
+        const tokens = (command || '').trim().split(/\s+/);
+        return tokens.length >= 2 && tokens[0] === 'flatpak' && tokens[1] === 'run';
     }
 
     _matchesBackgroundApp(win) {
@@ -4204,10 +4200,36 @@ export default class TilingWMExtension extends Extension {
         try { win.skip_taskbar = true; } catch (_e) {}
         try { win.skip_pager = true; } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
+        if (!this._backgroundAppXwayland) {
+            // Clone fallback (flatpak / Wayland-native): park the window on a
+            // trailing parking workspace and show a full-bleed clone in the
+            // background group — input-free by construction.
+            this._debugLog('background app: clone mode (parked window + background clone)');
+            try { win.unstick(); } catch (_e) {}
+            try {
+                const actor = win.get_compositor_private();
+                if (actor) {
+                    this._backgroundAppFirstFrameId = actor.connect('first-frame', () => {
+                        if (this._backgroundAppFirstFrameId) {
+                            try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
+                            this._backgroundAppFirstFrameId = 0;
+                        }
+                        this._parkBackgroundAppOnWorkspace(win);
+                        this._startBackgroundAppParkWatch(win);
+                        this._ensureBackgroundAppClone(win);
+                    });
+                }
+            } catch (_e) {}
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                if (this._destroyed) return false;
+                this._ensureBackgroundAppClone(win);
+                return false;
+            });
+            return;
+        }
         // XWayland mode: one real window, sticky on all workspaces, fitted to
         // the monitor, lowered behind everything, no parking workspace and no
         // clone — the window itself is the wallpaper.
-        this._backgroundAppXwayland = true;
         this._debugLog('background app: xwayland mode (sticky, full-bleed, lowered)');
         try { win.stick(); } catch (_e) {}
         this._refitBackgroundApp(win);
