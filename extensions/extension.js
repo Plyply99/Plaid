@@ -113,7 +113,6 @@ const CornerMaskEffect = GObject.registerClass({
     constructor() {
         super();
         this._radius = 0;
-        this._snippetAdded = false;
         this._metaWin = null;
         this._uniformLocations = {
             bounds: this.get_uniform_location('bounds'),
@@ -256,7 +255,6 @@ export default class TilingWMExtension extends Extension {
         this._grabInitialMasterRatio = 0;
         this._grabInitialStackRatios = null;
         this._liveResizeId = 0;
-        this._swapTarget = null;
         this._layoutPopup = null;
         this._layoutPopupHideId = 0;
         this._warningPopup = null;
@@ -278,7 +276,6 @@ export default class TilingWMExtension extends Extension {
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
-        this._lastSwapTarget = null;
         this._dropPreview = null;
 
         this._disableMutterDefaults();
@@ -321,6 +318,10 @@ export default class TilingWMExtension extends Extension {
         });
     }
 
+    _currentTime() {
+        try { return global.get_current_time(); } catch (_e) { return 0; }
+    }
+
     _wsIndex(ws) {
         if (!ws) return -1;
         try { return typeof ws.index === 'number' ? ws.index : ws.get_index(); } catch (_e) {}
@@ -342,7 +343,7 @@ export default class TilingWMExtension extends Extension {
             GLib.source_remove(id);
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
         this._stopLiveResizeLoop();
-        this._disconnectGrabSignals();
+        this._stopLiveResizeLoop();
         this._restoreMutterDefaults();
         this._removeAllBorders();
         this._hideDropPreview();
@@ -435,8 +436,6 @@ export default class TilingWMExtension extends Extension {
         this._lastFocusedPerWorkspace = null;
         this._savedRects = null;
         this._signals = null;
-        this._swapTarget = null;
-        this._lastSwapTarget = null;
         this._grabInitialMasterRatio = 0;
         this._grabInitialStackRatios = null;
         this._animTargets = null;
@@ -583,7 +582,7 @@ export default class TilingWMExtension extends Extension {
             this._keyboardFocusChange = true;
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 if (this._destroyed) return false;
-                try { target.activate(global.get_current_time()); } catch (_e) {}
+                try { target.activate(this._currentTime()); } catch (_e) {}
                 this._keyboardFocusChange = false;
                 return false;
             });
@@ -993,7 +992,9 @@ export default class TilingWMExtension extends Extension {
         else
             this._retileMasterStack(workspace, tiledWindows);
 
-        try { this._doUpdateBorders(); } catch (_e) {}
+        try { this._doUpdateBorders(); } catch (e) {
+            log(`[plaid] _doUpdateBorders after retile failed: ${e.message}`);
+        }
         this._raiseFloatingWindows(workspace);
         for (const win of tiledWindows)
             this._newWindowSet.delete(win);
@@ -1727,7 +1728,7 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _bspReplaceLeaf(node, targetLeaf, newWin, gap) {
+    _bspReplaceLeaf(node, targetLeaf, newWin) {
         if (!node) return null;
         if (node.type === 'empty') {
             if (node === targetLeaf)
@@ -1742,8 +1743,8 @@ export default class TilingWMExtension extends Extension {
             }
             return node;
         }
-        node.first = this._bspReplaceLeaf(node.first, targetLeaf, newWin, gap);
-        node.second = this._bspReplaceLeaf(node.second, targetLeaf, newWin, gap);
+        node.first = this._bspReplaceLeaf(node.first, targetLeaf, newWin);
+        node.second = this._bspReplaceLeaf(node.second, targetLeaf, newWin);
         return node;
     }
 
@@ -1789,7 +1790,7 @@ export default class TilingWMExtension extends Extension {
             this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
             const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
             if (target) {
-                tree = this._bspReplaceLeaf(tree, target, win, gap);
+                tree = this._bspReplaceLeaf(tree, target, win);
             } else {
                 tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
             }
@@ -3043,7 +3044,7 @@ export default class TilingWMExtension extends Extension {
         if (!bestWindow) return;
 
         this._keyboardFocusChange = true;
-        bestWindow.activate(global.get_current_time());
+        bestWindow.activate(this._currentTime());
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._keyboardFocusChange = false;
@@ -3079,7 +3080,7 @@ export default class TilingWMExtension extends Extension {
         }
         this._retileWorkspace(ws);
         this._keyboardFocusChange = true;
-        focused.activate(global.get_current_time());
+        focused.activate(this._currentTime());
         this._cursorWarpDeferred(focused);
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
@@ -3274,7 +3275,7 @@ export default class TilingWMExtension extends Extension {
         win.move_resize_frame(true, x, y, frame.width, frame.height);
 
         this._keyboardFocusChange = true;
-        win.activate(global.get_current_time());
+        win.activate(this._currentTime());
 
         this._moveCursorToWindow(win);
 
@@ -3751,7 +3752,7 @@ export default class TilingWMExtension extends Extension {
         try { win.unminimize(); } catch (_e) {}
         try { win.make_above(); } catch (_e) {}
         this._positionDropdownTerminal(win);
-        try { win.activate(global.get_current_time()); } catch (_e) {}
+        try { win.activate(this._currentTime()); } catch (_e) {}
         this._applyDropdownEffects(win);
     }
 
@@ -3911,7 +3912,7 @@ export default class TilingWMExtension extends Extension {
             }
             this._scratchpadVisible = true;
             if (firstWin) {
-                try { firstWin.activate(global.get_current_time()); } catch (_e) {}
+                try { firstWin.activate(this._currentTime()); } catch (_e) {}
             }
             this._showPopup('Scratchpad Shown');
         }
@@ -3960,23 +3961,17 @@ export default class TilingWMExtension extends Extension {
         }));
     }
 
-    _disconnectGrabSignals() {
-        this._stopLiveResizeLoop();
-    }
-
     _handleGrabBegin(metaWindow, grabOp) {
         if (!metaWindow || metaWindow.get_window_type() !== Meta.WindowType.NORMAL) return;
         if (metaWindow.is_skip_taskbar()) return;
         const ws = metaWindow.get_workspace();
         if (!ws || ws !== global.workspace_manager.get_active_workspace()) return;
 
-        const [px, py] = global.get_pointer();
         const frame = metaWindow.get_frame_rect();
         const buffer = metaWindow.get_buffer_rect();
         if (!frame || frame.width === 0 || frame.height === 0 || !buffer) return;
 
         this._grabOp = grabOp;
-        this._swapTarget = null;
 
         if (this._isResizeGrab(grabOp)) {
             this._grabWindow = metaWindow;
@@ -4065,8 +4060,6 @@ export default class TilingWMExtension extends Extension {
         this._stopLiveResizeLoop();
         this._grabOp = null;
         this._grabWindow = null;
-        this._swapTarget = null;
-        this._lastSwapTarget = null;
         this._grabInitialStackRatios = null;
     }
 
@@ -4252,19 +4245,6 @@ export default class TilingWMExtension extends Extension {
             win.move_resize_frame(true, x, y, w, h);
         } catch (e) {
             log(`[plaid] _safeMove FAILED: ${win.get_wm_class_instance() || '?'} to ${x},${y} ${w}x${h}: ${e.message}`);
-        }
-    }
-
-    _swapInLayout(winA, winB) {
-        if (!winA || !winB) return;
-        const ws = winA.get_workspace();
-        if (!ws) return;
-        const layout = this._getWorkspaceLayout(ws);
-        if (layout === 'dwindle') {
-            const tree = this._bspGetTree(ws);
-            if (tree) this._bspSwapWindows(tree, winA, winB);
-        } else {
-            this._swapMasterStackWindows(winA, winB);
         }
     }
 
@@ -4533,7 +4513,7 @@ export default class TilingWMExtension extends Extension {
             if (newTree.type === 'empty') newTree = null;
 
             if (newTree && targetLeaf.window !== window) {
-                newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, gap);
+                newTree = this._bspReplaceLeaf(newTree, targetLeaf, window);
             }
             this._bspTrees.set(ws, newTree);
         } else {

@@ -906,7 +906,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 12,
             halign: Gtk.Align.CENTER,
-            marginTop: 12,
+            margin_top: 12,
         });
 
         if (cls) {
