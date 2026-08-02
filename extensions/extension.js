@@ -3978,11 +3978,26 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _matchesBackgroundApp(win) {
+        if (!win) return false;
+        const command = this._settings.get_string('background-app') || '';
+        const bin = command.trim().split(/\s+/)[0] || '';
+        if (!bin) return false;
+        const instance = (win.get_wm_class_instance() || '').toLowerCase();
+        const cls = (win.get_wm_class() || '').toLowerCase();
+        return instance.includes(bin) || cls.includes(bin);
+    }
+
     _handleBackgroundAppWindowCreated(win) {
-        if (!this._backgroundAppPending || !win) return false;
-        if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
-        if (this._tryClaimBackgroundApp(win)) return true;
+        if (!win || win.get_window_type() !== Meta.WindowType.NORMAL) return false;
+        if (this._backgroundAppPending && this._tryClaimBackgroundApp(win)) return true;
+        if (this._backgroundAppWin && this._backgroundAppWin !== win &&
+            this._matchesBackgroundApp(win)) {
+            this._debugLog('background app: closing stray matching window');
+            try { win.delete(this._currentTime()); } catch (_e) {}
+        }
         if (this._backgroundAppWaiter && this._backgroundAppWaiter.win === win) return false;
+        if (!this._backgroundAppPending) return false;
         this._debugLog('background app: window created, waiting for identity');
         try { win.skip_taskbar = true; } catch (_e) {}
         const ids = [];
@@ -4009,11 +4024,9 @@ export default class TilingWMExtension extends Extension {
 
     _tryClaimBackgroundApp(win) {
         if (!this._backgroundAppPending || !win) return false;
-        const command = this._settings.get_string('background-app') || '';
-        const bin = command.trim().split(/\s+/)[0] || '';
-        const instance = (win.get_wm_class_instance() || '').toLowerCase();
-        const cls = (win.get_wm_class() || '').toLowerCase();
-        if (!bin || !(instance.includes(bin) || cls.includes(bin))) {
+        if (!this._matchesBackgroundApp(win)) {
+            const instance = (win.get_wm_class_instance() || '').toLowerCase();
+            const cls = (win.get_wm_class() || '').toLowerCase();
             this._debugLog(`background app: identity not yet matching (instance=${instance} class=${cls})`);
             return false;
         }
@@ -4146,10 +4159,10 @@ export default class TilingWMExtension extends Extension {
         const apply = () => {
             if (this._destroyed) return false;
             try {
-                win.move_resize_frame(false, target.x, target.y, target.w, target.h);
+                win.move_frame(false, target.x, target.y);
             } catch (_e) {}
             const frame = win.get_frame_rect();
-            if (frame.x + frame.width <= 0) {
+            if (frame.width > 0 && frame.x + frame.width <= 0) {
                 this._debugLog(`background app: parked at (${frame.x},${frame.y},${frame.width},${frame.height})`);
                 return false;
             }
