@@ -291,7 +291,6 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkIds = null;
         this._backgroundAppParkWatchTimeoutId = 0;
         this._backgroundAppParkCoalesceId = 0;
-        this._backgroundAppParkRetryId = 0;
         this._backgroundAppParkCount = 0;
         this._backgroundAppParkingWs = null;
         this._backgroundAppHiding = null;
@@ -4246,10 +4245,6 @@ export default class TilingWMExtension extends Extension {
         if (this._backgroundAppParkCoalesceId) {
             GLib.source_remove(this._backgroundAppParkCoalesceId);
             this._backgroundAppParkCoalesceId = 0;
-        }
-        if (this._backgroundAppParkRetryId) {
-            GLib.source_remove(this._backgroundAppParkRetryId);
-            this._backgroundAppParkRetryId = 0;
         }
         this._backgroundAppParkCount = 0;
         if (this._backgroundAppParkIds) {
