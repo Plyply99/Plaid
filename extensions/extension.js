@@ -282,6 +282,8 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppRestartId = 0;
         this._backgroundAppProc = null;
         this._backgroundAppFirstFrameId = 0;
+        this._backgroundAppClone = null;
+        this._backgroundAppGroupAddedId = 0;
         this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
@@ -4040,8 +4042,8 @@ export default class TilingWMExtension extends Extension {
         try { win.skip_pager = true; } catch (_e) {}
         try { win.stick(); } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
-        this._lowerBackgroundApp();
-        this._fillBackgroundApp(win);
+        this._parkBackgroundApp(win);
+        this._ensureBackgroundAppClone(win);
         try {
             const actor = win.get_compositor_private();
             if (actor) {
@@ -4050,19 +4052,18 @@ export default class TilingWMExtension extends Extension {
                         try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
                         this._backgroundAppFirstFrameId = 0;
                     }
-                    this._lowerBackgroundApp();
-                    this._fillBackgroundApp(win);
+                    this._ensureBackgroundAppClone(win);
                 });
             }
         } catch (_e) {}
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
-            this._lowerBackgroundApp();
+            this._ensureBackgroundAppClone(win);
             return false;
         });
     }
 
-    _fillBackgroundApp(win) {
+    _parkBackgroundApp(win) {
         if (!win) return;
         const ws = win.get_workspace() || global.workspace_manager.get_active_workspace();
         if (!ws) return;
@@ -4070,12 +4071,17 @@ export default class TilingWMExtension extends Extension {
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
         if (!workArea || workArea.width === 0) return;
-        const target = { x: workArea.x, y: workArea.y, w: workArea.width, h: workArea.height };
+        const target = {
+            x: -workArea.width,
+            y: workArea.y,
+            w: workArea.width,
+            h: workArea.height,
+        };
         let retries = 0;
         const apply = () => {
             if (this._destroyed) return false;
             const before = win.get_frame_rect();
-            this._debugLog(`background app: fill target=(${target.x},${target.y},${target.w},${target.h}) before=(${before.x},${before.y},${before.width},${before.height}) try=${retries}`);
+            this._debugLog(`background app: park target=(${target.x},${target.y},${target.w},${target.h}) before=(${before.x},${before.y},${before.width},${before.height}) try=${retries}`);
             try {
                 win.move_resize_frame(true, target.x, target.y, target.w, target.h);
             } catch (_e) {}
@@ -4083,12 +4089,12 @@ export default class TilingWMExtension extends Extension {
             const done = frame.x === target.x && frame.y === target.y &&
                 frame.width === target.w && frame.height === target.h;
             if (done) {
-                this._debugLog(`background app: fill settled at (${frame.x},${frame.y},${frame.width},${frame.height})`);
+                this._debugLog(`background app: parked at (${frame.x},${frame.y},${frame.width},${frame.height})`);
                 return false;
             }
             retries++;
             if (retries >= 20) {
-                this._debugLog(`background app: fill gave up after ${retries} tries, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
+                this._debugLog(`background app: park gave up after ${retries} tries, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
                 return false;
             }
             return true;
@@ -4101,20 +4107,51 @@ export default class TilingWMExtension extends Extension {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
     }
 
-    _refillBackgroundApp() {
-        this._fillBackgroundApp(this._backgroundAppWin);
+    _ensureBackgroundAppClone(win) {
+        if (!win) return;
+        if (!this._backgroundAppClone) {
+            const actor = win.get_compositor_private();
+            if (!actor) return;
+            const bg = Main.layoutManager._backgroundGroup;
+            if (!bg) return;
+            try {
+                this._backgroundAppClone = new Clutter.Clone({ source: actor });
+                bg.add_child(this._backgroundAppClone);
+                if (!this._backgroundAppGroupAddedId) {
+                    this._backgroundAppGroupAddedId = bg.connect('child-added', () => {
+                        if (this._backgroundAppClone &&
+                            this._backgroundAppClone.get_parent() === bg)
+                            bg.set_child_above_sibling(this._backgroundAppClone, null);
+                    });
+                }
+            } catch (e) {
+                log(`[plaid] background app clone failed: ${e.message}`);
+                this._backgroundAppClone = null;
+                return;
+            }
+        }
+        this._positionBackgroundAppClone();
     }
 
-    _lowerBackgroundApp() {
-        const win = this._backgroundAppWin;
-        if (!win) return;
-        try { win.lower(); } catch (_e) {}
-        this._debugLog('background app: lowered');
+    _positionBackgroundAppClone() {
+        const clone = this._backgroundAppClone;
+        if (!clone) return;
+        const ws = global.workspace_manager.get_active_workspace();
+        if (!ws) return;
+        const monitor = global.display.get_primary_monitor();
+        let workArea = null;
+        try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
+        if (!workArea || workArea.width === 0) return;
+        clone.set_position(workArea.x, workArea.y);
+        clone.set_size(workArea.width, workArea.height);
+    }
+
+    _refillBackgroundApp() {
+        this._positionBackgroundAppClone();
     }
 
     _restoreFocusFromBackgroundApp() {
         if (this._destroyed || !this._backgroundAppWin) return;
-        this._lowerBackgroundApp();
         const ws = global.workspace_manager.get_active_workspace();
         let prev = this._lastRealFocusedWindow;
         if (!prev || !prev.get_compositor_private()) {
@@ -4141,6 +4178,17 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppPendingId = 0;
         }
         this._backgroundAppPending = false;
+        if (this._backgroundAppClone) {
+            try { this._backgroundAppClone.destroy(); } catch (_e) {}
+            this._backgroundAppClone = null;
+        }
+        if (this._backgroundAppGroupAddedId) {
+            try {
+                const bg = Main.layoutManager._backgroundGroup;
+                if (bg) bg.disconnect(this._backgroundAppGroupAddedId);
+            } catch (_e) {}
+            this._backgroundAppGroupAddedId = 0;
+        }
         if (this._backgroundAppWaiter) {
             const waiter = this._backgroundAppWaiter;
             this._backgroundAppWaiter = null;
@@ -4291,7 +4339,6 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.display, global.display.connect('restacked', () => {
             this._syncBlurStacking();
-            this._lowerBackgroundApp();
         }));
     }
 
