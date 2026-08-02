@@ -984,7 +984,7 @@ export default class TilingWMExtension extends Extension {
             .filter(w => !this._isFloating(w));
         const windows = workspace.list_windows();
         for (const win of windows) {
-            if (!tiled.includes(win)) {
+            if (!tiled.includes(win) && win !== this._backgroundAppWin) {
                 try { win.make_above(); } catch (_e) {}
             }
         }
@@ -4038,8 +4038,7 @@ export default class TilingWMExtension extends Extension {
     _configureBackgroundApp(win) {
         try { win.skip_taskbar = true; } catch (_e) {}
         try { win.skip_pager = true; } catch (_e) {}
-        try { win.sticky = true; } catch (_e) {}
-        try { win.on_all_workspaces = true; } catch (_e) {}
+        try { win.stick(); } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
         this._lowerBackgroundApp();
         this._fillBackgroundApp(win);
@@ -4110,6 +4109,7 @@ export default class TilingWMExtension extends Extension {
         const win = this._backgroundAppWin;
         if (!win) return;
         try { win.lower(); } catch (_e) {}
+        this._debugLog('background app: lowered');
     }
 
     _restoreFocusFromBackgroundApp() {
