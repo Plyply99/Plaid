@@ -4130,6 +4130,7 @@ export default class TilingWMExtension extends Extension {
         try { win.stick(); } catch (_e) {}
         this._refitBackgroundApp(win);
         this._scheduleBackgroundAppLower();
+        this._spawnBackgroundAppInputHelper(win);
         const refit = () => {
             if (this._destroyed) return;
             if (win !== this._backgroundAppWin) return;
@@ -4157,6 +4158,32 @@ export default class TilingWMExtension extends Extension {
             refit();
             return false;
         });
+    }
+
+    _spawnBackgroundAppInputHelper(win) {
+        try {
+            const helper = GLib.build_filenamev([this.path, 'lib', 'plaid-input-free.py']);
+            if (!GLib.file_test(helper, GLib.FileTest.EXISTS)) {
+                this._debugLog('background app: input helper missing');
+                return;
+            }
+            const wmClass = (win.get_wm_class_instance() || '').toLowerCase();
+            if (!wmClass) return;
+            const proc = Gio.Subprocess.new(
+                ['python3', helper, wmClass],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+            proc.communicate_utf8_async(null, null, (p, res) => {
+                try {
+                    const [, , stderr] = p.communicate_utf8_finish(res);
+                    const ok = p.get_successful();
+                    this._debugLog(`background app: input helper ${ok ? 'ok' : 'failed'} ${(stderr || '').trim()}`);
+                } catch (e) {
+                    this._debugLog(`background app: input helper error: ${e.message}`);
+                }
+            });
+        } catch (e) {
+            this._debugLog(`background app: input helper spawn failed: ${e.message}`);
+        }
     }
 
     _refitBackgroundApp(win) {
