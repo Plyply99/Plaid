@@ -853,6 +853,7 @@ export default class TilingWMExtension extends Extension {
             this._updateBorders();
             this._convertMaximizedToGaps(win);
             this._trackFloatGeometry(win);
+            this._maybeReassertSlot(win);
         }) });
         sigIds.push({ emitter: win, id: win.connect('notify::wm-class', () => {
             this._onWindowIdentityChanged(win);
@@ -4118,7 +4119,6 @@ export default class TilingWMExtension extends Extension {
                         const areaY = workArea.y + gap;
                         const areaW = workArea.width - gap * 2;
                         const areaH = workArea.height - gap * 2;
-                        this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
 
                         if (this._grabResizeNodeW) {
                             const axis = this._grabResizeNodeW._w;
@@ -4136,6 +4136,7 @@ export default class TilingWMExtension extends Extension {
                                     this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85, raw));
                             }
                         }
+                        this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
                     }
                 } else {
                     const areaW = workArea.width - gap * 2;
@@ -4202,7 +4203,7 @@ export default class TilingWMExtension extends Extension {
                 }
 
                 this._moveTiledExcept(metaWindow);
-                const boundary = this._grabBoundaryRect(metaWindow, ws, layout, workArea, gap);
+                const boundary = this._windowSlotRect(metaWindow, ws, layout, workArea, gap);
                 if (boundary) {
                     const f = metaWindow.get_frame_rect();
                     let nx = f.x, ny = f.y, nw = f.width, nh = f.height;
@@ -4262,7 +4263,7 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _grabBoundaryRect(win, ws, layout, workArea, gap) {
+    _windowSlotRect(win, ws, layout, workArea, gap) {
         if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
         const areaX = workArea.x + gap;
         const areaY = workArea.y + gap;
@@ -4350,6 +4351,32 @@ export default class TilingWMExtension extends Extension {
             y += h + gap;
         }
         return null;
+    }
+
+    _maybeReassertSlot(win) {
+        if (this._destroyed || !this._settings) return;
+        if (!this._settings.get_boolean('enabled')) return;
+        if (this._grabOp || this._animating) return;
+        if (!win || win.is_fullscreen() || win.minimized) return;
+        if (this._isFloating(win)) return;
+        if (!this._windowWorkspaces.has(win)) return;
+        const ws = win.get_workspace();
+        if (!ws) return;
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        let workArea = null;
+        try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
+        if (!workArea || workArea.width === 0) return;
+        const layout = this._getWorkspaceLayout(ws);
+        const slot = this._windowSlotRect(win, ws, layout, workArea, gap);
+        if (!slot) return;
+        const f = win.get_frame_rect();
+        if (f.width === 0 || f.height === 0) return;
+        if (Math.abs(f.width - slot.w) > 16 || Math.abs(f.height - slot.h) > 16 ||
+            Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16) {
+            this._debugLog(`slot re-assert: ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+            this._scheduleRetile(ws);
+        }
     }
 
     _safeMove(win, x, y, w, h) {
