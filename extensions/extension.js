@@ -12,7 +12,6 @@ import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspacesView.js';
-import * as WorkspaceModule from 'resource:///org/gnome/shell/ui/workspace.js';
 import * as WorkspaceThumbnailModule from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -4312,41 +4311,24 @@ export default class TilingWMExtension extends Extension {
             }
             return neighbor;
         };
-        const origUpdateWorkspaces =
-            WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces;
-        const wrappedUpdateWorkspaces = function () {
-            const parkingIdx = self._backgroundAppParkingWs ?
-                self._wsIndex(self._backgroundAppParkingWs) : -1;
-            const wm = global.workspace_manager;
-            const n = wm.n_workspaces;
-            const displayList = [];
-            for (let i = 0; i < n; i++) {
-                if (i === parkingIdx) continue;
-                displayList.push(wm.get_workspace_by_index(i));
-            }
-            for (let j = 0; j < displayList.length; j++) {
-                const metaWorkspace = displayList[j];
-                let workspace;
-                if (j >= this._workspaces.length) {
-                    workspace = new WorkspaceModule.Workspace(
-                        metaWorkspace, this._monitorIndex, this._overviewAdjustment);
-                    this.add_child(workspace);
-                    this._workspaces[j] = workspace;
-                } else {
-                    workspace = this._workspaces[j];
-                    if (workspace.metaWorkspace !== metaWorkspace) {
-                        workspace.destroy();
-                        this._workspaces.splice(j, 1);
-                    }
-                }
-            }
-            for (let j = this._workspaces.length - 1; j >= displayList.length; j--) {
-                this._workspaces[j].destroy();
-                this._workspaces.splice(j, 1);
-            }
-            this._updateWorkspacesState();
-            this._updateVisibility();
-            this._raiseActiveWorkspace();
+        const origAddChild = WorkspacesViewModule.WorkspacesView.prototype.add_child;
+        const wrappedAddChild = function (child) {
+            origAddChild.call(this, child);
+            const parkingWs = self._backgroundAppParkingWs;
+            if (!parkingWs || !child.metaWorkspace) return;
+            if (child.metaWorkspace !== parkingWs) return;
+            // The shell's rebuild signal bound the original _updateWorkspaces
+            // at view construction, so prototype patches never run on
+            // rebuilds — sweep the parking card here instead, on every add.
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                try {
+                    const idx = this._workspaces.indexOf(child);
+                    if (idx !== -1)
+                        this._workspaces.splice(idx, 1);
+                    child.destroy();
+                } catch (_e) {}
+                return GLib.SOURCE_REMOVE;
+            });
         };
         const origGetActiveWorkspace =
             WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace;
@@ -4499,7 +4481,7 @@ export default class TilingWMExtension extends Extension {
             }
         };
         Meta.Workspace.prototype.get_neighbor = wrappedGetNeighbor;
-        WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces = wrappedUpdateWorkspaces;
+        WorkspacesViewModule.WorkspacesView.prototype.add_child = wrappedAddChild;
         WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = wrappedGetActiveWorkspace;
         WorkspacesViewModule.WorkspacesView.prototype._scrollToActive = wrappedScrollToActive;
         WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = wrappedUpdateVisibility;
@@ -4510,7 +4492,7 @@ export default class TilingWMExtension extends Extension {
         WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = wrappedAddThumbnails;
         this._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
-            origUpdateWorkspaces, wrappedUpdateWorkspaces,
+            origAddChild, wrappedAddChild,
             origGetActiveWorkspace, wrappedGetActiveWorkspace,
             origScrollToActive, wrappedScrollToActive,
             origUpdateVisibility, wrappedUpdateVisibility,
@@ -4529,8 +4511,8 @@ export default class TilingWMExtension extends Extension {
         try {
             if (Meta.Workspace.prototype.get_neighbor === h.wrappedGetNeighbor)
                 Meta.Workspace.prototype.get_neighbor = h.origGetNeighbor;
-            if (WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces === h.wrappedUpdateWorkspaces)
-                WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces = h.origUpdateWorkspaces;
+            if (WorkspacesViewModule.WorkspacesView.prototype.add_child === h.wrappedAddChild)
+                WorkspacesViewModule.WorkspacesView.prototype.add_child = h.origAddChild;
             if (WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace === h.wrappedGetActiveWorkspace)
                 WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = h.origGetActiveWorkspace;
             if (WorkspacesViewModule.WorkspacesView.prototype._scrollToActive === h.wrappedScrollToActive)
