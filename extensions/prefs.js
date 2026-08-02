@@ -580,13 +580,18 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         page.add(bgAppGroup);
 
-        const bgAppCommandRow = new Adw.EntryRow({
+        const bgAppRow = new Adw.ActionRow({
             title: _('Command'),
             subtitle: _('Pinned behind all windows as a live desktop background. Looks best with frameless windows.'),
         });
-        bgAppCommandRow.set_text(settings.get_string('background-app'));
-        bgAppGroup.add(bgAppCommandRow);
-        settings.bind('background-app', bgAppCommandRow, 'text', Gio.SettingsBindFlags.DEFAULT);
+        const bgAppEntry = new Gtk.Entry({
+            text: settings.get_string('background-app'),
+            hexpand: true,
+            valign: Gtk.Align.CENTER,
+        });
+        bgAppRow.add_suffix(bgAppEntry);
+        bgAppGroup.add(bgAppRow);
+        settings.bind('background-app', bgAppEntry, 'text', Gio.SettingsBindFlags.DEFAULT);
     }
 
     _buildColorRow(settings, key, title) {
