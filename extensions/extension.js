@@ -4268,13 +4268,12 @@ export default class TilingWMExtension extends Extension {
             const w = global.workspace_manager.get_workspace_by_index(i);
             if (w === this._backgroundAppParkingWs) parkingIdx = i;
         }
-        let maxUser = -1;
-        for (let i = 0; i < n; i++) {
-            const w = global.workspace_manager.get_workspace_by_index(i);
-            if (w === this._backgroundAppParkingWs) continue;
-            if (w.list_windows().length > 0) maxUser = Math.max(maxUser, i);
+        let gapOk = false;
+        if (parkingIdx > 0) {
+            const gapWs = global.workspace_manager.get_workspace_by_index(parkingIdx - 1);
+            if (gapWs && gapWs.list_windows().length === 0) gapOk = true;
         }
-        const zoneOk = parkingIdx === n - 1 && maxUser <= n - 2;
+        const zoneOk = parkingIdx === n - 1 && gapOk;
         if (!zoneOk) {
             const now = Date.now();
             if (now - (this._backgroundAppParkingLastRelocate || 0) < 1000)
@@ -4283,14 +4282,10 @@ export default class TilingWMExtension extends Extension {
             const oldParking = this._backgroundAppParkingWs;
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
+            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)} (old ws=${this._wsIndex(oldParking)} kept as gap)`);
             try {
                 if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
                     this._backgroundAppWin.change_workspace(this._backgroundAppParkingWs);
-            } catch (_e) {}
-            try {
-                if (oldParking && oldParking.list_windows().length === 0)
-                    global.workspace_manager.remove_workspace(oldParking, this._currentTime());
             } catch (_e) {}
         }
         try {
