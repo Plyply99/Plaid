@@ -272,6 +272,11 @@ export default class TilingWMExtension extends Extension {
         this._dropdownSettingsChangedId = 0;
         this._dropdownHeightChangedId = 0;
         this._dropdownGeometryIds = null;
+        this._backgroundAppWin = null;
+        this._backgroundAppPending = false;
+        this._backgroundAppPendingId = 0;
+        this._backgroundAppUnmanagedId = 0;
+        this._backgroundAppSettingsChangedId = 0;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
         this._anyGrabOp = null;
@@ -298,6 +303,7 @@ export default class TilingWMExtension extends Extension {
         this._suppressWorkspaceSwitcherPopup();
         this._initWorkspacePopupWarning();
         this._initDropdownTerminal();
+        this._initBackgroundApp();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -380,6 +386,11 @@ export default class TilingWMExtension extends Extension {
         this._jpSettingsChangedId = 0;
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
+        this._clearBackgroundApp();
+        if (this._backgroundAppSettingsChangedId) {
+            try { this._settings.disconnect(this._backgroundAppSettingsChangedId); } catch (_e) {}
+            this._backgroundAppSettingsChangedId = 0;
+        }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
             GLib.source_remove(this._dropdownPendingId);
@@ -479,6 +490,7 @@ export default class TilingWMExtension extends Extension {
     _connectSignals() {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
             if (this._handleDropdownWindowCreated(win)) return;
+            if (this._handleBackgroundAppWindowCreated(win)) return;
             if (this._shouldManage(win)) {
                 this._addWindow(win);
                 const doRetile = () => {
@@ -533,8 +545,11 @@ export default class TilingWMExtension extends Extension {
             const win = global.display.focus_window;
             if (win) {
                 const ws = win.get_workspace();
-                if (ws) this._lastFocusedPerWorkspace.set(ws, win);
+                if (ws && win !== this._backgroundAppWin)
+                    this._lastFocusedPerWorkspace.set(ws, win);
             }
+            if (this._backgroundAppWin && win === this._backgroundAppWin)
+                this._restoreFocusFromBackgroundApp();
             if (this._settings.get_boolean('follow-focus') && this._keyboardFocusChange) {
                 this._keyboardFocusChange = false;
                 if (win) this._moveCursorToWindow(win);
@@ -542,6 +557,7 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
             this._updateDropOverlaySize();
+            this._refillBackgroundApp();
             this._retileAll();
         }));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('workspace-added', (_m, index) => {
@@ -714,6 +730,7 @@ export default class TilingWMExtension extends Extension {
     _shouldManage(win) {
         if (this._dropdownWin === win ||
             (this._dropdownWaiters && this._dropdownWaiters.has(win))) return false;
+        if (this._backgroundAppWin === win) return false;
         const wms = win.get_wm_class_instance();
         const title = win.get_title();
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
@@ -3856,6 +3873,162 @@ export default class TilingWMExtension extends Extension {
         this._dropdownWin = null;
     }
 
+    // --- Background App ---
+
+    _initBackgroundApp() {
+        try {
+            this._backgroundAppSettingsChangedId = this._settings.connect(
+                'changed::background-app',
+                () => {
+                    this._clearBackgroundApp();
+                    this._launchBackgroundApp();
+                });
+        } catch (_e) {
+            this._backgroundAppSettingsChangedId = 0;
+        }
+        this._launchBackgroundApp();
+    }
+
+    _launchBackgroundApp() {
+        if (this._destroyed || !this._settings) return;
+        const command = this._settings.get_string('background-app');
+        if (!command) return;
+        this._backgroundAppPending = true;
+        if (this._backgroundAppPendingId) GLib.source_remove(this._backgroundAppPendingId);
+        this._backgroundAppPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+            this._backgroundAppPendingId = 0;
+            this._backgroundAppPending = false;
+            return GLib.SOURCE_REMOVE;
+        });
+        let appInfo = null;
+        try {
+            appInfo = Gio.AppInfo.create_from_commandline(
+                command, null, Gio.AppInfoCreateFlags.NONE);
+        } catch (_e) {}
+        if (!appInfo) {
+            this._backgroundAppPending = false;
+            return;
+        }
+        this._debugLog(`background app: launching ${command}`);
+        try {
+            appInfo.launch([], null);
+        } catch (_e) {
+            this._backgroundAppPending = false;
+        }
+    }
+
+    _handleBackgroundAppWindowCreated(win) {
+        if (!this._backgroundAppPending || !win) return false;
+        if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
+        return this._tryClaimBackgroundApp(win);
+    }
+
+    _tryClaimBackgroundApp(win) {
+        if (!this._backgroundAppPending || !win) return false;
+        const command = this._settings.get_string('background-app') || '';
+        const bin = command.trim().split(/\s+/)[0] || '';
+        const instance = (win.get_wm_class_instance() || '').toLowerCase();
+        const cls = (win.get_wm_class() || '').toLowerCase();
+        if (!bin || !(instance.includes(bin) || cls.includes(bin))) {
+            this._debugLog(`background app: identity not yet matching (instance=${instance} class=${cls})`);
+            return false;
+        }
+        if (this._backgroundAppPendingId) {
+            GLib.source_remove(this._backgroundAppPendingId);
+            this._backgroundAppPendingId = 0;
+        }
+        this._backgroundAppPending = false;
+        if (this._windowWorkspaces.has(win)) {
+            this._debugLog('background app: de-registering window from tiler');
+            this._removeWindow(win);
+        }
+        this._removeMask(win);
+        this._removeBlur(win);
+        this._removeBorder(win);
+        this._backgroundAppWin = win;
+        this._backgroundAppUnmanagedId = win.connect('unmanaged', () => {
+            if (this._backgroundAppWin === win)
+                this._backgroundAppWin = null;
+        });
+        this._configureBackgroundApp(win);
+        this._debugLog(`background app: claimed ${instance || cls}`);
+        return true;
+    }
+
+    _configureBackgroundApp(win) {
+        try { win.skip_taskbar = true; } catch (_e) {}
+        try { win.skip_pager = true; } catch (_e) {}
+        try { win.sticky = true; } catch (_e) {}
+        try { win.on_all_workspaces = true; } catch (_e) {}
+        try { win.unmake_above(); } catch (_e) {}
+        try { win.lower(); } catch (_e) {}
+        this._fillBackgroundApp(win);
+    }
+
+    _fillBackgroundApp(win) {
+        if (!win) return;
+        const ws = win.get_workspace() || global.workspace_manager.get_active_workspace();
+        if (!ws) return;
+        const monitor = global.display.get_primary_monitor();
+        let workArea = null;
+        try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
+        if (!workArea || workArea.width === 0) return;
+        try {
+            win.move_resize_frame(true, workArea.x, workArea.y, workArea.width, workArea.height);
+        } catch (_e) {}
+    }
+
+    _refillBackgroundApp() {
+        this._fillBackgroundApp(this._backgroundAppWin);
+    }
+
+    _lowerBackgroundApp() {
+        const win = this._backgroundAppWin;
+        if (!win) return;
+        try {
+            if (win.get_compositor_private())
+                win.lower();
+        } catch (_e) {}
+    }
+
+    _restoreFocusFromBackgroundApp() {
+        if (this._destroyed || !this._backgroundAppWin) return;
+        const ws = global.workspace_manager.get_active_workspace();
+        if (!ws) return;
+        const prev = this._lastFocusedPerWorkspace.get(ws);
+        if (!prev || prev === this._backgroundAppWin) return;
+        if (!prev.get_compositor_private()) return;
+        this._debugLog('background app: stealing focus back');
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
+            if (global.display.focus_window === prev) return false;
+            try { prev.activate(this._currentTime()); } catch (_e) {}
+            return false;
+        });
+    }
+
+    _clearBackgroundApp() {
+        if (this._backgroundAppPendingId) {
+            GLib.source_remove(this._backgroundAppPendingId);
+            this._backgroundAppPendingId = 0;
+        }
+        this._backgroundAppPending = false;
+        const win = this._backgroundAppWin;
+        if (this._backgroundAppUnmanagedId) {
+            if (win) {
+                try { win.disconnect(this._backgroundAppUnmanagedId); } catch (_e) {}
+            }
+            this._backgroundAppUnmanagedId = 0;
+        }
+        if (win) {
+            try { win.skip_taskbar = false; } catch (_e) {}
+            try { win.skip_pager = false; } catch (_e) {}
+            try { win.sticky = false; } catch (_e) {}
+            try { win.on_all_workspaces = false; } catch (_e) {}
+        }
+        this._backgroundAppWin = null;
+    }
+
     // --- Scratchpad ---
 
     _scratchpadAdd() {
@@ -3968,6 +4141,7 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.display, global.display.connect('restacked', () => {
             this._syncBlurStacking();
+            this._lowerBackgroundApp();
         }));
     }
 

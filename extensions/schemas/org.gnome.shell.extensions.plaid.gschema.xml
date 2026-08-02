@@ -370,5 +370,12 @@
       <description>Show or hide the drop-down terminal on the active monitor</description>
     </key>
 
+    <!-- Background App -->
+    <key name="background-app" type="s">
+      <default>''</default>
+      <summary>Background app command</summary>
+      <description>Command for an app pinned behind all windows as a live desktop background (looks best with frameless windows). Empty disables.</description>
+    </key>
+
   </schema>
 </schemalist>
