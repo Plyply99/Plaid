@@ -21,7 +21,7 @@ all built in.
   with full Flair and live height updates
 - **Background app**: pin any app — e.g. a frameless terminal running cava —
   behind all windows as a live desktop background, on every workspace,
-  click-through like a wallpaper
+  click-through like a wallpaper (requires dynamic workspaces)
 - **Maximize respects gaps**: maximizing a window fills the work area within
   the per-edge gaps instead of flush to the edges; floating windows restore
   their exact original geometry on toggle
