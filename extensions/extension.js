@@ -273,6 +273,7 @@ export default class TilingWMExtension extends Extension {
         this._dropdownHeightChangedId = 0;
         this._dropdownGeometryIds = null;
         this._backgroundAppWin = null;
+        this._backgroundAppWaiter = null;
         this._backgroundAppPending = false;
         this._backgroundAppPendingId = 0;
         this._backgroundAppUnmanagedId = 0;
@@ -3926,6 +3927,9 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
             this._backgroundAppPendingId = 0;
             this._backgroundAppPending = false;
+            if (this._backgroundAppWaiter) {
+                try { this._backgroundAppWaiter.cleanup(false); } catch (_e) {}
+            }
             return GLib.SOURCE_REMOVE;
         });
         let appInfo = null;
@@ -3948,7 +3952,30 @@ export default class TilingWMExtension extends Extension {
     _handleBackgroundAppWindowCreated(win) {
         if (!this._backgroundAppPending || !win) return false;
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
-        return this._tryClaimBackgroundApp(win);
+        if (this._tryClaimBackgroundApp(win)) return true;
+        if (this._backgroundAppWaiter && this._backgroundAppWaiter.win === win) return false;
+        this._debugLog('background app: window created, waiting for identity');
+        try { win.skip_taskbar = true; } catch (_e) {}
+        const ids = [];
+        const cleanup = (claimed) => {
+            if (!claimed) {
+                try { win.skip_taskbar = false; } catch (_e) {}
+            }
+            for (const id of ids) {
+                try { win.disconnect(id); } catch (_e) {}
+            }
+            ids.length = 0;
+            if (this._backgroundAppWaiter && this._backgroundAppWaiter.win === win)
+                this._backgroundAppWaiter = null;
+        };
+        const retry = () => {
+            if (this._tryClaimBackgroundApp(win)) cleanup(true);
+        };
+        ids.push(win.connect('notify::wm-class', retry));
+        ids.push(win.connect('notify::gtk-application-id', retry));
+        ids.push(win.connect('unmanaged', () => cleanup(false)));
+        this._backgroundAppWaiter = { win, cleanup };
+        return false;
     }
 
     _tryClaimBackgroundApp(win) {
@@ -4045,6 +4072,12 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppPendingId = 0;
         }
         this._backgroundAppPending = false;
+        if (this._backgroundAppWaiter) {
+            const waiter = this._backgroundAppWaiter;
+            this._backgroundAppWaiter = null;
+            try { waiter.cleanup(false); } catch (_e) {}
+            try { waiter.win.close(this._currentTime()); } catch (_e) {}
+        }
         const win = this._backgroundAppWin;
         if (this._backgroundAppUnmanagedId) {
             if (win) {
@@ -4053,10 +4086,7 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppUnmanagedId = 0;
         }
         if (win) {
-            try { win.skip_taskbar = false; } catch (_e) {}
-            try { win.skip_pager = false; } catch (_e) {}
-            try { win.sticky = false; } catch (_e) {}
-            try { win.on_all_workspaces = false; } catch (_e) {}
+            try { win.close(this._currentTime()); } catch (_e) {}
         }
         this._backgroundAppWin = null;
     }
