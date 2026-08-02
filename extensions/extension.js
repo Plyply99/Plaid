@@ -13,6 +13,7 @@ import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspacesView.js';
 import * as WorkspaceModule from 'resource:///org/gnome/shell/ui/workspace.js';
+import * as WorkspaceAnimation from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const LAYOUT_NAMES = {
@@ -297,6 +298,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppXwayland = false;
         this._backgroundAppLowerId = 0;
         this._backgroundAppRefitIds = null;
+        this._backgroundAppAnimPatch = null;
         this._backgroundAppParkingFixId = 0;
         this._backgroundAppParkingLastRelocate = 0;
         this._dynamicWsWarned = false;
@@ -4131,6 +4133,7 @@ export default class TilingWMExtension extends Extension {
         this._refitBackgroundApp(win);
         this._scheduleBackgroundAppLower();
         this._spawnBackgroundAppInputHelper(win);
+        this._applyBackgroundAppAnimPatch();
         const refit = () => {
             if (this._destroyed) return;
             if (win !== this._backgroundAppWin) return;
@@ -4209,6 +4212,33 @@ export default class TilingWMExtension extends Extension {
             }
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    _applyBackgroundAppAnimPatch() {
+        if (this._backgroundAppAnimPatch || !this._backgroundAppXwayland) return;
+        const self = this;
+        const orig = WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow;
+        const wrapped = function (window) {
+            if (self._backgroundAppXwayland && window === self._backgroundAppWin) {
+                if (!window.showing_on_its_workspace()) return false;
+                if (window.is_override_redirect()) return false;
+                if (!this._windowIsOnThisMonitor(window)) return false;
+                if (!this._workspace) return false;
+                return window.located_on_workspace(this._workspace);
+            }
+            return orig.call(this, window);
+        };
+        WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow = wrapped;
+        this._backgroundAppAnimPatch = { orig, wrapped };
+        this._debugLog('background app: switch animation keeps it below other windows');
+    }
+
+    _restoreBackgroundAppAnimPatch() {
+        const p = this._backgroundAppAnimPatch;
+        if (!p) return;
+        if (WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow === p.wrapped)
+            WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow = p.orig;
+        this._backgroundAppAnimPatch = null;
     }
 
     _startBackgroundAppParkWatch(win) {
@@ -4524,6 +4554,7 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppRefitIds = null;
         }
         this._backgroundAppXwayland = false;
+        this._restoreBackgroundAppAnimPatch();
         if (this._backgroundAppParkingFixId) {
             GLib.source_remove(this._backgroundAppParkingFixId);
             this._backgroundAppParkingFixId = 0;
