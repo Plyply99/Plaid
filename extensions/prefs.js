@@ -577,7 +577,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const bgAppGroup = new Adw.PreferencesGroup({
             title: _('Background App'),
-            description: _('Requires dynamic workspaces — the background app runs on a dedicated trailing workspace that exists only while the feature is enabled.'),
         });
         page.add(bgAppGroup);
 

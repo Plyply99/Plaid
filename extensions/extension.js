@@ -290,6 +290,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkRetryId = 0;
         this._backgroundAppParkCount = 0;
         this._backgroundAppParkingWs = null;
+        this._dynamicWsWarned = false;
         this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
@@ -336,6 +337,7 @@ export default class TilingWMExtension extends Extension {
                 }
             }
             this._retileAll();
+            this._checkDynamicWorkspaces();
             return false;
         });
     }
@@ -587,6 +589,12 @@ export default class TilingWMExtension extends Extension {
             this._refillBackgroundApp();
             this._retileAll();
         }));
+        try {
+            if (this._mutterSettings) {
+                this._addSignal(this._mutterSettings, this._mutterSettings.connect(
+                    'changed::dynamic-workspaces', () => this._checkDynamicWorkspaces()));
+            }
+        } catch (_e) {}
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('workspace-added', (_m, index) => {
             const ws = global.workspace_manager.get_workspace_by_index(index);
             this._workspaceOrders.set(ws, []);
@@ -3293,6 +3301,7 @@ export default class TilingWMExtension extends Extension {
                 this._keyboardFocusChange = false;
                 return false;
             });
+            this._checkDynamicWorkspaces();
             if (this._settings.get_boolean('tiling-popup'))
                 this._showPopup('Tiling Enabled');
         } else {
@@ -3973,6 +3982,15 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             return false;
         }
+    }
+
+    _checkDynamicWorkspaces() {
+        if (this._destroyed || this._dynamicWsWarned) return;
+        if (this._isDynamicWorkspaces()) return;
+        this._dynamicWsWarned = true;
+        this._showWarningPopup('Dynamic Workspaces Required',
+            "Plaid's dynamic workspace model — and the Background App — need GNOME's dynamic-workspaces setting. Enable it in Settings → Multitasking.",
+            'Click to dismiss');
     }
 
     _launchBackgroundApp() {
