@@ -565,8 +565,10 @@ export default class TilingWMExtension extends Extension {
                     if (ws) this._lastFocusedPerWorkspace.set(ws, win);
                 }
             }
-            if (this._backgroundAppWin && win === this._backgroundAppWin)
+            if (this._backgroundAppWin && win === this._backgroundAppWin) {
+                this._debugLog('background app: focus landed on bg window');
                 this._restoreFocusFromBackgroundApp();
+            }
             if (this._settings.get_boolean('follow-focus') && this._keyboardFocusChange) {
                 this._keyboardFocusChange = false;
                 if (win) this._moveCursorToWindow(win);
@@ -4026,7 +4028,10 @@ export default class TilingWMExtension extends Extension {
                 this._backgroundAppWin = null;
         });
         this._configureBackgroundApp(win);
-        this._debugLog(`background app: claimed ${instance || cls}`);
+        try {
+            const f = win.get_frame_rect();
+            this._debugLog(`background app: claimed ${instance || cls} frame=(${f.x},${f.y},${f.width},${f.height})`);
+        } catch (_e) {}
         return true;
     }
 
@@ -4047,6 +4052,7 @@ export default class TilingWMExtension extends Extension {
                         this._backgroundAppFirstFrameId = 0;
                     }
                     this._lowerBackgroundApp();
+                    this._fillBackgroundApp(win);
                 });
             }
         } catch (_e) {}
@@ -4065,9 +4071,35 @@ export default class TilingWMExtension extends Extension {
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
         if (!workArea || workArea.width === 0) return;
-        try {
-            win.move_resize_frame(true, workArea.x, workArea.y, workArea.width, workArea.height);
-        } catch (_e) {}
+        const target = { x: workArea.x, y: workArea.y, w: workArea.width, h: workArea.height };
+        let retries = 0;
+        const apply = () => {
+            if (this._destroyed) return false;
+            const before = win.get_frame_rect();
+            this._debugLog(`background app: fill target=(${target.x},${target.y},${target.w},${target.h}) before=(${before.x},${before.y},${before.width},${before.height}) try=${retries}`);
+            try {
+                win.move_resize_frame(true, target.x, target.y, target.w, target.h);
+            } catch (_e) {}
+            const frame = win.get_frame_rect();
+            const done = frame.x === target.x && frame.y === target.y &&
+                frame.width === target.w && frame.height === target.h;
+            if (done) {
+                this._debugLog(`background app: fill settled at (${frame.x},${frame.y},${frame.width},${frame.height})`);
+                return false;
+            }
+            retries++;
+            if (retries >= 20) {
+                this._debugLog(`background app: fill gave up after ${retries} tries, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
+                return false;
+            }
+            return true;
+        };
+        const retry = () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
+        };
+        if (apply())
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
     }
 
     _refillBackgroundApp() {
@@ -4078,11 +4110,6 @@ export default class TilingWMExtension extends Extension {
         const win = this._backgroundAppWin;
         if (!win) return;
         try { win.lower(); } catch (_e) {}
-        try {
-            const actor = win.get_compositor_private();
-            if (actor && actor.get_parent() === global.window_group)
-                global.window_group.set_child_below_sibling(actor, null);
-        } catch (_e) {}
     }
 
     _restoreFocusFromBackgroundApp() {
