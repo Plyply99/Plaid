@@ -13,7 +13,6 @@ import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspacesView.js';
 import * as WorkspaceModule from 'resource:///org/gnome/shell/ui/workspace.js';
-import * as WorkspaceAnimation from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const LAYOUT_NAMES = {
@@ -296,10 +295,6 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkCount = 0;
         this._backgroundAppParkingWs = null;
         this._backgroundAppHiding = null;
-        this._backgroundAppXwayland = false;
-        this._backgroundAppLowerId = 0;
-        this._backgroundAppRefitIds = null;
-        this._backgroundAppAnimPatch = null;
         this._backgroundAppParkingFixId = 0;
         this._backgroundAppParkingLastRelocate = 0;
         this._dynamicWsWarned = false;
@@ -634,7 +629,6 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
             this._syncDropdownWorkspace();
-            this._scheduleBackgroundAppLower();
             this._raiseBackgroundAppClone();
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 if (this._destroyed) return false;
@@ -647,10 +641,6 @@ export default class TilingWMExtension extends Extension {
                 return GLib.SOURCE_REMOVE;
             });
         }));
-        this._addSignal(global.display, global.display.connect('window-created',
-            () => this._scheduleBackgroundAppLower()));
-        this._addSignal(global.display, global.display.connect('notify::focus-window',
-            () => this._scheduleBackgroundAppLower()));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
             if (this._destroyed || !this._settings.get_boolean('enabled')) return;
             const ws = global.workspace_manager.get_active_workspace();
@@ -4029,31 +4019,15 @@ export default class TilingWMExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
         this._debugLog(`background app: launching ${command}`);
-        const flatpak = this._isFlatpakCommand(command);
-        this._backgroundAppXwayland = !flatpak;
         try {
-            let spawnCmd;
-            if (flatpak) {
-                // The sandbox rebuilds its environment and cannot reach
-                // XWayland — run native Wayland and use the clone fallback.
-                this._debugLog('background app: flatpak command (clone fallback path)');
-                spawnCmd = `env PLAID_BGAPP=1 ${command}`;
-            } else {
-                spawnCmd =
-                    `env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET GDK_BACKEND=x11 PLAID_BGAPP=1 ${command}`;
-            }
             this._backgroundAppProc = Gio.Subprocess.new(
-                ['/bin/sh', '-c', spawnCmd], Gio.SubprocessFlags.NONE);
+                ['/bin/sh', '-c', `env PLAID_BGAPP=1 ${command}`],
+                Gio.SubprocessFlags.NONE);
         } catch (e) {
             this._backgroundAppPending = false;
             this._backgroundAppProc = null;
             this._debugLog(`background app: spawn failed: ${e.message}`);
         }
-    }
-
-    _isFlatpakCommand(command) {
-        const tokens = (command || '').trim().split(/\s+/);
-        return tokens.length >= 2 && tokens[0] === 'flatpak' && tokens[1] === 'run';
     }
 
     _matchesBackgroundApp(win) {
@@ -4199,63 +4173,12 @@ export default class TilingWMExtension extends Extension {
     _configureBackgroundApp(win) {
         try { win.skip_taskbar = true; } catch (_e) {}
         try { win.skip_pager = true; } catch (_e) {}
+        try { win.unstick(); } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
-        if (!this._backgroundAppXwayland) {
-            // Clone fallback (flatpak / Wayland-native): park the window on a
-            // trailing parking workspace and show a full-bleed clone in the
-            // background group — input-free by construction.
-            this._debugLog('background app: clone mode (parked window + background clone)');
-            try { win.unstick(); } catch (_e) {}
-            try {
-                const actor = win.get_compositor_private();
-                if (actor) {
-                    this._backgroundAppFirstFrameId = actor.connect('first-frame', () => {
-                        if (this._backgroundAppFirstFrameId) {
-                            try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
-                            this._backgroundAppFirstFrameId = 0;
-                        }
-                        this._parkBackgroundAppOnWorkspace(win);
-                        this._startBackgroundAppParkWatch(win);
-                        this._ensureBackgroundAppClone(win);
-                    });
-                }
-            } catch (_e) {}
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                if (this._destroyed) return GLib.SOURCE_REMOVE;
-                if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
-                this._positionBackgroundAppClone();
-                return GLib.SOURCE_REMOVE;
-            });
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                if (this._destroyed) return false;
-                this._ensureBackgroundAppClone(win);
-                return false;
-            });
-            return;
-        }
-        // XWayland mode: one real window, sticky on all workspaces, fitted to
-        // the monitor, lowered behind everything, no parking workspace and no
-        // clone — the window itself is the wallpaper.
-        this._debugLog('background app: xwayland mode (sticky, full-bleed, lowered)');
-        try { win.stick(); } catch (_e) {}
-        this._refitBackgroundApp(win);
-        this._scheduleBackgroundAppLower();
-        this._applyBackgroundAppAnimPatch();
-        const refit = () => {
-            if (this._destroyed) return;
-            if (win !== this._backgroundAppWin) return;
-            this._refitBackgroundApp(win);
-            this._scheduleBackgroundAppLower();
-        };
-        const neutralize = () => {
-            if (this._destroyed) return;
-            if (win !== this._backgroundAppWin) return;
-            this._spawnBackgroundAppInputHelper(win);
-        };
-        this._backgroundAppRefitIds = [
-            { emitter: win, id: win.connect('size-changed', refit) },
-            { emitter: win, id: win.connect('position-changed', refit) },
-        ];
+        // Clone path: park the window on a trailing parking workspace and show
+        // a full-bleed clone in the background group — input-free by
+        // construction, smooth (the parked window is never animated).
+        this._debugLog('background app: clone mode (parked window + background clone)');
         try {
             const actor = win.get_compositor_private();
             if (actor) {
@@ -4264,110 +4187,23 @@ export default class TilingWMExtension extends Extension {
                         try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
                         this._backgroundAppFirstFrameId = 0;
                     }
-                    refit();
-                    // The client (ghostty/GTK) finishes realizing its window
-                    // lazily; neutralize only after it has painted its first
-                    // frame, and again shortly after, to survive any late
-                    // client-side reset of WM_HINTS/WM_PROTOCOLS/shape.
-                    neutralize();
+                    this._parkBackgroundAppOnWorkspace(win);
+                    this._startBackgroundAppParkWatch(win);
+                    this._ensureBackgroundAppClone(win);
                 });
             }
         } catch (_e) {}
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
-            neutralize();
+            if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
+            this._positionBackgroundAppClone();
             return GLib.SOURCE_REMOVE;
         });
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
-            refit();
+            this._ensureBackgroundAppClone(win);
             return false;
         });
-    }
-
-    _spawnBackgroundAppInputHelper(win) {
-        try {
-            const helper = GLib.build_filenamev([this.path, 'lib', 'plaid-input-free.py']);
-            if (!GLib.file_test(helper, GLib.FileTest.EXISTS)) {
-                this._debugLog('background app: input helper missing');
-                return;
-            }
-            const wmClass = (win.get_wm_class_instance() || '').toLowerCase();
-            if (!wmClass) return;
-            let pid = 0;
-            try { pid = win.get_pid(); } catch (_e) {}
-            const proc = Gio.Subprocess.new(
-                ['python3', helper, wmClass, String(pid || '')],
-                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-            proc.communicate_utf8_async(null, null, (p, res) => {
-                try {
-                    const [, stdout, stderr] = p.communicate_utf8_finish(res);
-                    const ok = p.get_successful();
-                    this._debugLog(`background app: input helper ${ok ? 'ok' : 'failed'} ${(stdout || stderr || '').trim()}`);
-                } catch (e) {
-                    this._debugLog(`background app: input helper error: ${e.message}`);
-                }
-            });
-        } catch (e) {
-            this._debugLog(`background app: input helper spawn failed: ${e.message}`);
-        }
-    }
-
-    _refitBackgroundApp(win) {
-        if (!win) return;
-        const monitor = global.display.get_primary_monitor();
-        const ws = global.workspace_manager.get_active_workspace();
-        let rect = null;
-        if (ws && ws.get_work_area_for_monitor) {
-            try { rect = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
-        }
-        if (!rect) rect = global.display.get_monitor_geometry(monitor);
-        if (!rect || rect.width === 0) return;
-        try {
-            win.move_resize_frame(true, rect.x, rect.y, rect.width, rect.height);
-            const f = win.get_frame_rect();
-            this._debugLog(`background app: fitted to (${f.x},${f.y},${f.width},${f.height})`);
-        } catch (_e) {}
-    }
-
-    _scheduleBackgroundAppLower() {
-        if (this._destroyed || !this._backgroundAppXwayland) return;
-        if (this._backgroundAppLowerId) return;
-        this._backgroundAppLowerId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            this._backgroundAppLowerId = 0;
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
-            if (this._backgroundAppWin) {
-                try { this._backgroundAppWin.lower(); } catch (_e) {}
-            }
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    _applyBackgroundAppAnimPatch() {
-        if (this._backgroundAppAnimPatch || !this._backgroundAppXwayland) return;
-        const self = this;
-        const orig = WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow;
-        const wrapped = function (window) {
-            if (self._backgroundAppXwayland && window === self._backgroundAppWin) {
-                if (!window.showing_on_its_workspace()) return false;
-                if (window.is_override_redirect()) return false;
-                if (!this._windowIsOnThisMonitor(window)) return false;
-                if (!this._workspace) return false;
-                return window.located_on_workspace(this._workspace);
-            }
-            return orig.call(this, window);
-        };
-        WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow = wrapped;
-        this._backgroundAppAnimPatch = { orig, wrapped };
-        this._debugLog('background app: switch animation keeps it below other windows');
-    }
-
-    _restoreBackgroundAppAnimPatch() {
-        const p = this._backgroundAppAnimPatch;
-        if (!p) return;
-        if (WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow === p.wrapped)
-            WorkspaceAnimation.WorkspaceGroup.prototype._shouldShowWindow = p.orig;
-        this._backgroundAppAnimPatch = null;
     }
 
     _startBackgroundAppParkWatch(win) {
@@ -4429,7 +4265,6 @@ export default class TilingWMExtension extends Extension {
         // ghostty renders continuously; clients that render only on frame
         // callbacks may freeze here (native-Wayland research continues).
         if (!win) return;
-        if (this._backgroundAppXwayland) return;
         const ws = win.get_workspace() || global.workspace_manager.get_active_workspace();
         if (!ws) return;
         const monitor = global.display.get_primary_monitor();
@@ -4445,6 +4280,12 @@ export default class TilingWMExtension extends Extension {
         try {
             if (win.get_workspace() !== this._backgroundAppParkingWs)
                 win.change_workspace(this._backgroundAppParkingWs);
+        } catch (_e) {}
+        try {
+            // Maximize for a sharp full-size clone source — mutter-enforced,
+            // clients cannot refuse it (native Wayland clients may ignore
+            // plain move_resize configures).
+            win.maximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL, monitor);
         } catch (_e) {}
         try {
             win.move_resize_frame(true, mon.x, mon.y, mon.width, mon.height);
@@ -4564,7 +4405,6 @@ export default class TilingWMExtension extends Extension {
 
     _reassertBackgroundAppParking() {
         if (this._destroyed || !this._backgroundAppWin) return;
-        if (this._backgroundAppXwayland) return;
         if (!this._backgroundAppParkingWs) {
             this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
             return;
@@ -4628,6 +4468,15 @@ export default class TilingWMExtension extends Extension {
         if (!mon || mon.width === 0) return;
         clone.set_position(mon.x, mon.y);
         clone.set_size(mon.width, mon.height);
+        // The same-size set_size is a no-op, so the clone never re-runs
+        // clutter_clone_allocate and its internal scale stays 1.0 (computed
+        // when the source was 0x0). Nudge the size to force a real
+        // re-allocation that recomputes the stretch from the settled source.
+        try {
+            clone.queue_relayout();
+            clone.set_size(mon.width + 1, mon.height + 1);
+            clone.set_size(mon.width, mon.height);
+        } catch (_e) {}
         try {
             const src = clone.get_source();
             this._debugLog(`background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
@@ -4637,11 +4486,6 @@ export default class TilingWMExtension extends Extension {
 
     _refillBackgroundApp() {
         if (!this._backgroundAppWin) return;
-        if (this._backgroundAppXwayland) {
-            this._refitBackgroundApp(this._backgroundAppWin);
-            this._scheduleBackgroundAppLower();
-            return;
-        }
         this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
         this._positionBackgroundAppClone();
     }
@@ -4675,18 +4519,6 @@ export default class TilingWMExtension extends Extension {
         }
         this._backgroundAppPending = false;
         this._disconnectBackgroundAppParkWatch();
-        if (this._backgroundAppLowerId) {
-            GLib.source_remove(this._backgroundAppLowerId);
-            this._backgroundAppLowerId = 0;
-        }
-        if (this._backgroundAppRefitIds) {
-            for (const { emitter, id } of this._backgroundAppRefitIds) {
-                try { emitter.disconnect(id); } catch (_e) {}
-            }
-            this._backgroundAppRefitIds = null;
-        }
-        this._backgroundAppXwayland = false;
-        this._restoreBackgroundAppAnimPatch();
         if (this._backgroundAppParkingFixId) {
             GLib.source_remove(this._backgroundAppParkingFixId);
             this._backgroundAppParkingFixId = 0;

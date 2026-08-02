@@ -22,9 +22,9 @@ all built in.
 - **Background app**: pin any app — e.g. a frameless terminal running cava —
   behind all windows as a live desktop background, on every workspace,
   click-through like a wallpaper. Terminal-agnostic (ghostty, Ptyxis, kitty…)
-  and sandbox-agnostic: native commands run as an XWayland window, `flatpak
-  run` commands (whose sandbox cannot reach XWayland) use a native-Wayland
-  parked window + background clone — same inert wallpaper either way
+  and sandbox-agnostic: the app runs natively (Wayland, flatpak included),
+  parked on a hidden workspace and mirrored full-bleed behind everything —
+  inert by construction, butter-smooth in animations
 - **Dynamic workspaces ready**: built on GNOME's dynamic-workspaces behavior:
   workspaces appear and disappear with your content, no fixed slot count
 - **Maximize respects gaps**: maximizing a window fills the work area within
