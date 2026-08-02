@@ -3,15 +3,11 @@ import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import Gst from 'gi://Gst';
-import GstApp from 'gi://GstApp';
-import GstPbutils from 'gi://GstPbutils';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as Background from 'resource:///org/gnome/shell/ui/background.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup } from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -110,18 +106,6 @@ const MASK_SNIPPET_CODE = `
         }
     }
 `;
-
-const LayoutInertClone = GObject.registerClass({
-    GTypeName: 'PlaidLayoutInertClone',
-}, class LayoutInertClone extends Clutter.Clone {
-    vfunc_get_preferred_width(_forHeight) {
-        return [0, 0];
-    }
-
-    vfunc_get_preferred_height(_forWidth) {
-        return [0, 0];
-    }
-});
 
 const CornerMaskEffect = GObject.registerClass({
     GTypeName: 'PlaidCornerMaskEffect',
@@ -291,9 +275,6 @@ export default class TilingWMExtension extends Extension {
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
         this._anyGrabOp = null;
-        this._bgVideo = null;
-        this._bgVideoChangedId = 0;
-        this._bgFitChangedId = 0;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -317,7 +298,6 @@ export default class TilingWMExtension extends Extension {
         this._suppressWorkspaceSwitcherPopup();
         this._initWorkspacePopupWarning();
         this._initDropdownTerminal();
-        this._initBackgroundVideo();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -395,22 +375,6 @@ export default class TilingWMExtension extends Extension {
         this._jpSettingsChangedId = 0;
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
-        this._stopBackgroundVideo();
-        if (this._origBackgroundManagerCreate) {
-            try {
-                Background.BackgroundManager.prototype._createBackgroundActor =
-                    this._origBackgroundManagerCreate;
-            } catch (_e) {}
-            this._origBackgroundManagerCreate = null;
-        }
-        if (this._bgVideoChangedId) {
-            try { this._settings.disconnect(this._bgVideoChangedId); } catch (_e) {}
-            this._bgVideoChangedId = 0;
-        }
-        if (this._bgFitChangedId) {
-            try { this._settings.disconnect(this._bgFitChangedId); } catch (_e) {}
-            this._bgFitChangedId = 0;
-        }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
             GLib.source_remove(this._dropdownPendingId);
@@ -2075,7 +2039,6 @@ export default class TilingWMExtension extends Extension {
 
     _ensureWindowBorder(win, actor, frame, isFocused) {
         if (!frame || frame.width === 0 || frame.height === 0) return false;
-        if (this._bgVideo && actor === this._bgVideo.actor) return false;
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
         const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#62a0ea';
@@ -2426,7 +2389,6 @@ export default class TilingWMExtension extends Extension {
 
     _ensureWindowMask(win, actor, radius) {
         if (!this._windowMasks || !actor || !actor.add_effect_with_name) return;
-        if (this._bgVideo && actor === this._bgVideo.actor) return;
         const target = this._unwrapMaskActor(actor, win);
         if (!target || !target.add_effect_with_name) return;
         let effect = this._windowMasks.get(win);
@@ -2656,7 +2618,6 @@ export default class TilingWMExtension extends Extension {
     _ensureWindowBlur(win, actor) {
         if (!this._windowBlurs || !actor || !actor.add_effect_with_name) return;
         if (!this._settings || !this._settings.get_boolean('window-blur')) return;
-        if (this._bgVideo && actor === this._bgVideo.actor) return;
 
         let blur = this._windowBlurs.get(win);
 
@@ -3816,472 +3777,6 @@ export default class TilingWMExtension extends Extension {
         try { win.on_all_workspaces = false; } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
         this._dropdownWin = null;
-    }
-
-    // --- Animated Background ---
-
-    _initBackgroundVideo() {
-        try {
-            this._bgVideoChangedId = this._settings.connect(
-                'changed::background-animated-video',
-                () => this._restartBackgroundVideo());
-        } catch (_e) {
-            this._bgVideoChangedId = 0;
-        }
-        try {
-            this._bgFitChangedId = this._settings.connect(
-                'changed::background-animated-fit',
-                () => this._restartBackgroundVideo());
-        } catch (_e) {
-            this._bgFitChangedId = 0;
-        }
-        try {
-            if (!this._origBackgroundManagerCreate && Background.BackgroundManager) {
-                const orig = Background.BackgroundManager.prototype._createBackgroundActor;
-                if (typeof orig === 'function') {
-                    this._origBackgroundManagerCreate = orig;
-                    const self = this;
-                    const getVideoState = () => this._bgVideo;
-                    const fitVideoClone = (clone, container, opts) => {
-                        try {
-                            const cw = container.get_width();
-                            const ch = container.get_height();
-                            const state = getVideoState();
-                            if (!state)
-                                return;
-                            const vA = state.w / state.h;
-                            if (cw <= 0 || ch <= 0)
-                                return;
-                            const cA = cw / ch;
-                            let w, h;
-                            if (cA > vA) {
-                                w = cw;
-                                h = cw / vA;
-                            } else {
-                                h = ch;
-                                w = ch * vA;
-                            }
-                            const x = Math.round((cw - w) / 2);
-                            const y = Math.round((ch - h) / 2);
-                            w = Math.round(w);
-                            h = Math.round(h);
-                            const name = container.get_name ? container.get_name() : '';
-                            const cls = container.constructor ? container.constructor.name : '';
-                            clone.set_size(1, 1);
-                            clone.set_position(x, y);
-                            clone.set_scale(w, h);
-                        } catch (e) {
-                            this._bgLog(`clone fit error: ${e}`);
-                        }
-                    };
-                    Background.BackgroundManager.prototype._createBackgroundActor = function (...args) {
-                        const actor = orig.apply(this, args);
-                        const video = getVideoState();
-                        if (video && this._container &&
-                            this._container !== Main.layoutManager._backgroundGroup) {
-                            try {
-                                const clone = new LayoutInertClone({ source: video.actor });
-                                this._container.add_child(clone);
-                                this._container.connect('child-added', () => {
-                                    try {
-                                        this._container.set_child_above_sibling(clone, null);
-                                    } catch (_e) {}
-                                });
-                                this._container.connect('notify::allocation', () =>
-                                    fitVideoClone(clone, this._container));
-                                this._container.connect('notify::width', () =>
-                                    fitVideoClone(clone, this._container));
-                                this._container.connect('notify::height', () =>
-                                    fitVideoClone(clone, this._container));
-                                fitVideoClone(clone, this._container);
-                                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                                    if (self._destroyed) return false;
-                                    fitVideoClone(clone, this._container, { recheck: true });
-                                    return false;
-                                });
-                            } catch (_e) {}
-                        }
-                        return actor;
-                    };
-                }
-            }
-        } catch (_e) {
-            this._origBackgroundManagerCreate = null;
-        }
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            if (this._destroyed) return false;
-            this._startBackgroundVideo();
-            return false;
-        });
-    }
-
-    _restartBackgroundVideo() {
-        this._stopBackgroundVideo();
-        this._startBackgroundVideo();
-    }
-
-    _backgroundUnionSize() {
-        const monitors = global.display.get_n_monitors();
-        let maxX = 0, maxY = 0;
-        for (let i = 0; i < monitors; i++) {
-            const geom = global.display.get_monitor_geometry(i);
-            maxX = Math.max(maxX, geom.x + geom.width);
-            maxY = Math.max(maxY, geom.y + geom.height);
-        }
-        return { w: maxX, h: maxY };
-    }
-
-    _bgLog(..._args) {
-    }
-
-    _uploadBackgroundFrame(state, data) {
-        try {
-            state.texture.set_region(0, 0, 0, 0,
-                state.w, state.h, state.w, state.h,
-                Cogl.PixelFormat.RGBA_8888, state.w * 4, data);
-            state.content.invalidate();
-            state.actor.queue_redraw();
-        } catch (e) {
-            if (!state.uploadFailedLogged) {
-                state.uploadFailedLogged = true;
-                log(`[plaid] background video: frame upload failed: ${e}`);
-                this._bgLog(`frame upload failed: ${e}`);
-                this._showWarningPopup('Animated Background Failed', `Frame upload failed: ${e}`, 'Click to dismiss');
-            }
-        }
-    }
-
-    _startBackgroundVideo() {
-        const path = this._settings ? this._settings.get_string('background-animated-video') : '';
-        log(`[plaid] background video: start (path=${path})`);
-        this._bgLog(`start (path=${path})`);
-        if (this._destroyed || !this._settings) return;
-        if (this._bgVideo) {
-            log('[plaid] background video: already running');
-            return;
-        }
-        if (!path) {
-            log('[plaid] background video: no path set');
-            return;
-        }
-        try {
-            Gst.init(null);
-        } catch (e) {
-            log(`[plaid] background video: Gst.init failed: ${e}`);
-        }
-        const union = this._backgroundUnionSize();
-        if (union.w === 0 || union.h === 0) {
-            log('[plaid] background video: zero monitor size');
-            return;
-        }
-
-        const fit = this._settings.get_string('background-animated-fit') || 'cover';
-
-        // In-process vaapi is unsafe (compositor freeze); pin the va plugin to NONE.
-        try {
-            const registry = Gst.Registry.get();
-            const features = registry.get_feature_list_by_plugin('va');
-            for (const feature of features) {
-                const name = feature.get_name() || '';
-                if (name.endsWith('dec') || name.endsWith('postproc'))
-                    feature.set_rank(Gst.Rank.NONE);
-            }
-        } catch (_e) {}
-
-        let srcW = 0, srcH = 0;
-        try {
-            const discoverer = new GstPbutils.Discoverer();
-            let uri = null;
-            try { uri = Gst.uri_construct('file', path); } catch (_e2) {}
-            if (!uri) uri = `file://${path}`;
-            const info = discoverer.discover_uri(uri);
-            const streams = info.get_video_streams();
-            if (streams.length > 0) {
-                const structure = streams[0].get_caps().get_structure(0);
-                const [okW, w] = structure.get_int('width');
-                const [okH, h] = structure.get_int('height');
-                if (okW && okH) { srcW = w; srcH = h; }
-            }
-        } catch (e) {
-            log(`[plaid] background video: discovery failed: ${e}`);
-            this._bgLog(`discovery failed: ${e}`);
-            this._showWarningPopup('Animated Background Failed', `Could not read video: ${path}`, 'Click to dismiss');
-        }
-        if (srcW <= 0 || srcH <= 0) {
-            log('[plaid] background video: no video stream found');
-            this._bgLog('no video stream found');
-            this._showWarningPopup('Animated Background Failed', 'No video stream found in this file', 'Click to dismiss');
-            this._stopBackgroundVideo();
-            return;
-        }
-
-        const capW = 1920;
-        const w = Math.min(capW, union.w);
-        const h = Math.max(1, Math.round(w * union.h / union.w));
-
-        let sw = w, sh = h;
-        let l = 0, r = 0, t = 0, b = 0;
-        if (fit === 'cover' || fit === 'contain') {
-            const scale = fit === 'cover'
-                ? Math.max(w / srcW, h / srcH)
-                : Math.min(w / srcW, h / srcH);
-            sw = Math.round(srcW * scale);
-            sh = Math.round(srcH * scale);
-            const leftoverW = w - sw;
-            const leftoverH = h - sh;
-            l = fit === 'cover' ? Math.floor(-leftoverW / 2) : Math.floor(leftoverW / 2);
-            r = fit === 'cover' ? Math.ceil(-leftoverW / 2) : Math.ceil(leftoverW / 2);
-            t = fit === 'cover' ? Math.floor(-leftoverH / 2) : Math.floor(leftoverH / 2);
-            b = fit === 'cover' ? Math.ceil(-leftoverH / 2) : Math.ceil(leftoverH / 2);
-        }
-
-        let texture = null;
-        let actor = null;
-        let content = null;
-        try {
-            const coglContext = Clutter.get_default_backend().get_cogl_context();
-            texture = Cogl.Texture2D.new_with_size(coglContext, w, h);
-        } catch (e) {
-            log(`[plaid] background video: texture creation failed: ${e}`);
-            this._bgLog(`texture creation failed: ${e}`);
-            this._showWarningPopup('Animated Background Failed', `Texture creation failed: ${e}`, 'Click to dismiss');
-            return;
-        }
-        try {
-            actor = new Clutter.Actor({ reactive: false, visible: true });
-            actor.set_size(union.w, union.h);
-            content = Clutter.TextureContent.new_from_texture(texture, null);
-            actor.set_content(content);
-            Main.layoutManager._backgroundGroup.add_child(actor);
-        } catch (e) {
-            log(`[plaid] background video: actor creation failed: ${e}`);
-            this._bgLog(`actor creation failed: ${e}`);
-            this._showWarningPopup('Animated Background Failed', `Actor creation failed: ${e}`, 'Click to dismiss');
-            try { actor && actor.destroy(); } catch (_e2) {}
-            return;
-        }
-
-        const state = {
-            pipeline: null, sink: null, texture, actor, content,
-            w, h, pollId: 0, uploadFailedLogged: false,
-            helper: null, helperPipe: null, helperFrames: 0,
-            frameAccum: null, frameOffset: 0, firstFrameId: 0,
-            fallbackStarted: false,
-            params: { path, fit, sw, sh, l, r, t, b },
-        };
-        this._bgVideo = state;
-
-        this._startBackgroundHardware(state);
-    }
-
-    _startBackgroundHardware(state) {
-        const params = state.params;
-        let filter = '';
-        if (params.fit === 'cover') {
-            filter = `scale_vaapi=${params.sw}:${params.sh},hwdownload,crop=${state.w}:${state.h}:${params.l}:${params.t},format=rgba`;
-        } else if (params.fit === 'contain') {
-            filter = `hwdownload,format=nv12,scale=${params.sw}:${params.sh},pad=${state.w}:${state.h}:(ow-iw)/2:(oh-ih)/2,format=rgba`;
-        } else {
-            filter = `scale_vaapi=${state.w}:${state.h},hwdownload,format=rgba`;
-        }
-        const argv = ['/usr/bin/ffmpeg', '-v', 'error', '-stream_loop', '-1', '-re',
-            '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128',
-            '-hwaccel_output_format', 'vaapi',
-            '-i', params.path, '-an', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-vf', filter, 'pipe:1'];
-        try {
-            const launcher = new Gio.SubprocessLauncher({
-                flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-            });
-            launcher.setenv('LIBVA_DRIVER_NAME', 'radeonsi', true);
-            state.helper = launcher.spawnv(argv);
-            this._bgLog(`hardware: spawned ffmpeg (filter=${filter})`);
-            state.frameAccum = new Uint8Array(state.w * state.h * 4);
-            state.frameOffset = 0;
-            state.helperPipe = state.helper.get_stdout_pipe();
-            this._readBackgroundFrames(state);
-
-            const errPipe = state.helper.get_stderr_pipe();
-            const readErr = () => {
-                errPipe.read_bytes_async(4096, GLib.PRIORITY_DEFAULT, null, (stream, res) => {
-                    try {
-                        const bytes = stream.read_bytes_finish(res);
-                        if (bytes.get_size() === 0) return;
-                        this._bgLog(`ffmpeg: ${String(bytes.get_data())}`.trimEnd());
-                        readErr();
-                    } catch (_e) {}
-                });
-            };
-            readErr();
-
-            state.firstFrameId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
-                state.firstFrameId = 0;
-                if (this._destroyed || this._bgVideo !== state) return GLib.SOURCE_REMOVE;
-                if (state.helperFrames === 0 && !state.fallbackStarted) {
-                    this._bgLog('hardware: no frames within 5s, falling back to software');
-                    this._fallbackToSoftware(state);
-                }
-                return GLib.SOURCE_REMOVE;
-            });
-
-            state.helper.wait_check_async(null, (sub, res) => {
-                let ok = false;
-                try { ok = sub.get_if_exited() && sub.get_exit_status() === 0; } catch (_e) {}
-                if (this._destroyed || this._bgVideo !== state) return;
-                if (!state.fallbackStarted) {
-                    this._bgLog(`hardware: ffmpeg exited (ok=${ok}), falling back to software`);
-                    this._fallbackToSoftware(state);
-                }
-            });
-        } catch (e) {
-            this._bgLog(`hardware: spawn failed: ${e}`);
-            this._fallbackToSoftware(state);
-        }
-    }
-
-    _readBackgroundFrames(state) {
-        const frameSize = state.w * state.h * 4;
-        const read = () => {
-            if (this._destroyed || this._bgVideo !== state || !state.helperPipe) return;
-            const remaining = frameSize - state.frameOffset;
-            state.helperPipe.read_bytes_async(remaining, GLib.PRIORITY_DEFAULT, null, (stream, res) => {
-                if (this._destroyed || this._bgVideo !== state) return;
-                try {
-                    const bytes = stream.read_bytes_finish(res);
-                    const size = bytes.get_size();
-                    if (size === 0) {
-                        if (!state.fallbackStarted) {
-                            this._bgLog('hardware: EOF before full frame, falling back to software');
-                            this._fallbackToSoftware(state);
-                        }
-                        return;
-                    }
-                    state.frameAccum.set(bytes.get_data(), state.frameOffset);
-                    state.frameOffset += size;
-                    if (state.frameOffset >= frameSize) {
-                        state.helperFrames++;
-                        this._uploadBackgroundFrame(state, state.frameAccum);
-                        if (state.helperFrames === 1)
-                            this._bgLog('hardware: first frame rendered');
-                        if (state.helperFrames % 300 === 0)
-                            this._bgLog(`hardware: ${state.helperFrames} frames`);
-                        state.frameOffset = 0;
-                    }
-                    read();
-                } catch (_e) {
-                    if (!state.fallbackStarted) {
-                        this._bgLog('hardware: read error, falling back to software');
-                        this._fallbackToSoftware(state);
-                    }
-                }
-            });
-        };
-        read();
-    }
-
-    _fallbackToSoftware(state) {
-        if (state.fallbackStarted) return;
-        state.fallbackStarted = true;
-        if (state.firstFrameId) {
-            try { GLib.source_remove(state.firstFrameId); } catch (_e) {}
-            state.firstFrameId = 0;
-        }
-        state.helperPipe = null;
-        if (state.helper) {
-            try { state.helper.force_exit(); } catch (_e) {}
-            state.helper = null;
-        }
-        this._bgLog('software: starting fallback');
-        this._startBackgroundSoftware(state);
-    }
-
-    _startBackgroundSoftware(state) {
-        const params = state.params;
-        try {
-            let sw = params.sw, sh = params.sh;
-            let boxStr = '';
-            if (params.fit === 'cover' || params.fit === 'contain') {
-                boxStr = `videobox border-alpha=0 left=${params.l} right=${params.r} top=${params.t} bottom=${params.b} ! `;
-            }
-            const escaped = params.path.replace(/"/g, '\\"');
-            const launch = `filesrc location="${escaped}" ! decodebin ! videoconvert ! videoscale ` +
-                `! video/x-raw,format=RGBA,width=${sw},height=${sh} ! ${boxStr}` +
-                `video/x-raw,format=RGBA,width=${state.w},height=${state.h} ! ` +
-                `appsink name=s emit-signals=false sync=true max-buffers=1 drop=true`;
-            const pipeline = Gst.parse_launch(launch);
-            state.pipeline = pipeline;
-            state.sink = pipeline.get_by_name('s');
-
-            const bus = pipeline.get_bus();
-            bus.add_signal_watch();
-            bus.connect('message', (_b, msg) => {
-                if (msg.type === Gst.MessageType.EOS) {
-                    try {
-                        pipeline.seek(1.0, Gst.Format.TIME,
-                            Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                            Gst.SeekType.SET, 0, Gst.SeekType.NONE, -1);
-                    } catch (_e) {}
-                } else if (msg.type === Gst.MessageType.ERROR) {
-                    let err = null;
-                    try { [err] = msg.parse_error(); } catch (_e2) {}
-                    const reason = err ? err.message : 'unknown';
-                    log(`[plaid] background video error: ${reason}`);
-                    this._bgLog(`software error: ${reason}`);
-                    this._showWarningPopup('Animated Background Failed', `Could not play video: ${reason}`, 'Click to dismiss');
-                    this._stopBackgroundVideo();
-                }
-            });
-
-            pipeline.set_state(Gst.State.PLAYING);
-            state.pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
-                if (this._destroyed || this._bgVideo !== state) return GLib.SOURCE_REMOVE;
-                const sample = state.sink.try_pull_sample(0);
-                if (sample) {
-                    const buffer = sample.get_buffer();
-                    const [ok, info] = buffer.map(Gst.MapFlags.READ);
-                    if (ok) {
-                        try { this._uploadBackgroundFrame(state, info.get_data()); }
-                        finally { buffer.unmap(info); }
-                    }
-                }
-                return GLib.SOURCE_CONTINUE;
-            });
-            this._bgLog(`software: playing (${state.w}x${state.h}, fit=${params.fit})`);
-            log(`[plaid] background video: playing ${params.path} -> ${state.w}x${state.h} (software)`);
-        } catch (e) {
-            log(`[plaid] background video: software pipeline failed: ${e}`);
-            this._bgLog(`software failed: ${e}`);
-            this._showWarningPopup('Animated Background Failed', `Pipeline failed: ${e}`, 'Click to dismiss');
-            this._stopBackgroundVideo();
-        }
-    }
-
-    _stopBackgroundVideo() {
-        const state = this._bgVideo;
-        if (!state) return;
-        this._bgVideo = null;
-        if (state.pollId) {
-            try { GLib.source_remove(state.pollId); } catch (_e) {}
-            state.pollId = 0;
-        }
-        if (state.firstFrameId) {
-            try { GLib.source_remove(state.firstFrameId); } catch (_e) {}
-            state.firstFrameId = 0;
-        }
-        try {
-            if (state.pipeline) {
-                state.pipeline.set_state(Gst.State.NULL);
-            }
-        } catch (_e) {}
-        if (state.helper) {
-            try { state.helper.force_exit(); } catch (_e) {}
-            state.helper = null;
-        }
-        state.helperPipe = null;
-        try {
-            if (state.actor) state.actor.destroy();
-        } catch (_e) {}
-        this._bgLog('stopped');
-        this._debugLog('background video: stopped');
     }
 
     // --- Scratchpad ---

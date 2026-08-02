@@ -370,23 +370,5 @@
       <description>Show or hide the drop-down terminal on the active monitor</description>
     </key>
 
-    <!-- Animated Background -->
-    <key name="background-animated-video" type="s">
-      <default>''</default>
-      <summary>Animated background video</summary>
-      <description>Path to a video file (or GIF/WebP animation) played in a loop as the desktop background. Leave empty to disable.</description>
-    </key>
-
-    <key name="background-animated-fit" type="s">
-      <default>'cover'</default>
-      <choices>
-        <choice value='cover'/>
-        <choice value='stretch'/>
-        <choice value='contain'/>
-      </choices>
-      <summary>Animated background fit</summary>
-      <description>How the animated background fills the screen: cover (crop, no distortion), stretch (fill, may distort), or contain (fit inside, bars)</description>
-    </key>
-
   </schema>
 </schemalist>
