@@ -293,6 +293,7 @@ export default class TilingWMExtension extends Extension {
         this._animStartTime = 0;
         this._animTickId = 0;
         this._newWindowSet = new Set();
+        this._floatHooks = new Map();
         this._connectSignals();
         this._registerKeybindings();
         this._suppressWorkspaceSwitcherPopup();
@@ -311,6 +312,7 @@ export default class TilingWMExtension extends Extension {
                         this._raiseFloatingWindows(ws);
                         this._restoreFloatNaturalRect(win);
                         this._convertMaximizedToGaps(win);
+                        this._connectFloatHooks(win);
                     }
                 }
             }
@@ -438,6 +440,11 @@ export default class TilingWMExtension extends Extension {
         this._grabInitialMasterRatio = 0;
         this._grabInitialStackRatios = null;
         this._animTargets = null;
+        if (this._floatHooks) {
+            for (const win of [...this._floatHooks.keys()])
+                this._disconnectFloatHooks(win);
+        }
+        this._floatHooks = null;
         this._newWindowSet = null;
         this._queuedAnimWorkspaces = null;
     }
@@ -503,29 +510,18 @@ export default class TilingWMExtension extends Extension {
                     this._restoreFloatNaturalRect(win);
                 };
                 const actor = win.get_compositor_private();
-                const connectFloatHooks = () => {
-                    if (this._destroyed) return;
-                    win.connect('position-changed', () => {
-                        this._convertMaximizedToGaps(win);
-                        this._trackFloatGeometry(win);
-                    });
-                    win.connect('size-changed', () => {
-                        this._convertMaximizedToGaps(win);
-                        this._trackFloatGeometry(win);
-                    });
-                };
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
                         doRaise();
                         doRestore();
-                        connectFloatHooks();
+                        this._connectFloatHooks(win);
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         doRaise();
                         doRestore();
-                        connectFloatHooks();
+                        this._connectFloatHooks(win);
                         return false;
                     });
                 }
@@ -666,12 +662,12 @@ export default class TilingWMExtension extends Extension {
             }
             this._signals = [];
         }
-        for (const [actor, sigIds] of this._actorSignals || []) {
+        for (const [win, sigIds] of this._windowSignals || []) {
             for (const { emitter, id } of sigIds) {
                 try { emitter.disconnect(id); } catch (_e) {}
             }
         }
-        this._actorSignals = null;
+        this._windowSignals = null;
         for (const id of this._pendingRetileIds.values())
             GLib.source_remove(id);
         this._pendingRetileIds.clear();
@@ -844,11 +840,10 @@ export default class TilingWMExtension extends Extension {
     }
 
     _connectWindowSignals(win) {
-        const actor = win.get_compositor_private();
-        if (actor && !this._actorSignals)
-            this._actorSignals = new Map();
-        if (!actor) return;
-        if (this._actorSignals.has(actor)) return;
+        if (win._plaidSignalsConnected) return;
+        win._plaidSignalsConnected = true;
+        if (!this._windowSignals)
+            this._windowSignals = new Map();
         const sigIds = [];
         sigIds.push({ emitter: win, id: win.connect('position-changed', () => {
             this._updateBorders();
@@ -867,7 +862,6 @@ export default class TilingWMExtension extends Extension {
             this._onWindowIdentityChanged(win);
         }) });
         sigIds.push({ emitter: win, id: win.connect('unmanaged', () => this._removeWindow(win)) });
-        sigIds.push({ emitter: actor, id: actor.connect('destroy', () => this._removeWindow(win)) });
         sigIds.push({ emitter: win, id: win.connect('workspace-changed', () => {
             const oldWs = this._windowWorkspaces.get(win);
             const newWs = win.get_workspace();
@@ -889,19 +883,48 @@ export default class TilingWMExtension extends Extension {
             const ws = win.get_workspace();
             if (ws) this._retileWorkspace(ws);
         }) });
-        this._actorSignals.set(actor, sigIds);
+        const actor = win.get_compositor_private();
+        if (actor)
+            sigIds.push({ emitter: actor, id: actor.connect('destroy', () => this._removeWindow(win)) });
+        this._windowSignals.set(win, sigIds);
     }
 
     _disconnectWindowSignals(win) {
-        const actor = win.get_compositor_private();
-        if (!actor || !this._actorSignals) return;
-        const sigIds = this._actorSignals.get(actor);
+        if (!this._windowSignals) return;
+        const sigIds = this._windowSignals.get(win);
         if (sigIds) {
             for (const { emitter, id } of sigIds) {
                 try { emitter.disconnect(id); } catch (_e) {}
             }
-            this._actorSignals.delete(actor);
+            this._windowSignals.delete(win);
         }
+        win._plaidSignalsConnected = false;
+    }
+
+    _connectFloatHooks(win) {
+        if (this._destroyed || !this._floatHooks || this._floatHooks.has(win)) return;
+        const ids = [
+            win.connect('position-changed', () => {
+                this._convertMaximizedToGaps(win);
+                this._trackFloatGeometry(win);
+            }),
+            win.connect('size-changed', () => {
+                this._convertMaximizedToGaps(win);
+                this._trackFloatGeometry(win);
+            }),
+        ];
+        ids.push(win.connect('unmanaged', () => this._disconnectFloatHooks(win)));
+        this._floatHooks.set(win, ids);
+    }
+
+    _disconnectFloatHooks(win) {
+        if (!this._floatHooks) return;
+        const ids = this._floatHooks.get(win);
+        if (!ids) return;
+        for (const id of ids) {
+            try { win.disconnect(id); } catch (_e) {}
+        }
+        this._floatHooks.delete(win);
     }
 
     _getWindowsForWorkspace(workspace) {
@@ -989,6 +1012,17 @@ export default class TilingWMExtension extends Extension {
             GLib.source_remove(this._animTickId);
             this._animTickId = 0;
         }
+        if (this._newWindowSet) {
+            for (const win of this._newWindowSet) {
+                try {
+                    const a = win.get_compositor_private();
+                    if (a) {
+                        a.set_opacity(255);
+                        a.remove_all_transitions();
+                    }
+                } catch (_e) {}
+            }
+        }
         this._animating = false;
         this._animTargets = null;
         this._animStates = null;
@@ -1036,6 +1070,7 @@ export default class TilingWMExtension extends Extension {
         if (remaining === 0) { this._animating = false; return; }
 
         const dec = () => {
+            if (!this._newWindowSet) return;
             remaining--;
             if (remaining <= 0) {
                 this._animating = false;
@@ -1091,7 +1126,11 @@ export default class TilingWMExtension extends Extension {
                     for (const s of newStates) {
                         if (s.actor) {
                             try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
-                            try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => { this._moveCursorToWindow(s.win); dec(); } }); } catch (_e) { dec(); }
+                            try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => {
+                                if (this._destroyed) return;
+                                this._moveCursorToWindow(s.win);
+                                dec();
+                            } }); } catch (_e) { dec(); }
                         } else {
                             dec();
                         }
@@ -1105,7 +1144,11 @@ export default class TilingWMExtension extends Extension {
             for (const s of newStates) {
                 if (s.actor) {
                     try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
-                    try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => { this._moveCursorToWindow(s.win); dec(); } }); } catch (_e) { dec(); }
+                    try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => {
+                        if (this._destroyed) return;
+                        this._moveCursorToWindow(s.win);
+                        dec();
+                    } }); } catch (_e) { dec(); }
                 } else {
                     dec();
                 }
@@ -2393,7 +2436,7 @@ export default class TilingWMExtension extends Extension {
         if (!target || !target.add_effect_with_name) return;
         let effect = this._windowMasks.get(win);
         if (effect && effect._radius !== radius) {
-            try { target.remove_effect_by_name(MASK_EFFECT_NAME); } catch (_e) {}
+            this._teardownMaskEffect(win, effect);
             this._windowMasks.delete(win);
             effect = null;
         }
@@ -2450,7 +2493,10 @@ export default class TilingWMExtension extends Extension {
             this._debugLog(`mask redraw kick r=${effect._radius}`);
             this._updateMaskBounds(win, actor, effect, effect._radius);
             this._ensureWindowBlur(win, actor);
-            try { target.invalidate_paint_volume(); } catch (_e) {}
+            const target = this._unwrapMaskActor(actor, win);
+            if (target) {
+                try { target.invalidate_paint_volume(); } catch (_e) {}
+            }
             try { actor.invalidate_paint_volume(); } catch (_e) {}
             try { global.stage.queue_redraw(); } catch (_e) {}
             return GLib.SOURCE_REMOVE;
@@ -2528,15 +2574,15 @@ export default class TilingWMExtension extends Extension {
                 mode = 2;
         }
 
-        const opacity = this._settings.get_int('window-blur-opacity') / 100;
+        const blurEnabled = this._settings.get_boolean('window-blur');
+        const opacity = blurEnabled
+            ? this._settings.get_int('window-blur-opacity') / 100
+            : 1;
 
         effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity);
     }
 
-    _removeMask(win) {
-        if (!this._windowMasks) return;
-        const effect = this._windowMasks.get(win);
-        if (!effect) return;
+    _teardownMaskEffect(win, effect) {
         if (effect._refreshTimeoutId) {
             try { GLib.source_remove(effect._refreshTimeoutId); } catch (_e) {}
             effect._refreshTimeoutId = 0;
@@ -2544,15 +2590,26 @@ export default class TilingWMExtension extends Extension {
         effect._metaWin = null;
         if (effect._sizeWatchId) {
             try { effect._watchActor.disconnect(effect._sizeWatchId); } catch (_e) {}
+            effect._sizeWatchId = 0;
         }
         if (effect._textureWatchId) {
             try { effect._watchTexture.disconnect(effect._textureWatchId); } catch (_e) {}
+            effect._textureWatchId = 0;
         }
+        effect._watchActor = null;
+        effect._watchTexture = null;
         const actor = win.get_compositor_private();
         const target = this._unwrapMaskActor(actor, win);
         if (target && target.remove_effect_by_name) {
             try { target.remove_effect_by_name(MASK_EFFECT_NAME); } catch (_e) {}
         }
+    }
+
+    _removeMask(win) {
+        if (!this._windowMasks) return;
+        const effect = this._windowMasks.get(win);
+        if (!effect) return;
+        this._teardownMaskEffect(win, effect);
         this._windowMasks.delete(win);
     }
     async _ensureBlurModule() {
@@ -2988,6 +3045,7 @@ export default class TilingWMExtension extends Extension {
         this._keyboardFocusChange = true;
         bestWindow.activate(global.get_current_time());
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3024,6 +3082,7 @@ export default class TilingWMExtension extends Extension {
         focused.activate(global.get_current_time());
         this._cursorWarpDeferred(focused);
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3140,6 +3199,7 @@ export default class TilingWMExtension extends Extension {
         this._keyboardFocusChange = true;
         this._retileWorkspace(ws);
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3219,6 +3279,7 @@ export default class TilingWMExtension extends Extension {
         this._moveCursorToWindow(win);
 
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3606,7 +3667,12 @@ export default class TilingWMExtension extends Extension {
         this._debugLog('dropdown: window created, waiting for identity');
         try { win.skip_taskbar = true; } catch (_e) {}
         const notifyIds = [];
+        let unmanagedId = 0;
         const cleanup = () => {
+            if (unmanagedId) {
+                try { win.disconnect(unmanagedId); } catch (_e) {}
+                unmanagedId = 0;
+            }
             for (const id of notifyIds) {
                 try { win.disconnect(id); } catch (_e) {}
             }
@@ -3620,7 +3686,7 @@ export default class TilingWMExtension extends Extension {
         };
         notifyIds.push(win.connect('notify::wm-class', retry));
         notifyIds.push(win.connect('notify::gtk-application-id', retry));
-        win.connect('unmanaged', cleanup);
+        unmanagedId = win.connect('unmanaged', cleanup);
         this._dropdownWaiters.set(win, cleanup);
         return false;
     }
