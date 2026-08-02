@@ -273,6 +273,7 @@ export default class TilingWMExtension extends Extension {
         this._dropdownPending = false;
         this._dropdownPendingId = 0;
         this._dropdownWaiters = new Map();
+        this._markerPidCache = null;
         this._dropdownSettingsChangedId = 0;
         this._dropdownHeightChangedId = 0;
         this._dropdownGeometryIds = null;
@@ -3730,7 +3731,7 @@ export default class TilingWMExtension extends Extension {
         if (!command) return;
         this._dropdownPending = true;
         if (this._dropdownPendingId) GLib.source_remove(this._dropdownPendingId);
-        this._dropdownPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+        this._dropdownPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30000, () => {
             this._dropdownPendingId = 0;
             this._dropdownPending = false;
             this._clearDropdownWaiters();
@@ -3739,7 +3740,7 @@ export default class TilingWMExtension extends Extension {
         let appInfo = null;
         try {
             appInfo = Gio.AppInfo.create_from_commandline(
-                command, null, Gio.AppInfoCreateFlags.NONE);
+                `env PLAID_DDT=1 ${command}`, null, Gio.AppInfoCreateFlags.NONE);
         } catch (_e) {}
         if (!appInfo) {
             this._dropdownPending = false;
@@ -3790,11 +3791,8 @@ export default class TilingWMExtension extends Extension {
     _tryClaimDropdown(win) {
         if (!this._dropdownPending || !win) return false;
         const command = this._settings.get_string('dropdown-terminal-command') || '';
-        const bin = command.trim().split(/\s+/)[0] || '';
-        const instance = (win.get_wm_class_instance() || '').toLowerCase();
-        const cls = (win.get_wm_class() || '').toLowerCase();
-        if (!bin || !(instance.includes(bin) || cls.includes(bin))) {
-            this._debugLog(`dropdown: identity not yet matching (instance=${instance} class=${cls})`);
+        if (!this._isMarkerProcess(win, 'PLAID_DDT=1', command)) {
+            this._debugLog('dropdown: identity not yet matching');
             return false;
         }
         if (this._dropdownPendingId) {
@@ -4022,7 +4020,7 @@ export default class TilingWMExtension extends Extension {
         }
         this._backgroundAppPending = true;
         if (this._backgroundAppPendingId) GLib.source_remove(this._backgroundAppPendingId);
-        this._backgroundAppPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+        this._backgroundAppPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30000, () => {
             this._backgroundAppPendingId = 0;
             this._backgroundAppPending = false;
             if (this._backgroundAppWaiter) {
@@ -4034,7 +4032,7 @@ export default class TilingWMExtension extends Extension {
         try {
             this._backgroundAppProc = Gio.Subprocess.new(
                 ['/bin/sh', '-c',
-                    `env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET GDK_BACKEND=x11 ${command}`],
+                    `env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET GDK_BACKEND=x11 PLAID_BGAPP=1 ${command}`],
                 Gio.SubprocessFlags.NONE);
         } catch (e) {
             this._backgroundAppPending = false;
@@ -4044,13 +4042,76 @@ export default class TilingWMExtension extends Extension {
     }
 
     _matchesBackgroundApp(win) {
+        return this._isMarkerProcess(win, 'PLAID_BGAPP=1',
+            this._settings.get_string('background-app') || '');
+    }
+
+    _isMarkerProcess(win, marker, command) {
         if (!win) return false;
-        const command = this._settings.get_string('background-app') || '';
-        const bin = command.trim().split(/\s+/)[0] || '';
-        if (!bin) return false;
+        let pid = 0;
+        try { pid = win.get_pid(); } catch (_e) {}
+        if (pid > 0 && this._procEnvironHasMarker(pid, marker)) return true;
+        if (pid > 0 && this._markerPidSetHas(marker, pid)) return true;
+        return this._commandTokenMatches(win, command);
+    }
+
+    _procEnvironHasMarker(pid, marker) {
+        try {
+            const [, data] = GLib.file_get_contents(`/proc/${pid}/environ`);
+            if (!data) return false;
+            return new TextDecoder().decode(data).split('\0').includes(marker);
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    _markerPidSetHas(marker, pid) {
+        const now = Date.now();
+        const cache = this._markerPidCache;
+        if (!cache || cache.marker !== marker || now - cache.at > 1500) {
+            const set = new Set();
+            try {
+                const dir = Gio.File.new_for_path('/proc');
+                const children = dir.enumerate_children(
+                    'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+                let info;
+                while ((info = children.next_file(null))) {
+                    const name = info.get_name();
+                    if (!/^\d+$/.test(name)) continue;
+                    const pidN = parseInt(name, 10);
+                    if (!this._procEnvironHasMarker(pidN, marker)) continue;
+                    try {
+                        const [, status] = GLib.file_get_contents(`/proc/${pidN}/status`);
+                        if (!status) continue;
+                        const m = new TextDecoder().decode(status).match(/^NSpid:\s+(.+)$/m);
+                        if (!m) continue;
+                        const vals = m[1].trim().split(/\s+/).map(Number);
+                        const last = vals[vals.length - 1];
+                        if (last > 0) set.add(last);
+                    } catch (_e) {}
+                }
+            } catch (_e) {}
+            this._markerPidCache = { marker, at: now, set };
+        }
+        const current = this._markerPidCache;
+        return !!current && current.marker === marker && current.set.has(pid);
+    }
+
+    _commandTokenMatches(win, command) {
+        if (!command) return false;
         const instance = (win.get_wm_class_instance() || '').toLowerCase();
         const cls = (win.get_wm_class() || '').toLowerCase();
-        return instance.includes(bin) || cls.includes(bin);
+        if (!instance && !cls) return false;
+        for (const raw of command.trim().split(/\s+/)) {
+            if (!raw || raw.startsWith('-')) continue;
+            let token = raw;
+            const slash = token.lastIndexOf('/');
+            if (slash >= 0) token = token.slice(slash + 1);
+            token = token.toLowerCase();
+            if (!token || token.length < 2) continue;
+            if (instance.includes(token) || cls.includes(token)) return true;
+        }
+        return false;
     }
 
     _handleBackgroundAppWindowCreated(win) {
