@@ -601,6 +601,9 @@ export default class TilingWMExtension extends Extension {
             }
         }));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
+            this._syncDropdownWorkspace();
+        }));
+        this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
             if (this._destroyed || !this._settings.get_boolean('enabled')) return;
             const ws = global.workspace_manager.get_active_workspace();
             if (!ws) return;
@@ -3788,16 +3791,34 @@ export default class TilingWMExtension extends Extension {
 
     _configureDropdownTerminal(win) {
         try { win.skip_taskbar = true; } catch (_e) {}
-        try { win.on_all_workspaces = true; } catch (_e) {}
         try { win.make_above(); } catch (_e) {}
     }
 
     _showDropdownTerminal(win) {
         try { win.unminimize(); } catch (_e) {}
         try { win.make_above(); } catch (_e) {}
+        try {
+            const ws = global.workspace_manager.get_active_workspace();
+            if (ws && win.get_workspace() !== ws)
+                win.change_workspace(ws);
+        } catch (_e) {}
         this._positionDropdownTerminal(win);
         try { win.activate(this._currentTime()); } catch (_e) {}
         this._applyDropdownEffects(win);
+    }
+
+    _syncDropdownWorkspace() {
+        const win = this._dropdownWin;
+        if (!win) return;
+        const ws = global.workspace_manager.get_active_workspace();
+        if (!ws) return;
+        try {
+            if (win.get_workspace() !== ws) {
+                win.change_workspace(ws);
+                if (!win.minimized)
+                    this._positionDropdownTerminal(win);
+            }
+        } catch (_e) {}
     }
 
     _dropdownRect() {
@@ -3885,7 +3906,6 @@ export default class TilingWMExtension extends Extension {
         this._removeMask(win);
         this._removeBlur(win);
         try { win.skip_taskbar = false; } catch (_e) {}
-        try { win.on_all_workspaces = false; } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
         this._dropdownWin = null;
     }
