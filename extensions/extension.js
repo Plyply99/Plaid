@@ -278,6 +278,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppUnmanagedId = 0;
         this._backgroundAppSettingsChangedId = 0;
         this._backgroundAppEnabledChangedId = 0;
+        this._backgroundAppRestartId = 0;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
         this._anyGrabOp = null;
@@ -395,6 +396,10 @@ export default class TilingWMExtension extends Extension {
         if (this._backgroundAppEnabledChangedId) {
             try { this._settings.disconnect(this._backgroundAppEnabledChangedId); } catch (_e) {}
             this._backgroundAppEnabledChangedId = 0;
+        }
+        if (this._backgroundAppRestartId) {
+            GLib.source_remove(this._backgroundAppRestartId);
+            this._backgroundAppRestartId = 0;
         }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
@@ -3884,24 +3889,31 @@ export default class TilingWMExtension extends Extension {
         try {
             this._backgroundAppSettingsChangedId = this._settings.connect(
                 'changed::background-app',
-                () => {
-                    this._clearBackgroundApp();
-                    this._launchBackgroundApp();
-                });
+                () => this._scheduleBackgroundAppRestart());
         } catch (_e) {
             this._backgroundAppSettingsChangedId = 0;
         }
         try {
             this._backgroundAppEnabledChangedId = this._settings.connect(
                 'changed::background-app-enabled',
-                () => {
-                    this._clearBackgroundApp();
-                    this._launchBackgroundApp();
-                });
+                () => this._scheduleBackgroundAppRestart());
         } catch (_e) {
             this._backgroundAppEnabledChangedId = 0;
         }
         this._launchBackgroundApp();
+    }
+
+    _scheduleBackgroundAppRestart() {
+        if (this._destroyed) return;
+        if (this._backgroundAppRestartId)
+            GLib.source_remove(this._backgroundAppRestartId);
+        this._backgroundAppRestartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+            this._backgroundAppRestartId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._clearBackgroundApp();
+            this._launchBackgroundApp();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _launchBackgroundApp() {
@@ -4024,6 +4036,10 @@ export default class TilingWMExtension extends Extension {
     }
 
     _clearBackgroundApp() {
+        if (this._backgroundAppRestartId) {
+            GLib.source_remove(this._backgroundAppRestartId);
+            this._backgroundAppRestartId = 0;
+        }
         if (this._backgroundAppPendingId) {
             GLib.source_remove(this._backgroundAppPendingId);
             this._backgroundAppPendingId = 0;

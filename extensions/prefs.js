@@ -593,18 +593,23 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         const bgAppEntry = new Gtk.Entry({
             text: settings.get_string('background-app'),
             hexpand: true,
+            width_request: 320,
             valign: Gtk.Align.CENTER,
         });
         bgAppRow.add_suffix(bgAppEntry);
         bgAppGroup.add(bgAppRow);
-        settings.bind('background-app', bgAppEntry, 'text', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('background-app', bgAppEntry, 'text', Gio.SettingsBindFlags.GET);
 
-        const updateBgAppSensitivity = () => {
-            const enabled = settings.get_boolean('background-app-enabled');
-            bgAppRow.set_sensitive(enabled);
+        const commitBgAppCommand = () => {
+            const text = bgAppEntry.get_text().trim();
+            if (settings.get_string('background-app') !== text)
+                settings.set_string('background-app', text);
         };
-        updateBgAppSensitivity();
-        settings.connect('changed::background-app-enabled', () => updateBgAppSensitivity());
+        bgAppEntry.connect('activate', () => commitBgAppCommand());
+        bgAppEntry.connect('notify::has-focus', () => {
+            if (!bgAppEntry.has_focus) commitBgAppCommand();
+        });
+        bgAppEnabledRow.connect('notify::active', () => commitBgAppCommand());
     }
 
     _buildColorRow(settings, key, title) {
