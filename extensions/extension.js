@@ -3992,7 +3992,7 @@ export default class TilingWMExtension extends Extension {
         if (this._isDynamicWorkspaces()) return;
         this._dynamicWsWarned = true;
         this._showWarningPopup('Dynamic Workspaces Required',
-            "Plaid's dynamic workspace model — and the Background App — need GNOME's dynamic-workspaces setting. Enable it in Settings → Multitasking.",
+            "Plaid relies on GNOME's Dynamic Workspaces. Please enable it.",
             'Click to dismiss');
     }
 
