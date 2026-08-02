@@ -13,6 +13,7 @@ import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspacesView.js';
 import * as WorkspaceModule from 'resource:///org/gnome/shell/ui/workspace.js';
+import * as WorkspaceThumbnailModule from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const LAYOUT_NAMES = {
@@ -4295,6 +4296,11 @@ export default class TilingWMExtension extends Extension {
     _applyBackgroundAppHiding() {
         if (this._backgroundAppHiding || !this._backgroundAppParkingWs) return;
         const self = this;
+        const realToDisplay = (realIdx) => {
+            const parkingIdx = self._backgroundAppParkingWs ?
+                self._wsIndex(self._backgroundAppParkingWs) : -1;
+            return realIdx > parkingIdx ? realIdx - 1 : realIdx;
+        };
         const origGetNeighbor = Meta.Workspace.prototype.get_neighbor;
         const wrappedGetNeighbor = function (direction) {
             const neighbor = origGetNeighbor.call(this, direction);
@@ -4342,6 +4348,62 @@ export default class TilingWMExtension extends Extension {
             this._updateVisibility();
             this._raiseActiveWorkspace();
         };
+        const origGetActiveWorkspace =
+            WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace;
+        const wrappedGetActiveWorkspace = function () {
+            const active = global.workspace_manager.get_active_workspace_index();
+            return this._workspaces[realToDisplay(active)];
+        };
+        const origScrollToActive =
+            WorkspacesViewModule.WorkspacesView.prototype._scrollToActive;
+        const wrappedScrollToActive = function () {
+            const active = realToDisplay(global.workspace_manager.get_active_workspace_index());
+            this._animating = true;
+            this._updateVisibility();
+            this._scrollAdjustment.remove_transition('value');
+            this._scrollAdjustment.ease(active, {
+                duration: 250,
+                mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+                onComplete: () => {
+                    this._animating = false;
+                    this._updateVisibility();
+                },
+            });
+        };
+        const origUpdateVisibility =
+            WorkspacesViewModule.WorkspacesView.prototype._updateVisibility;
+        const wrappedUpdateVisibility = function () {
+            const active = realToDisplay(global.workspace_manager.get_active_workspace_index());
+            const fitMode = this._fitModeAdjustment.value;
+            const singleFitMode = fitMode === WorkspacesViewModule.FitMode.SINGLE;
+            for (let w = 0; w < this._workspaces.length; w++) {
+                const workspace = this._workspaces[w];
+                if (this._animating || this._gestureActive || !singleFitMode)
+                    workspace.show();
+                else
+                    workspace.visible = Math.abs(w - active) <= 1;
+            }
+        };
+        const origOnScrollAdjustmentChanged =
+            WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged;
+        const wrappedOnScrollAdjustmentChanged = function () {
+            if (!this.has_allocation())
+                return;
+            const adj = this._scrollAdjustment;
+            const allowSwitch =
+                adj.get_transition('value') === null && !this._gestureActive;
+            const active = realToDisplay(global.workspace_manager.get_active_workspace_index());
+            let current = Math.round(adj.value);
+            if (allowSwitch && active !== current) {
+                if (!this._workspaces[current]) {
+                    current = this._workspaces.length - 1;
+                }
+                const metaWorkspace = this._workspaces[current].metaWorkspace;
+                metaWorkspace.activate(global.get_current_time());
+            }
+            this._updateWorkspacesState();
+            this.queue_relayout();
+        };
         const origRedisplay = MonitorWorkspaceSwitcherPopup.prototype.redisplay;
         const wrappedRedisplay = function (activeWorkspaceIndex) {
             const parkingIdx = self._backgroundAppParkingWs ?
@@ -4356,13 +4418,36 @@ export default class TilingWMExtension extends Extension {
                 this._list.add_child(indicator);
             }
         };
+        const origAddThumbnails =
+            WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails;
+        const wrappedAddThumbnails = function (start, count) {
+            origAddThumbnails.call(this, start, count);
+            const parkingWs = self._backgroundAppParkingWs;
+            if (!parkingWs) return;
+            for (const t of this._thumbnails) {
+                if (t.metaWorkspace === parkingWs) {
+                    t.visible = false;
+                    break;
+                }
+            }
+        };
         Meta.Workspace.prototype.get_neighbor = wrappedGetNeighbor;
         WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces = wrappedUpdateWorkspaces;
+        WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = wrappedGetActiveWorkspace;
+        WorkspacesViewModule.WorkspacesView.prototype._scrollToActive = wrappedScrollToActive;
+        WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = wrappedUpdateVisibility;
+        WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged = wrappedOnScrollAdjustmentChanged;
         MonitorWorkspaceSwitcherPopup.prototype.redisplay = wrappedRedisplay;
+        WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = wrappedAddThumbnails;
         this._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
             origUpdateWorkspaces, wrappedUpdateWorkspaces,
+            origGetActiveWorkspace, wrappedGetActiveWorkspace,
+            origScrollToActive, wrappedScrollToActive,
+            origUpdateVisibility, wrappedUpdateVisibility,
+            origOnScrollAdjustmentChanged, wrappedOnScrollAdjustmentChanged,
             origRedisplay, wrappedRedisplay,
+            origAddThumbnails, wrappedAddThumbnails,
         };
         this._debugLog('background app: hiding parking workspace from overview, switcher, cycling');
     }
@@ -4375,8 +4460,18 @@ export default class TilingWMExtension extends Extension {
                 Meta.Workspace.prototype.get_neighbor = h.origGetNeighbor;
             if (WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces === h.wrappedUpdateWorkspaces)
                 WorkspacesViewModule.WorkspacesView.prototype._updateWorkspaces = h.origUpdateWorkspaces;
+            if (WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace === h.wrappedGetActiveWorkspace)
+                WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = h.origGetActiveWorkspace;
+            if (WorkspacesViewModule.WorkspacesView.prototype._scrollToActive === h.wrappedScrollToActive)
+                WorkspacesViewModule.WorkspacesView.prototype._scrollToActive = h.origScrollToActive;
+            if (WorkspacesViewModule.WorkspacesView.prototype._updateVisibility === h.wrappedUpdateVisibility)
+                WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = h.origUpdateVisibility;
+            if (WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged === h.wrappedOnScrollAdjustmentChanged)
+                WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged = h.origOnScrollAdjustmentChanged;
             if (MonitorWorkspaceSwitcherPopup.prototype.redisplay === h.wrappedRedisplay)
                 MonitorWorkspaceSwitcherPopup.prototype.redisplay = h.origRedisplay;
+            if (WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails === h.wrappedAddThumbnails)
+                WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = h.origAddThumbnails;
         } catch (_e) {}
         this._backgroundAppHiding = null;
     }

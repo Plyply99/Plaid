@@ -24,7 +24,8 @@ all built in.
   click-through like a wallpaper. Terminal-agnostic (ghostty, Ptyxis, kitty…)
   and sandbox-agnostic: the app runs natively (Wayland, flatpak included),
   parked on a hidden workspace and mirrored full-bleed behind everything —
-  inert by construction, butter-smooth in animations
+  inert by construction, butter-smooth in animations. For video bg apps,
+  use `mpv --panscan=1.0` so the frame fills the screen
 - **Dynamic workspaces ready**: built on GNOME's dynamic-workspaces behavior:
   workspaces appear and disappear with your content, no fixed slot count
 - **Maximize respects gaps**: maximizing a window fills the work area within
