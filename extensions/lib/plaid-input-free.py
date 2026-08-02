@@ -71,6 +71,11 @@ X11.XGetWindowProperty.argtypes = [
 ]
 X11.XFetchName.restype = ctypes.c_int
 X11.XFetchName.argtypes = [Display, Window, ctypes.POINTER(ctypes.c_char_p)]
+X11.XChangeProperty.restype = ctypes.c_int
+X11.XChangeProperty.argtypes = [
+    Display, Window, Window, Window, ctypes.c_int, ctypes.c_int,
+    ctypes.c_void_p, ctypes.c_int,
+]
 X11.XFlush.restype = ctypes.c_int
 X11.XFlush.argtypes = [Display]
 X11.XCloseDisplay.restype = ctypes.c_int
@@ -197,6 +202,33 @@ def _window_title(dpy, window):
     return ""
 
 
+def _tree_summary(dpy, root):
+    lines = []
+    root_return = Window()
+    parent_return = Window()
+    children = ctypes.POINTER(Window)()
+    n_children = ctypes.c_uint(0)
+    if X11.XQueryTree(dpy, root, ctypes.byref(root_return),
+                      ctypes.byref(parent_return), ctypes.byref(children),
+                      ctypes.byref(n_children)):
+        classes = []
+        for i in range(n_children.value):
+            cls = XClassHint()
+            if X11.XGetClassHint(dpy, children[i], ctypes.byref(cls)):
+                parts = []
+                for c in (cls.res_name, cls.res_class):
+                    if c:
+                        try:
+                            parts.append(c.decode(errors="ignore"))
+                        except Exception:
+                            pass
+                classes.append("/".join(parts))
+        if children:
+            X11.XFree(children)
+        lines.append(f"x11 tree: {n_children.value} top-level windows: {', '.join(classes[:12])}")
+    return "\n".join(lines)
+
+
 def main():
     target = (sys.argv[1] if len(sys.argv) > 1 else "").lower()
     if not target:
@@ -222,6 +254,7 @@ def main():
         time.sleep(0.2)
 
     if not window:
+        print(_tree_summary(dpy, root))
         X11.XCloseDisplay(dpy)
         return 1
 
@@ -246,6 +279,15 @@ def main():
         if len(kept) != n_protocols.value:
             arr = (Window * len(kept))(*kept)
             X11.XSetWMProtocols(dpy, window, arr, len(kept))
+
+    # Strip client-side decorations: mutter ignores the XShape input region
+    # for decorated (CSD) windows, so mark the window undecorated via
+    # _MOTIF_WM_HINTS first — mutter then routes the input-region update
+    # through the XShape branch (notify::decorated -> update_input_region).
+    mwm_atom = X11.XInternAtom(dpy, b"_MOTIF_WM_HINTS", False)
+    mwm_vals = (ctypes.c_long * 5)(1, 0, 0, 0, 0)  # flags=DECORATIONS, decorations=0
+    X11.XChangeProperty(dpy, window, mwm_atom, mwm_atom, 32, 0,
+                        ctypes.cast(mwm_vals, ctypes.c_void_p), 5)
 
     XEXT.XShapeCombineRectangles(dpy, window, ShapeInput, 0, 0, None, 0, ShapeSet)
     X11.XFlush(dpy)
@@ -276,12 +318,27 @@ def main():
     if rects:
         X11.XFree(rects)
 
+    mwm_ok = False
+    actual_type = Window()
+    actual_format = ctypes.c_int()
+    nitems = ctypes.c_ulong()
+    bytes_after = ctypes.c_ulong()
+    prop = ctypes.POINTER(ctypes.c_ubyte)()
+    if X11.XGetWindowProperty(dpy, window, mwm_atom, 0, 5, False, mwm_atom,
+                              ctypes.byref(actual_type), ctypes.byref(actual_format),
+                              ctypes.byref(nitems), ctypes.byref(bytes_after),
+                              ctypes.byref(prop)) == 0 and prop and nitems.value >= 3:
+        vals = ctypes.cast(prop, ctypes.POINTER(ctypes.c_long))
+        mwm_ok = bool(vals[0] & 1) and vals[2] == 0  # DECORATIONS flag, decorations == 0
+        X11.XFree(prop)
+
     X11.XCloseDisplay(dpy)
 
     print(f"verify: input=False {'OK' if input_ok else 'FAIL'}, "
           f"no-WM_TAKE_FOCUS {'OK' if take_focus_gone else 'FAIL'}, "
-          f"empty-input-region {'OK' if shape_empty else 'FAIL'}")
-    if input_ok and take_focus_gone and shape_empty:
+          f"empty-input-region {'OK' if shape_empty else 'FAIL'}, "
+          f"undecorated {'OK' if mwm_ok else 'FAIL'}")
+    if input_ok and take_focus_gone and shape_empty and mwm_ok:
         return 0
     return 3
 

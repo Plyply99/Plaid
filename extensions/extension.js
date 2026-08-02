@@ -4030,15 +4030,34 @@ export default class TilingWMExtension extends Extension {
         });
         this._debugLog(`background app: launching (xwayland) ${command}`);
         try {
+            const wrapped = this._wrapBackgroundAppCommand(command);
             this._backgroundAppProc = Gio.Subprocess.new(
                 ['/bin/sh', '-c',
-                    `env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET GDK_BACKEND=x11 PLAID_BGAPP=1 ${command}`],
+                    `env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET GDK_BACKEND=x11 PLAID_BGAPP=1 ${wrapped}`],
                 Gio.SubprocessFlags.NONE);
         } catch (e) {
             this._backgroundAppPending = false;
             this._backgroundAppProc = null;
             this._debugLog(`background app: spawn failed: ${e.message}`);
         }
+    }
+
+    _wrapBackgroundAppCommand(command) {
+        const tokens = command.trim().split(/\s+/);
+        if (tokens.length >= 2 && tokens[0] === 'flatpak' && tokens[1] === 'run') {
+            // The flatpak sandbox rebuilds its environment (bwrap --clearenv),
+            // so host-side GDK_BACKEND overrides never reach the app. Inject
+            // flatpak's own --env mechanism to force XWayland inside the sandbox.
+            const flags = [
+                '--env=GDK_BACKEND=x11',
+                '--env=WAYLAND_DISPLAY=',
+                '--env=WAYLAND_SOCKET=',
+                '--env=DISPLAY=:0',
+            ];
+            this._debugLog('background app: flatpak command wrapped for XWayland');
+            return `flatpak run ${flags.join(' ')} ${tokens.slice(2).join(' ')}`;
+        }
+        return command;
     }
 
     _matchesBackgroundApp(win) {

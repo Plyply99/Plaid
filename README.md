@@ -21,7 +21,9 @@ all built in.
   with full Flair and live height updates
 - **Background app**: pin any app — e.g. a frameless terminal running cava —
   behind all windows as a live desktop background, on every workspace,
-  click-through like a wallpaper
+  click-through like a wallpaper. Terminal-agnostic (ghostty, Ptyxis, kitty…),
+  including `flatpak run` commands (automatically forced to XWayland for
+  click-through)
 - **Dynamic workspaces ready**: built on GNOME's dynamic-workspaces behavior:
   workspaces appear and disappear with your content, no fixed slot count
 - **Maximize respects gaps**: maximizing a window fills the work area within
