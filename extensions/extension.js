@@ -290,6 +290,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkRetryId = 0;
         this._backgroundAppParkCount = 0;
         this._backgroundAppParkingWs = null;
+        this._backgroundAppBufferWs = null;
         this._backgroundAppParkingFixId = 0;
         this._backgroundAppParkingLastRelocate = 0;
         this._dynamicWsWarned = false;
@@ -4109,9 +4110,10 @@ export default class TilingWMExtension extends Extension {
         try { win.skip_pager = true; } catch (_e) {}
         try { win.unstick(); } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
-        this._parkBackgroundAppOnWorkspace(win);
-        this._startBackgroundAppParkWatch(win);
-        this._ensureBackgroundAppClone(win);
+        // Leave the window on the active workspace until its first frame paints,
+        // then park it on the trailing buffer+parking workspaces — this
+        // guarantees the clone has real content from the very first frame
+        // (mutter only presents surfaces on the active workspace).
         try {
             const actor = win.get_compositor_private();
             if (actor) {
@@ -4121,6 +4123,7 @@ export default class TilingWMExtension extends Extension {
                         this._backgroundAppFirstFrameId = 0;
                     }
                     this._parkBackgroundAppOnWorkspace(win);
+                    this._startBackgroundAppParkWatch(win);
                     this._ensureBackgroundAppClone(win);
                 });
             }
@@ -4194,10 +4197,12 @@ export default class TilingWMExtension extends Extension {
         const mon = global.display.get_monitor_geometry(monitor);
         if (!mon || mon.width === 0) return;
 
-        if (!this._backgroundAppParkingWs) {
+        if (!this._backgroundAppBufferWs || !this._backgroundAppParkingWs) {
+            this._backgroundAppBufferWs =
+                global.workspace_manager.append_new_workspace(false, this._currentTime());
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._debugLog(`background app: parking workspace index=${this._wsIndex(this._backgroundAppParkingWs)}`);
+            this._debugLog(`background app: buffer ws=${this._wsIndex(this._backgroundAppBufferWs)} parking ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
         }
         try {
             if (win.get_workspace() !== this._backgroundAppParkingWs)
@@ -4232,26 +4237,43 @@ export default class TilingWMExtension extends Extension {
 
     _reassertBackgroundAppParking() {
         if (this._destroyed || !this._backgroundAppWin) return;
-        if (!this._backgroundAppParkingWs) {
+        if (!this._backgroundAppBufferWs || !this._backgroundAppParkingWs) {
             this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
             return;
         }
         const n = global.workspace_manager.get_n_workspaces();
-        let idx = -1;
+        let parkingIdx = -1;
+        let bufferIdx = -1;
         for (let i = 0; i < n; i++) {
-            if (global.workspace_manager.get_workspace_by_index(i) === this._backgroundAppParkingWs) {
-                idx = i;
-                break;
-            }
+            const w = global.workspace_manager.get_workspace_by_index(i);
+            if (w === this._backgroundAppParkingWs) parkingIdx = i;
+            else if (w === this._backgroundAppBufferWs) bufferIdx = i;
         }
-        if (idx !== n - 1) {
+        let maxUser = -1;
+        for (let i = 0; i < n; i++) {
+            const w = global.workspace_manager.get_workspace_by_index(i);
+            if (w === this._backgroundAppParkingWs || w === this._backgroundAppBufferWs) continue;
+            if (w.list_windows().length > 0) maxUser = Math.max(maxUser, i);
+        }
+        const zoneOk = bufferIdx === n - 2 && parkingIdx === n - 1 && maxUser <= n - 3;
+        if (!zoneOk) {
             const now = Date.now();
             if (now - (this._backgroundAppParkingLastRelocate || 0) < 1000)
                 return;
             this._backgroundAppParkingLastRelocate = now;
+            const oldBuffer = this._backgroundAppBufferWs;
+            const oldParking = this._backgroundAppParkingWs;
+            this._backgroundAppBufferWs =
+                global.workspace_manager.append_new_workspace(false, this._currentTime());
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._debugLog(`background app: parking relocated to index=${this._wsIndex(this._backgroundAppParkingWs)}`);
+            this._debugLog(`background app: parking relocated (buffer=${this._wsIndex(this._backgroundAppBufferWs)} parking=${this._wsIndex(this._backgroundAppParkingWs)})`);
+            for (const oldWs of [oldBuffer, oldParking]) {
+                try {
+                    if (oldWs && oldWs.list_windows().length === 0)
+                        global.workspace_manager.remove_workspace(oldWs, this._currentTime());
+                } catch (_e) {}
+            }
         }
         try {
             if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
@@ -4372,14 +4394,14 @@ export default class TilingWMExtension extends Extension {
             this._closeBackgroundAppWindow(win);
         this._backgroundAppWin = null;
         this._backgroundAppProc = null;
-        if (this._backgroundAppParkingWs) {
-            const ws = this._backgroundAppParkingWs;
-            this._backgroundAppParkingWs = null;
+        for (const ws of [this._backgroundAppBufferWs, this._backgroundAppParkingWs]) {
             try {
-                if (ws.list_windows().length === 0)
+                if (ws && ws.list_windows().length === 0)
                     global.workspace_manager.remove_workspace(ws, this._currentTime());
             } catch (_e) {}
         }
+        this._backgroundAppBufferWs = null;
+        this._backgroundAppParkingWs = null;
     }
 
     _closeBackgroundAppWindow(win) {
