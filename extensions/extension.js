@@ -4131,6 +4131,54 @@ export default class TilingWMExtension extends Extension {
             'Click to dismiss');
     }
 
+    _showBackgroundAppInitOverlay() {
+        if (this._backgroundAppInitOverlay) return;
+        try {
+            const stage = global.stage;
+            const overlay = new St.Widget({ reactive: true, visible: true });
+            overlay.set_style('background-color: rgba(0, 0, 0, 1);');
+            overlay.set_size(stage.width, stage.height);
+            overlay.set_position(0, 0);
+            const label = new St.Label({
+                text: 'Plaid is initializing…',
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            overlay.add_child(label);
+            Main.uiGroup.add_child(overlay);
+            this._backgroundAppInitOverlay = overlay;
+            Main.pushModal(overlay);
+            this._backgroundAppInitOverlayModal = true;
+            this._backgroundAppInitOverlayCapId =
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 8000, () => {
+                    this._backgroundAppInitOverlayCapId = 0;
+                    this._hideBackgroundAppInitOverlay();
+                    return GLib.SOURCE_REMOVE;
+                });
+            log('[plaid] background app: init overlay shown (input blocked)');
+        } catch (e) {
+            this._backgroundAppInitOverlay = null;
+            log(`[plaid] background app: init overlay failed: ${e.message}`);
+        }
+    }
+
+    _hideBackgroundAppInitOverlay() {
+        const overlay = this._backgroundAppInitOverlay;
+        this._backgroundAppInitOverlay = null;
+        if (this._backgroundAppInitOverlayCapId) {
+            GLib.source_remove(this._backgroundAppInitOverlayCapId);
+            this._backgroundAppInitOverlayCapId = 0;
+        }
+        if (this._backgroundAppInitOverlayModal) {
+            try { Main.popModal(overlay); } catch (_e) {}
+            this._backgroundAppInitOverlayModal = false;
+        }
+        if (overlay) {
+            try { overlay.destroy(); } catch (_e) {}
+        }
+        log('[plaid] background app: init overlay dismissed');
+    }
+
     _launchBackgroundApp() {
         if (this._destroyed || !this._settings) return;
         if (!this._settings.get_boolean('background-app-enabled')) return;
@@ -4147,11 +4195,13 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30000, () => {
             this._backgroundAppPendingId = 0;
             this._backgroundAppPending = false;
+            this._hideBackgroundAppInitOverlay();
             if (this._backgroundAppWaiter) {
                 try { this._backgroundAppWaiter.cleanup(false); } catch (_e) {}
             }
             return GLib.SOURCE_REMOVE;
         });
+        this._showBackgroundAppInitOverlay();
         this._debugLog(`background app: launching ${command}`);
         try {
             this._backgroundAppProc = Gio.Subprocess.new(
@@ -4321,9 +4371,18 @@ export default class TilingWMExtension extends Extension {
                         try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
                         this._backgroundAppFirstFrameId = 0;
                     }
-                    this._parkBackgroundAppOnWorkspace(win);
-                    this._startBackgroundAppParkWatch(win);
-                    this._ensureBackgroundAppClone(win);
+                    // Defer the park out of the login burst: the workspace
+                    // mutation, the maximize and the clone's first paint land
+                    // in the settled session. The init overlay hides the wait.
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
+                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
+                        this._parkBackgroundAppOnWorkspace(win);
+                        this._startBackgroundAppParkWatch(win);
+                        this._ensureBackgroundAppClone(win);
+                        this._hideBackgroundAppInitOverlay();
+                        return GLib.SOURCE_REMOVE;
+                    });
                 });
             }
         } catch (_e) {}
@@ -4332,11 +4391,6 @@ export default class TilingWMExtension extends Extension {
             if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
             this._positionBackgroundAppClone();
             return GLib.SOURCE_REMOVE;
-        });
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            if (this._destroyed) return false;
-            this._ensureBackgroundAppClone(win);
-            return false;
         });
     }
 
@@ -4790,10 +4844,14 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppPendingId = 0;
         }
         this._backgroundAppPending = false;
+        this._hideBackgroundAppInitOverlay();
         this._disconnectBackgroundAppParkWatch();
         if (this._backgroundAppNWorkspacesId) {
             try { global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId); } catch (_e) {}
-            this._backgroundAppNWorkspacesId = 0;
+        this._backgroundAppNWorkspacesId = 0;
+        this._backgroundAppInitOverlay = null;
+        this._backgroundAppInitOverlayModal = false;
+        this._backgroundAppInitOverlayCapId = 0;
         }
         if (this._backgroundAppKeepAliveId) {
             GLib.source_remove(this._backgroundAppKeepAliveId);
