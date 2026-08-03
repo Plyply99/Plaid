@@ -4002,6 +4002,13 @@ export default class TilingWMExtension extends Extension {
                 this._backgroundAppParkingWs = first;
                 this._debugLog('background app: reserved ws0 parking (index=0)');
             }
+            // Keep the parking alive: the shell's dynamic-workspace check
+            // removes empty inactive workspaces — the reservation must be
+            // armed before the append below queues that check.
+            try {
+                Main.wm.keepWorkspaceAlive(this._backgroundAppParkingWs, 12 * 60 * 60 * 1000);
+            } catch (_e) {}
+            this._startBackgroundAppKeepAlive();
             // Move the active off the parking onto the first content workspace.
             try {
                 if (global.workspace_manager.get_active_workspace() === this._backgroundAppParkingWs)
@@ -4020,10 +4027,26 @@ export default class TilingWMExtension extends Extension {
                 }
             } catch (_e) {}
         } catch (e) {
-            this._backgroundAppParkingWs = null;
-            this._backgroundAppReservationScheduled = false;
+        this._backgroundAppParkingWs = null;
+        this._backgroundAppReservationScheduled = false;
+        this._backgroundAppKeepAliveId = 0;
             this._debugLog(`background app: reservation failed: ${e.message}`);
         }
+    }
+
+    _startBackgroundAppKeepAlive() {
+        if (this._backgroundAppKeepAliveId) return;
+        const rekeep = () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (this._backgroundAppParkingWs) {
+                try {
+                    Main.wm.keepWorkspaceAlive(this._backgroundAppParkingWs, 12 * 60 * 60 * 1000);
+                } catch (_e) {}
+            }
+            return GLib.SOURCE_CONTINUE;
+        };
+        this._backgroundAppKeepAliveId =
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60 * 60 * 1000, rekeep);
     }
 
     _bgAppRealToDisplay(realIdx) {
@@ -4344,8 +4367,8 @@ export default class TilingWMExtension extends Extension {
         try {
             // Maximize for a sharp full-size clone source — mutter-enforced,
             // clients cannot refuse it (native Wayland clients may ignore
-            // plain move_resize configures).
-            win.maximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL, monitor);
+            // plain move_resize configures). The GIR signature takes no args.
+            win.maximize();
         } catch (_e) {}
         try {
             win.move_resize_frame(true, mon.x, mon.y, mon.width, mon.height);
@@ -4759,6 +4782,10 @@ export default class TilingWMExtension extends Extension {
         }
         this._backgroundAppPending = false;
         this._disconnectBackgroundAppParkWatch();
+        if (this._backgroundAppKeepAliveId) {
+            GLib.source_remove(this._backgroundAppKeepAliveId);
+            this._backgroundAppKeepAliveId = 0;
+        }
         if (this._backgroundAppParkingFixId) {
             GLib.source_remove(this._backgroundAppParkingFixId);
             this._backgroundAppParkingFixId = 0;
