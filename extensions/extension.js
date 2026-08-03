@@ -3966,6 +3966,22 @@ export default class TilingWMExtension extends Extension {
         this._launchBackgroundApp();
     }
 
+    _scheduleBackgroundAppReservation() {
+        // Workspace mutations during the shell's login burst hang the
+        // session; defer the reservation to the first idle plus a timeout
+        // fallback (idempotent — whichever fires first wins).
+        if (this._backgroundAppReservationScheduled) return;
+        if (this._backgroundAppParkingWs) return;
+        this._backgroundAppReservationScheduled = true;
+        const run = () => {
+            this._backgroundAppReservationScheduled = false;
+            this._reserveBackgroundAppWorkspace();
+            return GLib.SOURCE_REMOVE;
+        };
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, run);
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, run);
+    }
+
     _reserveBackgroundAppWorkspace() {
         // BGAPP is integral to Plaid: workspace 1 is always reserved for it,
         // whether or not a background app is configured. Hiding the FIRST
@@ -3991,7 +4007,8 @@ export default class TilingWMExtension extends Extension {
             } catch (_e) {}
             this._debugLog(`background app: reserved ws1 parking (index=${this._wsIndex(parking)})`);
         } catch (e) {
-            this._backgroundAppParkingWs = null;
+        this._backgroundAppParkingWs = null;
+        this._backgroundAppReservationScheduled = false;
             this._debugLog(`background app: reservation failed: ${e.message}`);
         }
     }
@@ -4304,8 +4321,8 @@ export default class TilingWMExtension extends Extension {
         if (!mon || mon.width === 0) return;
 
         if (!this._backgroundAppParkingWs) {
-            this._reserveBackgroundAppWorkspace();
-            if (!this._backgroundAppParkingWs) return;
+            this._scheduleBackgroundAppReservation();
+            return;
         }
         try {
             if (win.get_workspace() !== this._backgroundAppParkingWs)
