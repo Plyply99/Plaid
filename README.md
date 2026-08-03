@@ -30,7 +30,8 @@ all built in.
   For video bg apps, use `mpv --panscan=1.0` so the frame fills the screen
 - **Plaid login moment**: a black "Plaid is initializing…" screen blocks input
   until the background app and session are settled (minimum 3s), so your
-  desktop appears fully-formed — no flashes, no window shuffling
+  desktop appears fully-formed — no flashes, no window shuffling. The Plaid
+  B-weave logo mark sits above the wordmark (switchable via `plaid-logo`)
 - **Workspace pill**: the top bar's workspace indicator becomes a pill —
   visible workspace numbers, the active workspace's app icon, and the focused
   window's title — while the overview and app switcher stay stock GNOME

@@ -390,5 +390,12 @@
       <description>Border color for scratchpad windows so the scratch layer is visually distinct, e.g. ['#f5c211']</description>
     </key>
 
+    <!-- Branding -->
+    <key name="logo" type="s">
+      <default>'b-weave'</default>
+      <summary>Logo shown during the Plaid login moment</summary>
+      <description>Which logo mark the init overlay displays: 'a-tartan', 'b-bsp', 'b-thread', 'b-weave', 'c-weave', or 'all' to show every mark side by side</description>
+    </key>
+
   </schema>
 </schemalist>

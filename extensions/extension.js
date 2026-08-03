@@ -4456,6 +4456,40 @@ export default class TilingWMExtension extends Extension {
             'Click to dismiss');
     }
 
+    _loadInitLogo(basePath, size) {
+        const pngPath = `${basePath}.png`;
+        try {
+            const surface = cairo.ImageSurface.createFromPNG(pngPath);
+            if (!surface || surface.getWidth() === 0 || surface.getHeight() === 0) {
+                log(`[plaid] init overlay logo: ${pngPath} surface failed (empty)`);
+                return null;
+            }
+            const area = new St.DrawingArea({
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                width: size,
+                height: size,
+            });
+            area._plaidLogoSurface = surface;
+            area._plaidLogoScale = size / surface.getWidth();
+            area.connect('repaint', () => {
+                try {
+                    const cr = area.get_context();
+                    cr.scale(area._plaidLogoScale, area._plaidLogoScale);
+                    cr.setSourceSurface(area._plaidLogoSurface, 0, 0);
+                    cr.paint();
+                } catch (e) {
+                    log(`[plaid] init overlay logo: ${pngPath} paint failed: ${e.message}`);
+                }
+            });
+            log(`[plaid] init overlay logo: ${pngPath} drawn`);
+            return area;
+        } catch (e) {
+            log(`[plaid] init overlay logo: ${pngPath} failed: ${e.message}`);
+            return null;
+        }
+    }
+
     _showBackgroundAppInitOverlay() {
         // The Plaid login moment — always shown at enable (a brand moment,
         // minimum 3s), extended while the bg-app pipeline processes.
@@ -4481,12 +4515,24 @@ export default class TilingWMExtension extends Extension {
                 x_align: Clutter.ActorAlign.CENTER,
                 y_align: Clutter.ActorAlign.CENTER,
             });
-            const graphicSlot = new St.Widget({
+            const logoRow = new St.BoxLayout({
                 x_align: Clutter.ActorAlign.CENTER,
                 y_align: Clutter.ActorAlign.CENTER,
-                width: 24,
-                height: 24,
             });
+            logoRow.set_style('spacing: 24px;');
+            const scaleFactor = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+            const logoSetting = this._settings ? this._settings.get_string('logo') : 'all';
+            const logoNames = logoSetting === 'all'
+                ? ['logo-a-tartan', 'logo-b-bsp', 'logo-b-thread', 'logo-b-weave', 'logo-c-weave']
+                : [logoSetting];
+            const logoSize = 140 * scaleFactor;
+            for (const name of logoNames) {
+                const area = this._loadInitLogo(`${this.path}/assets/${name}`, logoSize);
+                if (!area) continue;
+                logoRow.add_child(area);
+            }
+            if (logoRow.get_children().length > 0)
+                column.add_child(logoRow);
             const wordmark = new St.Label({
                 text: 'Plaid',
                 x_align: Clutter.ActorAlign.CENTER,
@@ -4499,7 +4545,6 @@ export default class TilingWMExtension extends Extension {
                 y_align: Clutter.ActorAlign.CENTER,
                 style: 'font-size: 28px; color: #ffffff;',
             });
-            column.add_child(graphicSlot);
             column.add_child(wordmark);
             column.add_child(subtitle);
             overlay.add_child(column);

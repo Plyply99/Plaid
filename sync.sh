@@ -43,6 +43,14 @@ if [ -d "$SOURCE/lib" ]; then
     done
 fi
 
+if [ -d "$SOURCE/assets" ]; then
+    mkdir -p "$DEST/assets"
+    for file in "$SOURCE"/assets/*; do
+        [ -f "$file" ] || continue
+        sync_file "$file" "$DEST/assets/$(basename "$file")"
+    done
+fi
+
 if [ -d "$SOURCE/schemas" ]; then
     mkdir -p "$DEST/schemas"
     for file in "$SOURCE"/schemas/*; do
