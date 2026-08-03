@@ -2160,7 +2160,10 @@ export default class TilingWMExtension extends Extension {
 
             if (roundedCorners && borderRadius > 0) {
                 this._ensureWindowMask(win, actor, borderRadius + 1);
-                continue;
+                // Scratch windows fall through to their special border even
+                // with rounded corners (normal windows stay mask-only).
+                if (!(this._scratchpadWindows && this._scratchpadWindows.has(win)))
+                    continue;
             }
 
             const isFocused = win === focusWindow;
@@ -2207,6 +2210,7 @@ export default class TilingWMExtension extends Extension {
             borderWidth = 3;
             color1 = scratchColor;
             color2 = scratchColor;
+            log(`[plaid] scratch border: yellow on ${win.get_wm_class_instance() || '?'}`);
         }
 
         if (borderWidth === 0) return false;
