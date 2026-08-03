@@ -4010,10 +4010,25 @@ export default class TilingWMExtension extends Extension {
             } catch (_e) {}
             this._startBackgroundAppKeepAlive();
             // Move the active off the parking onto the first content workspace.
+            // append_new_workspace(true) activates BEFORE emitting
+            // n-workspaces, so the shell's active-workspace-changed raise
+            // would index a card that doesn't exist yet — append inert, then
+            // activate after the shell has rebuilt its card list.
             try {
-                if (global.workspace_manager.get_active_workspace() === this._backgroundAppParkingWs)
-                    global.workspace_manager.append_new_workspace(true, this._currentTime());
-                this._debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
+                if (global.workspace_manager.get_active_workspace() === this._backgroundAppParkingWs) {
+                    global.workspace_manager.append_new_workspace(false, this._currentTime());
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        try {
+                            const next = global.workspace_manager.get_workspace_by_index(1);
+                            if (next) next.activate(this._currentTime());
+                            this._debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
+                        } catch (_e) {}
+                        return GLib.SOURCE_REMOVE;
+                    });
+                } else {
+                    this._debugLog(`background app: active already at index=${global.workspace_manager.get_active_workspace_index()}`);
+                }
             } catch (_e) {}
             this._applyBackgroundAppHiding();
             // Controlled card removal: sweep shortly after the append/activate
