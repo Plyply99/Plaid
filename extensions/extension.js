@@ -323,6 +323,13 @@ export default class TilingWMExtension extends Extension {
         this._suppressWorkspaceSwitcherPopup();
         this._initWorkspacePopupWarning();
         this._initDropdownTerminal();
+        this._workspacePill = null;
+        this._workspacePillIndicators = null;
+        this._workspacePillNumbers = null;
+        this._workspacePillIcon = null;
+        this._workspacePillTitle = null;
+        this._workspacePillFocusedWin = null;
+        this._workspacePillTitleId = 0;
         this._initBackgroundApp();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
@@ -407,6 +414,7 @@ export default class TilingWMExtension extends Extension {
         this._jpSettingsChangedId = 0;
         this._clearDropdownWindow();
         this._clearDropdownWaiters();
+        this._restoreWorkspacePill();
         this._clearBackgroundApp();
         if (this._backgroundAppSettingsChangedId) {
             try { this._settings.disconnect(this._backgroundAppSettingsChangedId); } catch (_e) {}
@@ -4102,6 +4110,126 @@ export default class TilingWMExtension extends Extension {
         const parkingIdx = this._backgroundAppParkingWs ?
             this._wsIndex(this._backgroundAppParkingWs) : -1;
         return realIdx > parkingIdx ? realIdx - 1 : realIdx;
+    }
+
+    _initWorkspacePill() {
+        // The Plaid Workspace Pill: replaces GNOME's default workspace dots
+        // inside the Activities button with the usable workspace numbers, the
+        // focused window's app icon on the active slot, and the window title.
+        if (this._workspacePill) return;
+        try {
+            const activities = Main.panel.statusArea.activities;
+            if (!activities) return;
+            const children = activities.get_children();
+            for (const child of children) {
+                if (child.constructor.name === 'WorkspaceIndicators') {
+                    this._workspacePillIndicators = child;
+                    activities.remove_child(child);
+                    break;
+                }
+            }
+            const pill = new St.BoxLayout({ style_class: 'plaid-workspace-pill' });
+            this._workspacePillNumbers =
+                new St.BoxLayout({ style_class: 'plaid-workspace-pill-numbers' });
+            this._workspacePillIcon = new St.Icon({ style_class: 'plaid-workspace-pill-icon' });
+            this._workspacePillIcon.set_fallback_gicon(null);
+            this._workspacePillTitle = new St.Label({
+                style_class: 'plaid-workspace-pill-title',
+                y_align: Clutter.ActorAlign.CENTER,
+                text: '',
+            });
+            pill.add_child(this._workspacePillNumbers);
+            pill.add_child(this._workspacePillTitle);
+            activities.add_child(pill);
+            this._workspacePill = pill;
+            this._addSignal(global.display, global.display.connect('notify::focus-window',
+                () => this._updateWorkspacePill()));
+            this._addSignal(global.workspace_manager, global.workspace_manager.connect(
+                'active-workspace-changed', () => this._updateWorkspacePill()));
+            this._updateWorkspacePill();
+            log('[plaid] workspace pill initialized');
+        } catch (e) {
+            log(`[plaid] workspace pill init failed: ${e.message}`);
+            this._workspacePill = null;
+        }
+    }
+
+    _updateWorkspacePill() {
+        const pill = this._workspacePill;
+        if (!pill) return;
+        try {
+            if (Main.sessionMode.isLocked) return;
+            const wm = global.workspace_manager;
+            const n = wm.n_workspaces;
+            const active = wm.get_active_workspace_index();
+            const parkingIdx = this._backgroundAppParkingWs ?
+                this._wsIndex(this._backgroundAppParkingWs) : -1;
+            const focused = global.display.focus_window;
+            const showFocus =
+                focused && !focused.skip_taskbar && focused !== this._backgroundAppWin;
+
+            if (this._workspacePillFocusedWin) {
+                try { this._workspacePillFocusedWin.disconnect(this._workspacePillTitleId); } catch (_e) {}
+                this._workspacePillFocusedWin = null;
+                this._workspacePillTitleId = 0;
+            }
+
+            this._workspacePillNumbers.destroy_all_children();
+            for (let i = 0; i < n; i++) {
+                if (i === parkingIdx) continue;
+                if (i === active && showFocus) {
+                    this._workspacePillNumbers.add_child(this._workspacePillIcon);
+                } else {
+                    const label = new St.Label({
+                        text: String(this._bgAppRealToDisplay(i) + 1),
+                        style_class: 'plaid-workspace-pill-number',
+                        y_align: Clutter.ActorAlign.CENTER,
+                    });
+                    if (i === active)
+                        label.add_style_pseudo_class('active');
+                    this._workspacePillNumbers.add_child(label);
+                }
+            }
+
+            if (showFocus) {
+                const app = Shell.WindowTracker.get_default().get_window_app(focused);
+                if (app) {
+                    try { this._workspacePillIcon.set_gicon(app.get_icon()); } catch (_e) {}
+                }
+                let title = focused.get_title() || '';
+                if (title.length > 60)
+                    title = title.slice(0, 60) + '…';
+                this._workspacePillTitle.set_text(title);
+                this._workspacePillTitle.visible = true;
+                this._workspacePillFocusedWin = focused;
+                this._workspacePillTitleId =
+                    focused.connect('notify::title', () => this._updateWorkspacePill());
+            } else {
+                this._workspacePillTitle.set_text('');
+                this._workspacePillTitle.visible = false;
+            }
+        } catch (e) {
+            log(`[plaid] workspace pill update failed: ${e.message}`);
+        }
+    }
+
+    _restoreWorkspacePill() {
+        if (this._workspacePillFocusedWin) {
+            try { this._workspacePillFocusedWin.disconnect(this._workspacePillTitleId); } catch (_e) {}
+            this._workspacePillFocusedWin = null;
+            this._workspacePillTitleId = 0;
+        }
+        if (this._workspacePill) {
+            try { this._workspacePill.destroy(); } catch (_e) {}
+            this._workspacePill = null;
+        }
+        if (this._workspacePillIndicators) {
+            try {
+                const activities = Main.panel.statusArea.activities;
+                if (activities) activities.add_child(this._workspacePillIndicators);
+            } catch (_e) {}
+            this._workspacePillIndicators = null;
+        }
     }
 
     _scheduleBackgroundAppRestart() {
