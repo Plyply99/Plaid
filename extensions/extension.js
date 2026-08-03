@@ -330,6 +330,7 @@ export default class TilingWMExtension extends Extension {
         this._workspacePillTitle = null;
         this._workspacePillFocusedWin = null;
         this._workspacePillTitleId = 0;
+        this._initWorkspacePill();
         this._initBackgroundApp();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
