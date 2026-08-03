@@ -3997,10 +3997,10 @@ export default class TilingWMExtension extends Extension {
                 // a trailing parking (no reorder, canonical n-2 position).
                 const parking = global.workspace_manager.append_new_workspace(false, this._currentTime());
                 this._backgroundAppParkingWs = parking;
-                this._debugLog(`background app: reserved trailing parking (index=${this._wsIndex(parking)})`);
+                log(`[plaid] background app: reserved trailing parking (index=${this._wsIndex(parking)})`);
             } else {
                 this._backgroundAppParkingWs = first;
-                this._debugLog('background app: reserved ws0 parking (index=0)');
+                log('[plaid] background app: reserved ws0 parking (index=0)');
             }
             // Keep the parking alive: the shell's dynamic-workspace check
             // removes empty inactive workspaces — the reservation must be
@@ -4022,12 +4022,12 @@ export default class TilingWMExtension extends Extension {
                         try {
                             const next = global.workspace_manager.get_workspace_by_index(1);
                             if (next) next.activate(this._currentTime());
-                            this._debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
+                            log(`[plaid] background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
                         } catch (_e) {}
                         return GLib.SOURCE_REMOVE;
                     });
                 } else {
-                    this._debugLog(`background app: active already at index=${global.workspace_manager.get_active_workspace_index()}`);
+                    log(`[plaid] background app: active already at index=${global.workspace_manager.get_active_workspace_index()}`);
                 }
             } catch (_e) {}
             this._applyBackgroundAppHiding();
@@ -4055,7 +4055,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppReservationScheduled = false;
         this._backgroundAppKeepAliveId = 0;
         this._backgroundAppNWorkspacesId = 0;
-            this._debugLog(`background app: reservation failed: ${e.message}`);
+            log(`[plaid] background app: reservation failed: ${e.message}`);
         }
     }
 
