@@ -3961,6 +3961,7 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._backgroundAppEnabledChangedId = 0;
         }
+        this._showBackgroundAppInitOverlay();
         this._scheduleBackgroundAppReservation();
         this._launchBackgroundApp();
     }
@@ -4135,28 +4136,69 @@ export default class TilingWMExtension extends Extension {
     }
 
     _showBackgroundAppInitOverlay() {
+        // The Plaid login moment — always shown at enable (a brand moment,
+        // minimum 3s), extended while the bg-app pipeline processes.
         if (this._backgroundAppInitOverlay) return;
+        this._backgroundAppInitOverlayAwaiting =
+            this._settings && this._settings.get_boolean('background-app-enabled') &&
+            !!this._settings.get_string('background-app');
+        this._backgroundAppInitOverlayMinTime = Date.now() + 3000;
         try {
             const stage = global.stage;
-            const overlay = new St.BoxLayout({ reactive: true, visible: true });
+            const overlay = new St.BoxLayout({
+                reactive: true,
+                visible: true,
+                vertical: true,
+                x_expand: true,
+                y_expand: true,
+            });
             overlay.set_style('background-color: rgba(0, 0, 0, 1);');
             overlay.set_size(stage.width, stage.height);
             overlay.set_position(0, 0);
-            const label = new St.Label({
-                text: 'Plaid is initializing…',
+            const column = new St.BoxLayout({
+                vertical: true,
                 x_align: Clutter.ActorAlign.CENTER,
                 y_align: Clutter.ActorAlign.CENTER,
-                style: 'font-size: 48px; font-weight: bold;',
             });
-            overlay.add_child(label);
+            const graphicSlot = new St.Widget({
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                width: 128,
+                height: 128,
+            });
+            const wordmark = new St.Label({
+                text: 'Plaid',
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                style: 'font-size: 64px; font-weight: bold; color: #ffffff;',
+            });
+            const subtitle = new St.Label({
+                text: 'is initializing…',
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                style: 'font-size: 28px; color: #ffffff;',
+            });
+            column.add_child(graphicSlot);
+            column.add_child(wordmark);
+            column.add_child(subtitle);
+            overlay.add_child(column);
             Main.uiGroup.add_child(overlay);
             this._backgroundAppInitOverlay = overlay;
             Main.pushModal(overlay);
             this._backgroundAppInitOverlayModal = true;
             this._backgroundAppInitOverlayCapId =
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 8000, () => {
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
                     this._backgroundAppInitOverlayCapId = 0;
                     this._hideBackgroundAppInitOverlay();
+                    return GLib.SOURCE_REMOVE;
+                });
+            this._backgroundAppInitOverlayMinId =
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
+                    this._backgroundAppInitOverlayMinId = 0;
+                    // No bg-app pipeline? The moment ends at the 3s mark.
+                    // Otherwise the ready signal gates the dismissal.
+                    if (!this._backgroundAppInitOverlayAwaiting)
+                        this._hideBackgroundAppInitOverlay();
                     return GLib.SOURCE_REMOVE;
                 });
             log('[plaid] background app: init overlay shown (input blocked)');
@@ -4166,12 +4208,37 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _requestBackgroundAppInitDismiss() {
+        if (!this._backgroundAppInitOverlay) return;
+        if (this._backgroundAppInitOverlayPendingDismissId) return;
+        const remaining = this._backgroundAppInitOverlayMinTime - Date.now();
+        if (remaining <= 0) {
+            this._hideBackgroundAppInitOverlay();
+        } else {
+            this._backgroundAppInitOverlayPendingDismissId =
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, remaining, () => {
+                    this._backgroundAppInitOverlayPendingDismissId = 0;
+                    this._hideBackgroundAppInitOverlay();
+                    return GLib.SOURCE_REMOVE;
+                });
+        }
+    }
+
     _hideBackgroundAppInitOverlay() {
         const overlay = this._backgroundAppInitOverlay;
         this._backgroundAppInitOverlay = null;
+        this._backgroundAppInitOverlayAwaiting = false;
         if (this._backgroundAppInitOverlayCapId) {
             GLib.source_remove(this._backgroundAppInitOverlayCapId);
             this._backgroundAppInitOverlayCapId = 0;
+        }
+        if (this._backgroundAppInitOverlayMinId) {
+            GLib.source_remove(this._backgroundAppInitOverlayMinId);
+            this._backgroundAppInitOverlayMinId = 0;
+        }
+        if (this._backgroundAppInitOverlayPendingDismissId) {
+            GLib.source_remove(this._backgroundAppInitOverlayPendingDismissId);
+            this._backgroundAppInitOverlayPendingDismissId = 0;
         }
         if (this._backgroundAppInitOverlayModal) {
             try { Main.popModal(overlay); } catch (_e) {}
@@ -4199,13 +4266,12 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30000, () => {
             this._backgroundAppPendingId = 0;
             this._backgroundAppPending = false;
-            this._hideBackgroundAppInitOverlay();
+            this._requestBackgroundAppInitDismiss();
             if (this._backgroundAppWaiter) {
                 try { this._backgroundAppWaiter.cleanup(false); } catch (_e) {}
             }
             return GLib.SOURCE_REMOVE;
         });
-        this._showBackgroundAppInitOverlay();
         this._debugLog(`background app: launching ${command}`);
         try {
             this._backgroundAppProc = Gio.Subprocess.new(
@@ -4384,7 +4450,7 @@ export default class TilingWMExtension extends Extension {
                         this._parkBackgroundAppOnWorkspace(win);
                         this._startBackgroundAppParkWatch(win);
                         this._ensureBackgroundAppClone(win);
-                        this._hideBackgroundAppInitOverlay();
+                        this._requestBackgroundAppInitDismiss();
                         return GLib.SOURCE_REMOVE;
                     });
                 });
@@ -4708,6 +4774,10 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppInitOverlay = null;
         this._backgroundAppInitOverlayModal = false;
         this._backgroundAppInitOverlayCapId = 0;
+        this._backgroundAppInitOverlayMinId = 0;
+        this._backgroundAppInitOverlayPendingDismissId = 0;
+        this._backgroundAppInitOverlayMinTime = 0;
+        this._backgroundAppInitOverlayAwaiting = false;
         }
         if (this._backgroundAppKeepAliveId) {
             GLib.source_remove(this._backgroundAppKeepAliveId);
