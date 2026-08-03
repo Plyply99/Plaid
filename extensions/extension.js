@@ -3389,7 +3389,7 @@ export default class TilingWMExtension extends Extension {
     _showWorkspacePopup(ws) {
         if (!ws) return;
         const layout = this._getWorkspaceLayout(ws);
-        this._showPopup(`Workspace ${this._wsIndex(ws) + 1}`,
+        this._showPopup(`Workspace ${this._bgAppRealToDisplay(this._wsIndex(ws)) + 1}`,
             `Layout: ${LAYOUT_NAMES[layout] || layout}`);
     }
 
@@ -3962,7 +3962,44 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._backgroundAppEnabledChangedId = 0;
         }
+        this._reserveBackgroundAppWorkspace();
         this._launchBackgroundApp();
+    }
+
+    _reserveBackgroundAppWorkspace() {
+        // BGAPP is integral to Plaid: workspace 1 is always reserved for it,
+        // whether or not a background app is configured. Hiding the FIRST
+        // card leaves the overview row gapless by construction — no phantom
+        // slot, no mid-row math.
+        if (this._destroyed || this._backgroundAppParkingWs) return;
+        try {
+            const parking = global.workspace_manager.append_new_workspace(false, this._currentTime());
+            this._backgroundAppParkingWs = parking;
+            global.workspace_manager.reorder_workspace(parking, 0);
+            this._applyBackgroundAppHiding();
+            // The reorder doesn't rebuild overview cards; refresh the views so
+            // the cards are rebuilt in the new order and the sweep removes the
+            // parking card from position 0.
+            try {
+                const controls = Main.overview._overview.controls;
+                const display = controls && controls._workspacesDisplay;
+                if (display && display._workspacesViews) {
+                    for (const view of display._workspacesViews) {
+                        try { view._updateWorkspaces(); } catch (_e) {}
+                    }
+                }
+            } catch (_e) {}
+            this._debugLog(`background app: reserved ws1 parking (index=${this._wsIndex(parking)})`);
+        } catch (e) {
+            this._backgroundAppParkingWs = null;
+            this._debugLog(`background app: reservation failed: ${e.message}`);
+        }
+    }
+
+    _bgAppRealToDisplay(realIdx) {
+        const parkingIdx = this._backgroundAppParkingWs ?
+            this._wsIndex(this._backgroundAppParkingWs) : -1;
+        return realIdx > parkingIdx ? realIdx - 1 : realIdx;
     }
 
     _scheduleBackgroundAppRestart() {
@@ -4267,10 +4304,8 @@ export default class TilingWMExtension extends Extension {
         if (!mon || mon.width === 0) return;
 
         if (!this._backgroundAppParkingWs) {
-            this._backgroundAppParkingWs =
-                global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._debugLog(`background app: parking ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
-            this._applyBackgroundAppHiding();
+            this._reserveBackgroundAppWorkspace();
+            if (!this._backgroundAppParkingWs) return;
         }
         try {
             if (win.get_workspace() !== this._backgroundAppParkingWs)
@@ -4290,11 +4325,7 @@ export default class TilingWMExtension extends Extension {
     _applyBackgroundAppHiding() {
         if (this._backgroundAppHiding || !this._backgroundAppParkingWs) return;
         const self = this;
-        const realToDisplay = (realIdx) => {
-            const parkingIdx = self._backgroundAppParkingWs ?
-                self._wsIndex(self._backgroundAppParkingWs) : -1;
-            return realIdx > parkingIdx ? realIdx - 1 : realIdx;
-        };
+        const realToDisplay = (realIdx) => self._bgAppRealToDisplay(realIdx);
         const origGetNeighbor = Meta.Workspace.prototype.get_neighbor;
         const wrappedGetNeighbor = function (direction) {
             const neighbor = origGetNeighbor.call(this, direction);
@@ -4590,25 +4621,17 @@ export default class TilingWMExtension extends Extension {
             this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
             return;
         }
-        const n = global.workspace_manager.get_n_workspaces();
-        let parkingIdx = -1;
-        for (let i = 0; i < n; i++) {
-            const w = global.workspace_manager.get_workspace_by_index(i);
-            if (w === this._backgroundAppParkingWs) parkingIdx = i;
-        }
-        const zoneOk = parkingIdx === n - 2;
-        if (!zoneOk) {
+        // The parking lives on workspace 1 permanently; content grows on
+        // 2..n and the shell keeps the trailing empty. If it ever leaves
+        // position 0, reorder it back.
+        if (this._wsIndex(this._backgroundAppParkingWs) !== 0) {
             const now = Date.now();
             if (now - (this._backgroundAppParkingLastRelocate || 0) < 1000)
                 return;
             this._backgroundAppParkingLastRelocate = now;
-            const oldParking = this._backgroundAppParkingWs;
-            this._backgroundAppParkingWs =
-                global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)} (old ws=${this._wsIndex(oldParking)} kept)`);
             try {
-                if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
-                    this._backgroundAppWin.change_workspace(this._backgroundAppParkingWs);
+                global.workspace_manager.reorder_workspace(this._backgroundAppParkingWs, 0);
+                this._debugLog('background app: parking reordered back to ws=0');
             } catch (_e) {}
         }
         try {
