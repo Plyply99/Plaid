@@ -4013,25 +4013,55 @@ export default class TilingWMExtension extends Extension {
             try {
                 if (global.workspace_manager.get_active_workspace() === this._backgroundAppParkingWs)
                     global.workspace_manager.append_new_workspace(true, this._currentTime());
+                this._debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
             } catch (_e) {}
             this._applyBackgroundAppHiding();
-            // Refresh the overview views so the parking card is removed by the
-            // sweep (armed above).
-            try {
-                const controls = Main.overview._overview.controls;
-                const display = controls && controls._workspacesDisplay;
-                if (display && display._workspacesViews) {
-                    for (const view of display._workspacesViews) {
-                        try { view._updateWorkspaces(); } catch (_e) {}
-                    }
-                }
-            } catch (_e) {}
+            // Controlled card removal: sweep shortly after the append/activate
+            // settles, and re-sweep after any shell rebuild that re-adds the
+            // parking card. No interception during rebuilds — no races.
+            if (!this._backgroundAppNWorkspacesId) {
+                this._backgroundAppNWorkspacesId =
+                    global.workspace_manager.connect('notify::n-workspaces', () => {
+                        if (this._destroyed) return;
+                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                            if (this._destroyed) return GLib.SOURCE_REMOVE;
+                            this._sweepParkingCard();
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    });
+            }
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                this._sweepParkingCard();
+                return GLib.SOURCE_REMOVE;
+            });
         } catch (e) {
         this._backgroundAppParkingWs = null;
         this._backgroundAppReservationScheduled = false;
         this._backgroundAppKeepAliveId = 0;
+        this._backgroundAppNWorkspacesId = 0;
             this._debugLog(`background app: reservation failed: ${e.message}`);
         }
+    }
+
+    _sweepParkingCard() {
+        const parkingWs = this._backgroundAppParkingWs;
+        if (!parkingWs) return;
+        try {
+            const controls = Main.overview._overview.controls;
+            const display = controls && controls._workspacesDisplay;
+            if (!display || !display._workspacesViews) return;
+            for (const view of display._workspacesViews) {
+                if (!view || !view._workspaces) continue;
+                for (let i = view._workspaces.length - 1; i >= 0; i--) {
+                    const card = view._workspaces[i];
+                    if (card && card.metaWorkspace === parkingWs) {
+                        view._workspaces.splice(i, 1);
+                        try { card.destroy(); } catch (_e) {}
+                    }
+                }
+            }
+        } catch (_e) {}
     }
 
     _startBackgroundAppKeepAlive() {
@@ -4390,25 +4420,6 @@ export default class TilingWMExtension extends Extension {
             }
             return neighbor;
         };
-        const origAddChild = WorkspacesViewModule.WorkspacesView.prototype.add_child;
-        const wrappedAddChild = function (child) {
-            origAddChild.call(this, child);
-            const parkingWs = self._backgroundAppParkingWs;
-            if (!parkingWs || !child.metaWorkspace) return;
-            if (child.metaWorkspace !== parkingWs) return;
-            // The shell's rebuild signal bound the original _updateWorkspaces
-            // at view construction, so prototype patches never run on
-            // rebuilds — sweep the parking card here instead, on every add.
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                try {
-                    const idx = this._workspaces.indexOf(child);
-                    if (idx !== -1)
-                        this._workspaces.splice(idx, 1);
-                    child.destroy();
-                } catch (_e) {}
-                return GLib.SOURCE_REMOVE;
-            });
-        };
         const origGetActiveWorkspace =
             WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace;
         const wrappedGetActiveWorkspace = function () {
@@ -4560,7 +4571,6 @@ export default class TilingWMExtension extends Extension {
             }
         };
         Meta.Workspace.prototype.get_neighbor = wrappedGetNeighbor;
-        WorkspacesViewModule.WorkspacesView.prototype.add_child = wrappedAddChild;
         WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = wrappedGetActiveWorkspace;
         WorkspacesViewModule.WorkspacesView.prototype._scrollToActive = wrappedScrollToActive;
         WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = wrappedUpdateVisibility;
@@ -4571,7 +4581,6 @@ export default class TilingWMExtension extends Extension {
         WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = wrappedAddThumbnails;
         this._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
-            origAddChild, wrappedAddChild,
             origGetActiveWorkspace, wrappedGetActiveWorkspace,
             origScrollToActive, wrappedScrollToActive,
             origUpdateVisibility, wrappedUpdateVisibility,
@@ -4581,24 +4590,11 @@ export default class TilingWMExtension extends Extension {
             origRedisplay, wrappedRedisplay,
             origAddThumbnails, wrappedAddThumbnails,
         };
-        // Sweep cards/thumbnails that were built before the wraps were armed:
-        // the parking append fires the shell's rebuild synchronously, ahead of
-        // this apply, so the add-time wrappers never saw them.
+        // Hide the pre-existing parking thumbnail (the addThumbnails wrap
+        // covers future ones).
         try {
             const controls = Main.overview._overview.controls;
             const parkingWs = this._backgroundAppParkingWs;
-            const display = controls && controls._workspacesDisplay;
-            if (display && display._workspacesViews) {
-                for (const view of display._workspacesViews) {
-                    for (let i = view._workspaces.length - 1; i >= 0; i--) {
-                        const card = view._workspaces[i];
-                        if (card && card.metaWorkspace === parkingWs) {
-                            view._workspaces.splice(i, 1);
-                            try { card.destroy(); } catch (_e) {}
-                        }
-                    }
-                }
-            }
             const thumbs = controls && controls._workspacesThumbnails;
             if (thumbs) {
                 const hideParkingThumb = (box) => {
@@ -4624,8 +4620,6 @@ export default class TilingWMExtension extends Extension {
         try {
             if (Meta.Workspace.prototype.get_neighbor === h.wrappedGetNeighbor)
                 Meta.Workspace.prototype.get_neighbor = h.origGetNeighbor;
-            if (WorkspacesViewModule.WorkspacesView.prototype.add_child === h.wrappedAddChild)
-                WorkspacesViewModule.WorkspacesView.prototype.add_child = h.origAddChild;
             if (WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace === h.wrappedGetActiveWorkspace)
                 WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = h.origGetActiveWorkspace;
             if (WorkspacesViewModule.WorkspacesView.prototype._scrollToActive === h.wrappedScrollToActive)
@@ -4782,6 +4776,10 @@ export default class TilingWMExtension extends Extension {
         }
         this._backgroundAppPending = false;
         this._disconnectBackgroundAppParkWatch();
+        if (this._backgroundAppNWorkspacesId) {
+            try { global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId); } catch (_e) {}
+            this._backgroundAppNWorkspacesId = 0;
+        }
         if (this._backgroundAppKeepAliveId) {
             GLib.source_remove(this._backgroundAppKeepAliveId);
             this._backgroundAppKeepAliveId = 0;
