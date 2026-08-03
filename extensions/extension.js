@@ -4799,6 +4799,33 @@ export default class TilingWMExtension extends Extension {
             }
             return neighbor;
         };
+        const origShowWorkspaceSwitcher = Main.wm._showWorkspaceSwitcher;
+        const wrappedShowWorkspaceSwitcher = function (display, window, event, binding) {
+            // Remap workspace keybindings to the visible numbering: the
+            // parking (real ws0) is reserved, so the user's visible N = real
+            // N = shell index N. Numeric targets get a +1 shim; 'last' maps
+            // to the visible last (real n-2) instead of the trailing empty.
+            try {
+                const name = binding.get_name() || '';
+                const parts = name.split('-');
+                if (parts.length >= 4) {
+                    const action = parts[0];
+                    const target = parts[3];
+                    const wm = global.workspace_manager;
+                    let shim = null;
+                    if (/^\d+$/.test(target)) {
+                        const n = parseInt(target, 10);
+                        shim = { get_name: () => `${action}-to-workspace-${n + 1}` };
+                    } else if (target === 'last') {
+                        const n = wm.n_workspaces;
+                        shim = { get_name: () => `${action}-to-workspace-${Math.max(1, n - 1)}` };
+                    }
+                    if (shim)
+                        return origShowWorkspaceSwitcher.call(this, display, window, event, shim);
+                }
+            } catch (_e) {}
+            return origShowWorkspaceSwitcher.call(this, display, window, event, binding);
+        };
         const origUpdateVisibility =
             WorkspacesViewModule.WorkspacesView.prototype._updateVisibility;
         const wrappedUpdateVisibility = function () {
@@ -4841,11 +4868,13 @@ export default class TilingWMExtension extends Extension {
             }
         };
         Meta.Workspace.prototype.get_neighbor = wrappedGetNeighbor;
+        Main.wm._showWorkspaceSwitcher = wrappedShowWorkspaceSwitcher;
         WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = wrappedUpdateVisibility;
         MonitorWorkspaceSwitcherPopup.prototype.redisplay = wrappedRedisplay;
         WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = wrappedAddThumbnails;
         this._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
+            origShowWorkspaceSwitcher, wrappedShowWorkspaceSwitcher,
             origUpdateVisibility, wrappedUpdateVisibility,
             origRedisplay, wrappedRedisplay,
             origAddThumbnails, wrappedAddThumbnails,
@@ -4880,6 +4909,8 @@ export default class TilingWMExtension extends Extension {
         try {
             if (Meta.Workspace.prototype.get_neighbor === h.wrappedGetNeighbor)
                 Meta.Workspace.prototype.get_neighbor = h.origGetNeighbor;
+            if (Main.wm._showWorkspaceSwitcher === h.wrappedShowWorkspaceSwitcher)
+                Main.wm._showWorkspaceSwitcher = h.origShowWorkspaceSwitcher;
             if (WorkspacesViewModule.WorkspacesView.prototype._updateVisibility === h.wrappedUpdateVisibility)
                 WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = h.origUpdateVisibility;
             if (MonitorWorkspaceSwitcherPopup.prototype.redisplay === h.wrappedRedisplay)
