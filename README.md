@@ -23,16 +23,31 @@ all built in.
   behind all windows as a live desktop background, on every workspace,
   click-through like a wallpaper. Terminal-agnostic (ghostty, Ptyxis, kitty…)
   and sandbox-agnostic: the app runs natively (Wayland, flatpak included),
-  parked on a hidden workspace and mirrored full-bleed behind everything —
-  inert by construction, butter-smooth in animations. For video bg apps,
-  use `mpv --panscan=1.0` so the frame fills the screen. Known cosmetic edge:
-  the parked workspace's overview slot may render as an empty card
+  reserved on a hidden parking workspace and mirrored full-bleed behind
+  everything — inert by construction, butter-smooth in animations, and fully
+  functional at login. Workspaces cycle without ever landing on the parking
+  slot, and the parking card is hidden from the overview and app switcher.
+  For video bg apps, use `mpv --panscan=1.0` so the frame fills the screen
+- **Plaid login moment**: a black "Plaid is initializing…" screen blocks input
+  until the background app and session are settled (minimum 3s), so your
+  desktop appears fully-formed — no flashes, no window shuffling
+- **Workspace pill**: the top bar's workspace indicator becomes a pill —
+  visible workspace numbers, the active workspace's app icon, and the focused
+  window's title — while the overview and app switcher stay stock GNOME
+- **Terminal settings**: all 61 Plaid settings as shell functions
+  (`plaid-<key>`, e.g. `plaid-gaps 8`), sourced automatically from `~/.bashrc`
+  on enable, plus `plaid-settings` and `plaid-settings-help`; zsh supported
+  with a manual source line
 - **Dynamic workspaces ready**: built on GNOME's dynamic-workspaces behavior:
   workspaces appear and disappear with your content, no fixed slot count
 - **Maximize respects gaps**: maximizing a window fills the work area within
   the per-edge gaps instead of flush to the edges; floating windows restore
   their exact original geometry on toggle
 - **Mouse resize/swap**, **scratchpad**, **popups**, **cursor warp**
+- **Scratchpad**: stash any window (it minimizes away) and toggle it back
+  instantly; scratched windows get a Hyprland-style yellow double border —
+  the normal gradient border plus an outer ring that follows the corner
+  radius and the active-border-width setting
 
 ## Install
 
@@ -72,7 +87,9 @@ blur, which the stock `Shell.BlurEffect` cannot do.
 - `Super+Enter` — center window
 - `Super+C` — cycle layout
 - `Super+F` — toggle fullscreen
-- `Super+BackSpace` — scratchpad add/toggle
+- `Super+Escape` — scratchpad toggle
+- `Super+Shift+Escape` — add window to scratchpad
+- `Super+Ctrl+Shift+Escape` — remove window from scratchpad
 - `Super+Shift+Return` — toggle drop-down terminal
 
 ## Development

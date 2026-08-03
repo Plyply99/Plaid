@@ -40,6 +40,10 @@ uniform float gradientMode;
 uniform float theta;
 uniform vec4 borderedAreaBounds;
 uniform float borderedAreaClipRadius;
+uniform vec4 ringColor;
+uniform float ringWidth;
+uniform vec4 ringAreaBounds;
+uniform float ringAreaClipRadius;
 uniform float opacity;
 
 float circleBounds(vec2 p, vec2 center, float clipRadius) {
@@ -107,6 +111,12 @@ const MASK_SNIPPET_CODE = `
             vec3 gradColor = mix(borderColor1.rgb, borderColor2.rgb, gradientPos(p, bounds));
             cogl_color_out = mix(cogl_color_out, vec4(gradColor, 1.0), borderAlpha * borderColor1.a);
         }
+        if (ringWidth > 0.5) {
+            float ringAreaAlpha = getPointOpacity(p, ringAreaBounds, ringAreaClipRadius);
+            float ringAlpha = clamp(borderedAreaAlpha - ringAreaAlpha, 0.0, 1.0);
+            if (ringAlpha > 0.0)
+                cogl_color_out = mix(cogl_color_out, vec4(ringColor.rgb, 1.0), ringAlpha * ringColor.a);
+        }
     }
 `;
 
@@ -128,6 +138,10 @@ const CornerMaskEffect = GObject.registerClass({
             theta: this.get_uniform_location('theta'),
             borderedAreaBounds: this.get_uniform_location('borderedAreaBounds'),
             borderedAreaClipRadius: this.get_uniform_location('borderedAreaClipRadius'),
+            ringColor: this.get_uniform_location('ringColor'),
+            ringWidth: this.get_uniform_location('ringWidth'),
+            ringAreaBounds: this.get_uniform_location('ringAreaBounds'),
+            ringAreaClipRadius: this.get_uniform_location('ringAreaClipRadius'),
             opacity: this.get_uniform_location('opacity'),
         };
     }
@@ -167,7 +181,7 @@ const CornerMaskEffect = GObject.registerClass({
         super.vfunc_paint_target(node, paintContext);
     }
 
-    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity) {
+    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor) {
         this._radius = radius;
         const loc = this._uniformLocations;
         try {
@@ -175,6 +189,7 @@ const CornerMaskEffect = GObject.registerClass({
             const w = Math.max(1, actor ? actor.width : 1);
             const h = Math.max(1, actor ? actor.height : 1);
             const inset = Math.max(0, borderWidth);
+            const rw = Math.max(0, ringWidth || 0);
             this.set_uniform_float(loc.bounds, 4, [x1, y1, x2, y2]);
             this.set_uniform_float(loc.clipRadius, 1, [radius]);
             this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
@@ -186,6 +201,10 @@ const CornerMaskEffect = GObject.registerClass({
             this.set_uniform_float(loc.gradientMode, 1, [mode]);
             this.set_uniform_float(loc.theta, 1, [theta]);
             this.set_uniform_float(loc.opacity, 1, [opacity]);
+            this.set_uniform_float(loc.ringWidth, 1, [rw]);
+            this.set_uniform_float(loc.ringColor, 4, ringColor || [0, 0, 0, 0]);
+            this.set_uniform_float(loc.ringAreaBounds, 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
+            this.set_uniform_float(loc.ringAreaClipRadius, 1, [Math.max(0, radius - inset - rw)]);
         } catch (e) {
             log(`[plaid] mask uniforms failed: ${e.message}`);
             return;
@@ -2684,7 +2703,7 @@ export default class TilingWMExtension extends Extension {
         const y2 = offsetY + actor.height + bh;
 
         if (!this._settings) {
-            effect.updateMask(x1, y1, x2, y2, radius, 0, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0);
+            effect.updateMask(x1, y1, x2, y2, radius, 0, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, [0, 0, 0, 0]);
             return;
         }
 
@@ -2728,7 +2747,20 @@ export default class TilingWMExtension extends Extension {
             ? this._settings.get_int('window-blur-opacity') / 100
             : 1;
 
-        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity);
+        const scratchWin = !!(this._scratchpadWindows && this._scratchpadWindows.has(win));
+        let ringWidth = 0;
+        let ringColor = [0, 0, 0, 0];
+        if (scratchWin && this._settings.get_boolean('borders-enabled')) {
+            ringWidth = Math.max(2, this._settings.get_int('active-border-width'));
+            const ringHex = (this._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
+            ringColor = toRgba(ringHex);
+            if (!effect._ringLogged) {
+                effect._ringLogged = true;
+                log(`[plaid] scratch ring: shader ring enabled width=${ringWidth} color=${ringHex}`);
+            }
+        }
+
+        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor);
     }
 
     _teardownMaskEffect(win, effect) {
@@ -3087,15 +3119,22 @@ export default class TilingWMExtension extends Extension {
             { key: 'dropdown-terminal', fn: () => this._toggleDropdownTerminal() },
         ];
 
+        let failures = 0;
         for (const { key, fn } of bindings) {
-            Main.wm.addKeybinding(
+            const ok = Main.wm.addKeybinding(
                 key,
                 this._settings,
                 Meta.KeyBindingFlags.NONE,
                 Shell.ActionMode.NORMAL,
                 fn
             );
+            if (!ok) {
+                failures++;
+                log(`[plaid] keybind: ${key} grab FAILED (conflict or invalid binding)`);
+            }
         }
+        if (failures > 0)
+            log(`[plaid] keybindings registered: ${bindings.length - failures}/${bindings.length} ok (${failures} failed)`);
     }
 
     _removeKeybindings() {
@@ -4179,8 +4218,9 @@ export default class TilingWMExtension extends Extension {
             const base = shell.split('/').pop() || shell;
             if (base === 'bash') {
                 const block = `\n# --- Plaid: terminal settings ---\n[ -f '${scriptPath}' ] && source '${scriptPath}'\n# --- end Plaid ---\n`;
-                this._appendToShellProfile(`${GLib.get_home_dir()}/.bashrc`, block);
-                log('[plaid] terminal settings: bash profile updated');
+                const written = this._appendToShellProfile(`${GLib.get_home_dir()}/.bashrc`, block);
+                if (written)
+                    log('[plaid] terminal settings: bash profile updated');
                 return;
             }
             if (this._plaidTerminalProfileNotified) return;
@@ -4208,14 +4248,14 @@ export default class TilingWMExtension extends Extension {
                 if (data)
                     contents = new TextDecoder().decode(data);
             }
-            if (contents.includes('# --- Plaid: terminal settings ---')) return;
-            const tmp = Gio.File.new_for_path(`${path}.plaid-tmp`);
-            tmp.replace_contents(
-                (contents + block).toUtf8().toArray(), null, false,
+            if (contents.includes('# --- Plaid: terminal settings ---')) return false;
+            f.replace_contents(
+                new TextEncoder().encode(contents + block), null, false,
                 Gio.FileCreateFlags.NONE, null);
-            tmp.move(f, Gio.FileCopyFlags.OVERWRITE, null);
+            return true;
         } catch (e) {
             log(`[plaid] terminal settings: profile write failed: ${e.message}`);
+            return false;
         }
     }
 
@@ -5292,9 +5332,20 @@ export default class TilingWMExtension extends Extension {
 
     _scratchpadAdd() {
         const win = this._getActiveWindow();
-        if (!win || this._scratchpadWindows.has(win)) return;
+        log('[plaid] scratch add: invoked');
+        if (!win) {
+            log('[plaid] scratch add: skipped (no active window)');
+            return;
+        }
+        if (this._scratchpadWindows.has(win)) {
+            log('[plaid] scratch add: skipped (already in scratchpad)');
+            return;
+        }
         const ws = win.get_workspace();
-        if (!ws) return;
+        if (!ws) {
+            log('[plaid] scratch add: skipped (no workspace)');
+            return;
+        }
         try {
             const frame = win.get_frame_rect();
             this._scratchpadWindows.set(win, {
@@ -5308,11 +5359,18 @@ export default class TilingWMExtension extends Extension {
             this._scratchpadVisible = false;
             this._retileWorkspace(ws);
             this._showPopup('Added to Scratchpad');
-        } catch (_e) {}
+            log(`[plaid] scratch add: added ${win.get_wm_class() || 'window'}`);
+        } catch (e) {
+            log(`[plaid] scratch add failed: ${e.message}`);
+        }
     }
 
     _scratchpadToggle() {
-        if (!this._scratchpadWindows || this._scratchpadWindows.size === 0) return;
+        if (!this._scratchpadWindows || this._scratchpadWindows.size === 0) {
+            log('[plaid] scratch toggle: empty scratchpad');
+            return;
+        }
+        log(`[plaid] scratch toggle: size=${this._scratchpadWindows.size}`);
         if (this._scratchpadVisible) {
             for (const win of this._scratchpadWindows.keys()) {
                 try {

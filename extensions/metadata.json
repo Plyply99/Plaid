@@ -3,7 +3,7 @@
   "name": "Plaid",
   "description": "Plaid — polished and complete tiling for GNOME: three layouts, configurable gaps, gradient borders, rounded corners, window blur, keybinds, float rules, scratchpad, mouse resize/swap, popups, and cursor warp. Self-contained — no extra extensions or downloads.",
   "shell-version": ["50"],
-  "version": 5038,
+  "version": 5039,
   "url": "",
   "settings-schema": "org.gnome.shell.extensions.plaid"
 }
