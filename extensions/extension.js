@@ -4163,8 +4163,8 @@ export default class TilingWMExtension extends Extension {
             const graphicSlot = new St.Widget({
                 x_align: Clutter.ActorAlign.CENTER,
                 y_align: Clutter.ActorAlign.CENTER,
-                width: 128,
-                height: 128,
+                width: 24,
+                height: 24,
             });
             const wordmark = new St.Label({
                 text: 'Plaid',
@@ -4444,12 +4444,31 @@ export default class TilingWMExtension extends Extension {
                     // Defer the park out of the login burst: the workspace
                     // mutation, the maximize and the clone's first paint land
                     // in the settled session. The init overlay hides the wait.
+                    // Each step is independent so a park failure can never
+                    // skip the clone.
+                    log('[plaid] background app: first-frame fired, scheduling park in 3s');
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
                         if (this._destroyed) return GLib.SOURCE_REMOVE;
-                        if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
-                        this._parkBackgroundAppOnWorkspace(win);
-                        this._startBackgroundAppParkWatch(win);
-                        this._ensureBackgroundAppClone(win);
+                        log('[plaid] background app: deferred park firing');
+                        if (win !== this._backgroundAppWin) {
+                            log('[plaid] background app: deferred park skipped (window no longer the bg app)');
+                            return GLib.SOURCE_REMOVE;
+                        }
+                        try {
+                            this._parkBackgroundAppOnWorkspace(win);
+                        } catch (e) {
+                            log(`[plaid] background app: park failed: ${e.message}`);
+                        }
+                        try {
+                            this._startBackgroundAppParkWatch(win);
+                        } catch (e) {
+                            log(`[plaid] background app: park watch failed: ${e.message}`);
+                        }
+                        try {
+                            this._ensureBackgroundAppClone(win);
+                        } catch (e) {
+                            log(`[plaid] background app: clone failed: ${e.message}`);
+                        }
                         this._requestBackgroundAppInitDismiss();
                         return GLib.SOURCE_REMOVE;
                     });
@@ -4526,22 +4545,33 @@ export default class TilingWMExtension extends Extension {
         if (!mon || mon.width === 0) return;
 
         if (!this._backgroundAppParkingWs) {
+            log('[plaid] background app: park deferred (no parking ws yet, scheduling reservation)');
             this._scheduleBackgroundAppReservation();
             return;
         }
+        const beforeIdx = this._wsIndex(ws);
+        const targetIdx = this._wsIndex(this._backgroundAppParkingWs);
         try {
             if (win.get_workspace() !== this._backgroundAppParkingWs)
                 win.change_workspace(this._backgroundAppParkingWs);
-        } catch (_e) {}
+        } catch (e) {
+            log(`[plaid] background app: park change_workspace failed: ${e.message}`);
+        }
         try {
             // Maximize for a sharp full-size clone source — mutter-enforced,
             // clients cannot refuse it (native Wayland clients may ignore
             // plain move_resize configures). The GIR signature takes no args.
             win.maximize();
-        } catch (_e) {}
+        } catch (e) {
+            log(`[plaid] background app: park maximize failed: ${e.message}`);
+        }
         try {
             win.move_resize_frame(true, mon.x, mon.y, mon.width, mon.height);
-        } catch (_e) {}
+        } catch (e) {
+            log(`[plaid] background app: park resize failed: ${e.message}`);
+        }
+        const f = win.get_frame_rect();
+        log(`[plaid] background app: parked ws=${beforeIdx}->${targetIdx} frame=(${f.x},${f.y},${f.width},${f.height})`);
     }
 
     _applyBackgroundAppHiding() {
@@ -4688,9 +4718,15 @@ export default class TilingWMExtension extends Extension {
         if (!win) return;
         if (!this._backgroundAppClone) {
             const actor = win.get_compositor_private();
-            if (!actor) return;
+            if (!actor) {
+                log('[plaid] background app: clone skipped (no compositor actor)');
+                return;
+            }
             const bg = Main.layoutManager._backgroundGroup;
-            if (!bg) return;
+            if (!bg) {
+                log('[plaid] background app: clone skipped (no background group)');
+                return;
+            }
             try {
                 this._backgroundAppClone = new Clutter.Clone({ source: actor });
                 bg.add_child(this._backgroundAppClone);
@@ -4699,6 +4735,7 @@ export default class TilingWMExtension extends Extension {
                         this._raiseBackgroundAppClone();
                     });
                 }
+                log('[plaid] background app: clone created');
             } catch (e) {
                 log(`[plaid] background app clone failed: ${e.message}`);
                 this._backgroundAppClone = null;
