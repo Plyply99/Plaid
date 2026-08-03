@@ -4473,6 +4473,16 @@ export default class TilingWMExtension extends Extension {
                         } catch (e) {
                             log(`[plaid] background app: clone failed: ${e.message}`);
                         }
+                        // Late re-raise: at login the shell's wallpaper actors
+                        // settle after the clone is created and can land above
+                        // it in the background group — re-insert on top once
+                        // the startup is fully done.
+                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+                            if (this._destroyed) return GLib.SOURCE_REMOVE;
+                            this._raiseBackgroundAppClone();
+                            log('[plaid] background app: clone re-raised after startup settle');
+                            return GLib.SOURCE_REMOVE;
+                        });
                         this._requestBackgroundAppInitDismiss();
                         return GLib.SOURCE_REMOVE;
                     });
@@ -4786,7 +4796,7 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
         try {
             const src = clone.get_source();
-            this._debugLog(`background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
+            log(`[plaid] background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
                 `source=${src ? `${Math.round(src.width)}x${Math.round(src.height)}` : 'none'}`);
         } catch (_e) {}
     }
