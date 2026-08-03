@@ -11,6 +11,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
+import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspacesView.js';
 import * as WorkspaceThumbnailModule from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -4798,6 +4799,20 @@ export default class TilingWMExtension extends Extension {
             }
             return neighbor;
         };
+        const origUpdateVisibility =
+            WorkspacesViewModule.WorkspacesView.prototype._updateVisibility;
+        const wrappedUpdateVisibility = function () {
+            origUpdateVisibility.call(this);
+            // The shell's visibility funnel re-shows every card (overview
+            // transitions, fit-mode changes); re-hide the parking card so the
+            // passive hide survives. No destroy, no reorder — pure visibility.
+            const parkingWs = self._backgroundAppParkingWs;
+            if (!parkingWs || !this._workspaces) return;
+            for (const card of this._workspaces) {
+                if (card && card.metaWorkspace === parkingWs)
+                    card.visible = false;
+            }
+        };
         const origRedisplay = MonitorWorkspaceSwitcherPopup.prototype.redisplay;
         const wrappedRedisplay = function (activeWorkspaceIndex) {
             const parkingIdx = self._backgroundAppParkingWs ?
@@ -4826,10 +4841,12 @@ export default class TilingWMExtension extends Extension {
             }
         };
         Meta.Workspace.prototype.get_neighbor = wrappedGetNeighbor;
+        WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = wrappedUpdateVisibility;
         MonitorWorkspaceSwitcherPopup.prototype.redisplay = wrappedRedisplay;
         WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = wrappedAddThumbnails;
         this._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
+            origUpdateVisibility, wrappedUpdateVisibility,
             origRedisplay, wrappedRedisplay,
             origAddThumbnails, wrappedAddThumbnails,
         };
@@ -4863,6 +4880,8 @@ export default class TilingWMExtension extends Extension {
         try {
             if (Meta.Workspace.prototype.get_neighbor === h.wrappedGetNeighbor)
                 Meta.Workspace.prototype.get_neighbor = h.origGetNeighbor;
+            if (WorkspacesViewModule.WorkspacesView.prototype._updateVisibility === h.wrappedUpdateVisibility)
+                WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = h.origUpdateVisibility;
             if (MonitorWorkspaceSwitcherPopup.prototype.redisplay === h.wrappedRedisplay)
                 MonitorWorkspaceSwitcherPopup.prototype.redisplay = h.origRedisplay;
             if (WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails === h.wrappedAddThumbnails)
