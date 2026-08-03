@@ -4272,6 +4272,10 @@ export default class TilingWMExtension extends Extension {
             }
             return GLib.SOURCE_REMOVE;
         });
+        // After a toggle/restart the reservation was cleared — reserve first so
+        // the park never races a missing parking workspace.
+        if (!this._backgroundAppParkingWs)
+            this._scheduleBackgroundAppReservation();
         this._debugLog(`background app: launching ${command}`);
         try {
             this._backgroundAppProc = Gio.Subprocess.new(
@@ -4547,8 +4551,24 @@ export default class TilingWMExtension extends Extension {
         if (!this._backgroundAppParkingWs) {
             log('[plaid] background app: park deferred (no parking ws yet, scheduling reservation)');
             this._scheduleBackgroundAppReservation();
+            // Retry until the reservation completes (bounded) — the window
+            // must never be left unparked on the user's workspace.
+            if (this._backgroundAppParkRetryCount < 6) {
+                this._backgroundAppParkRetryCount++;
+                if (this._backgroundAppParkRetryId)
+                    GLib.source_remove(this._backgroundAppParkRetryId);
+                this._backgroundAppParkRetryId =
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+                        this._backgroundAppParkRetryId = 0;
+                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        if (this._backgroundAppWin)
+                            this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
+                        return GLib.SOURCE_REMOVE;
+                    });
+            }
             return;
         }
+        this._backgroundAppParkRetryCount = 0;
         const beforeIdx = this._wsIndex(ws);
         const targetIdx = this._wsIndex(this._backgroundAppParkingWs);
         try {
@@ -4702,16 +4722,18 @@ export default class TilingWMExtension extends Extension {
             const oldParking = this._backgroundAppParkingWs;
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
+            log(`[plaid] background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
             try {
                 if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
                     this._backgroundAppWin.change_workspace(this._backgroundAppParkingWs);
             } catch (_e) {}
         }
+        // Route through the logged park so every re-park is journal-visible.
         try {
-            if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
-                this._backgroundAppWin.change_workspace(this._backgroundAppParkingWs);
-        } catch (_e) {}
+            this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
+        } catch (e) {
+            log(`[plaid] background app: reassert park failed: ${e.message}`);
+        }
     }
 
     _ensureBackgroundAppClone(win) {
@@ -4808,6 +4830,11 @@ export default class TilingWMExtension extends Extension {
         if (this._backgroundAppNWorkspacesId) {
             try { global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId); } catch (_e) {}
         this._backgroundAppNWorkspacesId = 0;
+        if (this._backgroundAppParkRetryId) {
+            GLib.source_remove(this._backgroundAppParkRetryId);
+            this._backgroundAppParkRetryId = 0;
+        }
+        this._backgroundAppParkRetryCount = 0;
         this._backgroundAppInitOverlay = null;
         this._backgroundAppInitOverlayModal = false;
         this._backgroundAppInitOverlayCapId = 0;
@@ -4815,6 +4842,8 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppInitOverlayPendingDismissId = 0;
         this._backgroundAppInitOverlayMinTime = 0;
         this._backgroundAppInitOverlayAwaiting = false;
+        this._backgroundAppParkRetryId = 0;
+        this._backgroundAppParkRetryCount = 0;
         }
         if (this._backgroundAppKeepAliveId) {
             GLib.source_remove(this._backgroundAppKeepAliveId);
