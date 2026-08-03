@@ -149,7 +149,7 @@ _PLAID_TABLE=(
     "scratchpad-toggle|as|Toggle scratchpad"
     "scratchpad-add|as|Add window to scratchpad"
     "scratchpad-remove|as|Remove window from scratchpad"
-    "scratchpad-tint|s|Scratchpad tint color"
+    "scratchpad-border-color|as|Scratchpad border color"
     "dropdown-terminal-command|s|Drop-down terminal command"
     "dropdown-terminal-height|i|Drop-down terminal height"
     "dropdown-terminal|as|Toggle drop-down terminal"

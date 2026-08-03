@@ -304,7 +304,6 @@ export default class TilingWMExtension extends Extension {
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
-        this._scratchpadTints = new Map();
         this._dropPreview = null;
 
         this._disableMutterDefaults();
@@ -468,13 +467,6 @@ export default class TilingWMExtension extends Extension {
         this._pendingWarning = null;
         this._scratchpadWindows = null;
         this._scratchpadVisible = false;
-        if (this._scratchpadTints) {
-            for (const [, tint] of this._scratchpadTints) {
-                try { tint.actor.destroy(); } catch (_e) {}
-                try { tint.win.disconnect(tint.sizeId); } catch (_e) {}
-            }
-            this._scratchpadTints = null;
-        }
         this._stopBorderAnimation();
         this._disconnectSignals();
         this._destroyFloatPickDialog();
@@ -698,10 +690,7 @@ export default class TilingWMExtension extends Extension {
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
-        this._addSignal(this._settings, this._settings.connect('changed::scratchpad-tint', () => {
-            for (const [, tint] of this._scratchpadTints)
-                this._updateScratchpadTint(tint.win);
-        }));
+        this._addSignal(this._settings, this._settings.connect('changed::scratchpad-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::single-gap-top', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::single-gap-bottom', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::single-gap-left', () => this._retileAll()));
@@ -923,7 +912,6 @@ export default class TilingWMExtension extends Extension {
         this._toggleFloatWindows.delete(win);
         this._savedRects.delete(win);
         this._scratchpadWindows.delete(win);
-        this._removeScratchpadTint(win);
         this._gappedMaxSet.delete(win);
         this._floatMaxRects.delete(win);
         this._disconnectWindowSignals(win);
@@ -2207,9 +2195,19 @@ export default class TilingWMExtension extends Extension {
         const gradient = this._settings.get_boolean('gradient-borders');
         const gradientDir = this._settings.get_string('gradient-direction');
 
-        const borderWidth = isFocused ? activeWidth : inactiveWidth;
-        const color1 = isFocused ? activeColor : inactiveColor;
-        const color2 = isFocused ? activeColor2 : inactiveColor2;
+        let borderWidth = isFocused ? activeWidth : inactiveWidth;
+        let color1 = isFocused ? activeColor : inactiveColor;
+        let color2 = isFocused ? activeColor2 : inactiveColor2;
+
+        // Scratchpad windows get a special flat border: the configured
+        // scratchpad color, hard-locked at 3px, regardless of focus.
+        if (this._scratchpadWindows && this._scratchpadWindows.has(win)) {
+            const scratchColor = (this._settings.get_strv('scratchpad-border-color') || [])[0] ||
+                '#f5c211';
+            borderWidth = 3;
+            color1 = scratchColor;
+            color2 = scratchColor;
+        }
 
         if (borderWidth === 0) return false;
 
@@ -5256,46 +5254,6 @@ export default class TilingWMExtension extends Extension {
 
     // --- Scratchpad ---
 
-    _applyScratchpadTint(win) {
-        if (!win || this._scratchpadTints.has(win)) return;
-        try {
-            const actor = win.get_compositor_private();
-            if (!actor) return;
-            const tintActor = new St.Widget({
-                reactive: false,
-                visible: true,
-            });
-            const sizeId = win.connect('size-changed', () => this._updateScratchpadTint(win));
-            const tint = { win, actor: tintActor, sizeId };
-            this._scratchpadTints.set(win, tint);
-            actor.add_child(tintActor);
-            this._updateScratchpadTint(win);
-        } catch (_e) {}
-    }
-
-    _updateScratchpadTint(win) {
-        const tint = this._scratchpadTints && this._scratchpadTints.get(win);
-        if (!tint) return;
-        try {
-            const color = this._settings.get_string('scratchpad-tint') ||
-                'rgba(32, 40, 55, 0.4)';
-            tint.actor.set_style(`background-color: ${color};`);
-            const frame = win.get_frame_rect();
-            if (frame.width > 0 && frame.height > 0) {
-                tint.actor.set_size(frame.width, frame.height);
-                tint.actor.set_position(0, 0);
-            }
-        } catch (_e) {}
-    }
-
-    _removeScratchpadTint(win) {
-        const tint = this._scratchpadTints && this._scratchpadTints.get(win);
-        if (!tint) return;
-        try { tint.actor.destroy(); } catch (_e) {}
-        try { win.disconnect(tint.sizeId); } catch (_e) {}
-        this._scratchpadTints.delete(win);
-    }
-
     _scratchpadAdd() {
         const win = this._getActiveWindow();
         if (!win || this._scratchpadWindows.has(win)) return;
@@ -5311,7 +5269,6 @@ export default class TilingWMExtension extends Extension {
             try { win.minimize(); } catch (_e) {
                 try { win.minimized = true; } catch (_e2) {}
             }
-            this._applyScratchpadTint(win);
             this._scratchpadVisible = false;
             this._retileWorkspace(ws);
             this._showPopup('Added to Scratchpad');
@@ -5373,7 +5330,6 @@ export default class TilingWMExtension extends Extension {
         const saved = this._scratchpadWindows.get(win);
         if (!saved) return;
         this._scratchpadWindows.delete(win);
-        this._removeScratchpadTint(win);
         this._toggleFloatWindows.delete(win);
         try {
             try { win.unminimize(); } catch (_e) {

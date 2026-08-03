@@ -384,10 +384,10 @@
     </key>
 
     <!-- Scratchpad -->
-    <key name="scratchpad-tint" type="s">
-      <default>'rgba(32, 40, 55, 0.4)'</default>
-      <summary>Scratchpad tint color</summary>
-      <description>Translucent overlay color applied to scratchpad windows so the scratch layer is visually distinct, e.g. rgba(32, 40, 55, 0.4)</description>
+    <key name="scratchpad-border-color" type="as">
+      <default>['#f5c211']</default>
+      <summary>Scratchpad border color</summary>
+      <description>Border color for scratchpad windows so the scratch layer is visually distinct, e.g. ['#f5c211']</description>
     </key>
 
   </schema>
