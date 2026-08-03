@@ -3962,7 +3962,7 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._backgroundAppEnabledChangedId = 0;
         }
-        this._reserveBackgroundAppWorkspace();
+        this._scheduleBackgroundAppReservation();
         this._launchBackgroundApp();
     }
 
