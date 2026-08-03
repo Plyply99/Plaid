@@ -4878,8 +4878,14 @@ export default class TilingWMExtension extends Extension {
             remapBindings.push(`move-to-workspace-${i}`);
         }
         remapBindings.push('switch-to-workspace-last', 'move-to-workspace-last');
-        for (const name of remapBindings)
-            Main.wm.setCustomKeybindingHandler(name, remapHandler);
+        try {
+            const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+            for (const name of remapBindings)
+                Main.wm.setCustomKeybindingHandler(name, modes, remapHandler);
+        } catch (e) {
+            // A keybind registration failure must never abort the reservation.
+            log(`[plaid] background app: keybind remap failed: ${e.message}`);
+        }
         this._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
             origUpdateVisibility, wrappedUpdateVisibility,
@@ -4926,10 +4932,13 @@ export default class TilingWMExtension extends Extension {
             // Restore the stock keybinding handlers (pass-through to the
             // original workspace switcher).
             if (h.remapBindings && h.origSwitcher) {
-                const pass = (display, window, event, binding) =>
-                    h.origSwitcher.call(Main.wm, display, window, event, binding);
-                for (const name of h.remapBindings)
-                    Main.wm.setCustomKeybindingHandler(name, pass);
+                try {
+                    const pass = (display, window, event, binding) =>
+                        h.origSwitcher.call(Main.wm, display, window, event, binding);
+                    const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+                    for (const name of h.remapBindings)
+                        Main.wm.setCustomKeybindingHandler(name, modes, pass);
+                } catch (_e) {}
             }
         } catch (_e) {}
         this._backgroundAppHiding = null;
