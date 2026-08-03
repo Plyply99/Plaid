@@ -4433,10 +4433,48 @@ export default class TilingWMExtension extends Extension {
         try { win.skip_pager = true; } catch (_e) {}
         try { win.unstick(); } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
-        // Clone path: park the window on a trailing parking workspace and show
-        // a full-bleed clone in the background group — input-free by
+        // Clone path: park the window on the reserved parking workspace and
+        // show a full-bleed clone in the background group — input-free by
         // construction, smooth (the parked window is never animated).
         this._debugLog('background app: clone mode (parked window + background clone)');
+        const deferredPark = () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            log('[plaid] background app: deferred park firing');
+            if (win !== this._backgroundAppWin) {
+                log('[plaid] background app: deferred park skipped (window no longer the bg app)');
+                return GLib.SOURCE_REMOVE;
+            }
+            // Defer the park out of the login burst: the workspace mutation,
+            // the maximize and the clone's first paint land in the settled
+            // session. Each step is independent so a park failure can never
+            // skip the clone.
+            try {
+                this._parkBackgroundAppOnWorkspace(win);
+            } catch (e) {
+                log(`[plaid] background app: park failed: ${e.message}`);
+            }
+            try {
+                this._startBackgroundAppParkWatch(win);
+            } catch (e) {
+                log(`[plaid] background app: park watch failed: ${e.message}`);
+            }
+            try {
+                this._ensureBackgroundAppClone(win);
+            } catch (e) {
+                log(`[plaid] background app: clone failed: ${e.message}`);
+            }
+            // Late re-raise: at login the shell's wallpaper actors settle
+            // after the clone is created and can land above it in the
+            // background group — re-insert on top once the startup is done.
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                this._raiseBackgroundAppClone();
+                log('[plaid] background app: clone re-raised after startup settle');
+                return GLib.SOURCE_REMOVE;
+            });
+            this._requestBackgroundAppInitDismiss();
+            return GLib.SOURCE_REMOVE;
+        };
         try {
             const actor = win.get_compositor_private();
             if (actor) {
@@ -4445,50 +4483,15 @@ export default class TilingWMExtension extends Extension {
                         try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
                         this._backgroundAppFirstFrameId = 0;
                     }
-                    // Defer the park out of the login burst: the workspace
-                    // mutation, the maximize and the clone's first paint land
-                    // in the settled session. The init overlay hides the wait.
-                    // Each step is independent so a park failure can never
-                    // skip the clone.
                     log('[plaid] background app: first-frame fired, scheduling park in 3s');
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
-                        if (this._destroyed) return GLib.SOURCE_REMOVE;
-                        log('[plaid] background app: deferred park firing');
-                        if (win !== this._backgroundAppWin) {
-                            log('[plaid] background app: deferred park skipped (window no longer the bg app)');
-                            return GLib.SOURCE_REMOVE;
-                        }
-                        try {
-                            this._parkBackgroundAppOnWorkspace(win);
-                        } catch (e) {
-                            log(`[plaid] background app: park failed: ${e.message}`);
-                        }
-                        try {
-                            this._startBackgroundAppParkWatch(win);
-                        } catch (e) {
-                            log(`[plaid] background app: park watch failed: ${e.message}`);
-                        }
-                        try {
-                            this._ensureBackgroundAppClone(win);
-                        } catch (e) {
-                            log(`[plaid] background app: clone failed: ${e.message}`);
-                        }
-                        // Late re-raise: at login the shell's wallpaper actors
-                        // settle after the clone is created and can land above
-                        // it in the background group — re-insert on top once
-                        // the startup is fully done.
-                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
-                            if (this._destroyed) return GLib.SOURCE_REMOVE;
-                            this._raiseBackgroundAppClone();
-                            log('[plaid] background app: clone re-raised after startup settle');
-                            return GLib.SOURCE_REMOVE;
-                        });
-                        this._requestBackgroundAppInitDismiss();
-                        return GLib.SOURCE_REMOVE;
-                    });
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, deferredPark);
                 });
             }
         } catch (_e) {}
+        // Fallback: during the login burst the window can map and paint before
+        // the claim's first-frame connect — the signal is then missed and the
+        // pipeline would never run. This timer guarantees it regardless.
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, deferredPark);
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
@@ -4779,26 +4782,34 @@ export default class TilingWMExtension extends Extension {
 
     _positionBackgroundAppClone() {
         const clone = this._backgroundAppClone;
-        if (!clone) return;
+        if (!clone) {
+            log('[plaid] background app: clone position skipped (no clone)');
+            return;
+        }
         const monitor = global.display.get_primary_monitor();
         const mon = global.display.get_monitor_geometry(monitor);
-        if (!mon || mon.width === 0) return;
-        clone.set_position(mon.x, mon.y);
-        clone.set_size(mon.width, mon.height);
-        // The same-size set_size is a no-op, so the clone never re-runs
-        // clutter_clone_allocate and its internal scale stays 1.0 (computed
-        // when the source was 0x0). Nudge the size to force a real
-        // re-allocation that recomputes the stretch from the settled source.
+        if (!mon || mon.width === 0) {
+            log('[plaid] background app: clone position skipped (monitor geometry unavailable)');
+            return;
+        }
         try {
-            clone.queue_relayout();
-            clone.set_size(mon.width + 1, mon.height + 1);
+            clone.set_position(mon.x, mon.y);
             clone.set_size(mon.width, mon.height);
-        } catch (_e) {}
-        try {
+            // The same-size set_size is a no-op, so the clone never re-runs
+            // clutter_clone_allocate and its internal scale stays 1.0 (computed
+            // when the source was 0x0). Nudge the size to force a real
+            // re-allocation that recomputes the stretch from the settled source.
+            try {
+                clone.queue_relayout();
+                clone.set_size(mon.width + 1, mon.height + 1);
+                clone.set_size(mon.width, mon.height);
+            } catch (_e) {}
             const src = clone.get_source();
             log(`[plaid] background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
                 `source=${src ? `${Math.round(src.width)}x${Math.round(src.height)}` : 'none'}`);
-        } catch (_e) {}
+        } catch (e) {
+            log(`[plaid] background app: clone position failed: ${e.message}`);
+        }
     }
 
     _refillBackgroundApp() {
