@@ -11,7 +11,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
-import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspacesView.js';
 import * as WorkspaceThumbnailModule from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -3997,9 +3996,11 @@ export default class TilingWMExtension extends Extension {
                 // a trailing parking (no reorder, canonical n-2 position).
                 const parking = global.workspace_manager.append_new_workspace(false, this._currentTime());
                 this._backgroundAppParkingWs = parking;
+                this._backgroundAppParkingFront = false;
                 log(`[plaid] background app: reserved trailing parking (index=${this._wsIndex(parking)})`);
             } else {
                 this._backgroundAppParkingWs = first;
+                this._backgroundAppParkingFront = true;
                 log('[plaid] background app: reserved ws0 parking (index=0)');
             }
             // Keep the parking alive: the shell's dynamic-workspace check
@@ -4040,26 +4041,31 @@ export default class TilingWMExtension extends Extension {
                         if (this._destroyed) return;
                         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
                             if (this._destroyed) return GLib.SOURCE_REMOVE;
-                            this._sweepParkingCard();
+                            this._hideParkingCard();
                             return GLib.SOURCE_REMOVE;
                         });
                     });
             }
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 if (this._destroyed) return GLib.SOURCE_REMOVE;
-                this._sweepParkingCard();
+                this._hideParkingCard();
                 return GLib.SOURCE_REMOVE;
             });
         } catch (e) {
         this._backgroundAppParkingWs = null;
         this._backgroundAppReservationScheduled = false;
+        this._backgroundAppParkingFront = false;
         this._backgroundAppKeepAliveId = 0;
         this._backgroundAppNWorkspacesId = 0;
             log(`[plaid] background app: reservation failed: ${e.message}`);
         }
     }
 
-    _sweepParkingCard() {
+    _hideParkingCard() {
+        // Passive hide — no splice, no destroy. The shell's overview machinery
+        // stays 100% native (index-aligned cards), so no races, no errors; the
+        // parking card simply never renders. The row keeps its slots (a
+        // leading blank) — the price of stability over surgical removal.
         const parkingWs = this._backgroundAppParkingWs;
         if (!parkingWs) return;
         try {
@@ -4068,12 +4074,9 @@ export default class TilingWMExtension extends Extension {
             if (!display || !display._workspacesViews) return;
             for (const view of display._workspacesViews) {
                 if (!view || !view._workspaces) continue;
-                for (let i = view._workspaces.length - 1; i >= 0; i--) {
-                    const card = view._workspaces[i];
-                    if (card && card.metaWorkspace === parkingWs) {
-                        view._workspaces.splice(i, 1);
-                        try { card.destroy(); } catch (_e) {}
-                    }
+                for (const card of view._workspaces) {
+                    if (card && card.metaWorkspace === parkingWs)
+                        card.visible = false;
                 }
             }
         } catch (_e) {}
@@ -4135,7 +4138,7 @@ export default class TilingWMExtension extends Extension {
         if (this._backgroundAppInitOverlay) return;
         try {
             const stage = global.stage;
-            const overlay = new St.Widget({ reactive: true, visible: true });
+            const overlay = new St.BoxLayout({ reactive: true, visible: true });
             overlay.set_style('background-color: rgba(0, 0, 0, 1);');
             overlay.set_size(stage.width, stage.height);
             overlay.set_position(0, 0);
@@ -4143,6 +4146,7 @@ export default class TilingWMExtension extends Extension {
                 text: 'Plaid is initializing…',
                 x_align: Clutter.ActorAlign.CENTER,
                 y_align: Clutter.ActorAlign.CENTER,
+                style: 'font-size: 48px; font-weight: bold;',
             });
             overlay.add_child(label);
             Main.uiGroup.add_child(overlay);
@@ -4477,7 +4481,6 @@ export default class TilingWMExtension extends Extension {
     _applyBackgroundAppHiding() {
         if (this._backgroundAppHiding || !this._backgroundAppParkingWs) return;
         const self = this;
-        const realToDisplay = (realIdx) => self._bgAppRealToDisplay(realIdx);
         const origGetNeighbor = Meta.Workspace.prototype.get_neighbor;
         const wrappedGetNeighbor = function (direction) {
             const neighbor = origGetNeighbor.call(this, direction);
@@ -4488,129 +4491,6 @@ export default class TilingWMExtension extends Extension {
                 return this;
             }
             return neighbor;
-        };
-        const origGetActiveWorkspace =
-            WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace;
-        const wrappedGetActiveWorkspace = function () {
-            const active = global.workspace_manager.get_active_workspace_index();
-            return this._workspaces[realToDisplay(active)];
-        };
-        const origScrollToActive =
-            WorkspacesViewModule.WorkspacesView.prototype._scrollToActive;
-        const wrappedScrollToActive = function () {
-            const active = realToDisplay(global.workspace_manager.get_active_workspace_index());
-            this._animating = true;
-            this._updateVisibility();
-            this._scrollAdjustment.remove_transition('value');
-            this._scrollAdjustment.ease(active, {
-                duration: 250,
-                mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-                onComplete: () => {
-                    this._animating = false;
-                    this._updateVisibility();
-                },
-            });
-        };
-        const origUpdateVisibility =
-            WorkspacesViewModule.WorkspacesView.prototype._updateVisibility;
-        const wrappedUpdateVisibility = function () {
-            const active = realToDisplay(global.workspace_manager.get_active_workspace_index());
-            const fitMode = this._fitModeAdjustment.value;
-            const singleFitMode = fitMode === WorkspacesViewModule.FitMode.SINGLE;
-            for (let w = 0; w < this._workspaces.length; w++) {
-                const workspace = this._workspaces[w];
-                if (this._animating || this._gestureActive || !singleFitMode)
-                    workspace.show();
-                else
-                    workspace.visible = Math.abs(w - active) <= 1;
-            }
-        };
-        const origOnScrollAdjustmentChanged =
-            WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged;
-        const wrappedOnScrollAdjustmentChanged = function () {
-            if (!this.has_allocation())
-                return;
-            const adj = this._scrollAdjustment;
-            const allowSwitch =
-                adj.get_transition('value') === null && !this._gestureActive;
-            const active = realToDisplay(global.workspace_manager.get_active_workspace_index());
-            let current = Math.round(adj.value);
-            if (allowSwitch && active !== current) {
-                if (!this._workspaces[current]) {
-                    current = this._workspaces.length - 1;
-                }
-                const metaWorkspace = this._workspaces[current].metaWorkspace;
-                metaWorkspace.activate(global.get_current_time());
-            }
-            this._updateWorkspacesState();
-            this.queue_relayout();
-        };
-        const origGetFirstFitAllWorkspaceBox =
-            WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox;
-        const wrappedGetFirstFitAllWorkspaceBox = function (box, spacing, vertical) {
-            // The original sizes the row from the real workspace count; with
-            // the parking hidden the display count is what the cards need.
-            const nWorkspaces = this._workspaces.length;
-            const [width, height] = box.get_size();
-            const [workspace] = this._workspaces;
-            const fitAllBox = new Clutter.ActorBox();
-            let [x1, y1] = box.get_origin();
-            if (vertical) {
-                const availableHeight = height - spacing * (nWorkspaces + 1);
-                let workspaceHeight = availableHeight / nWorkspaces;
-                const [, workspaceWidth] = workspace.get_preferred_width(workspaceHeight);
-                y1 = spacing;
-                if (workspaceWidth > width) {
-                    [, workspaceHeight] = workspace.get_preferred_height(width);
-                    y1 += Math.max((availableHeight - workspaceHeight * nWorkspaces) / 2, 0);
-                }
-                fitAllBox.set_size(width, workspaceHeight);
-            } else {
-                const availableWidth = width - spacing * (nWorkspaces + 1);
-                let workspaceWidth = availableWidth / nWorkspaces;
-                const [, workspaceHeight] = workspace.get_preferred_height(workspaceWidth);
-                x1 = spacing;
-                if (workspaceHeight > height) {
-                    [, workspaceWidth] = workspace.get_preferred_width(height);
-                    x1 += Math.max((availableWidth - workspaceWidth * nWorkspaces) / 2, 0);
-                }
-                fitAllBox.set_size(workspaceWidth, height);
-            }
-            fitAllBox.set_origin(x1, y1);
-            return fitAllBox;
-        };
-        const origGetFirstFitSingleWorkspaceBox =
-            WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox;
-        const wrappedGetFirstFitSingleWorkspaceBox = function (box, spacing, vertical) {
-            // The scroll adjustment lives in display space (the wrapped
-            // _scrollToActive writes display indices); clamp against the
-            // display count so the row never overshoots the last card.
-            const [width, height] = box.get_size();
-            const [workspace] = this._workspaces;
-            const rtl = this.text_direction === Clutter.TextDirection.RTL;
-            const adj = this._scrollAdjustment;
-            const currentWorkspace = vertical || !rtl
-                ? Math.min(adj.value, this._workspaces.length - 1)
-                : Math.min(adj.upper - adj.value - 1, this._workspaces.length - 1);
-            let [x1, y1] = box.get_origin();
-            if (vertical) {
-                const [, workspaceHeight] = workspace.get_preferred_height(width);
-                y1 += (height - workspaceHeight) / 2;
-                y1 -= currentWorkspace * (workspaceHeight + spacing);
-            } else {
-                const [, workspaceWidth] = workspace.get_preferred_width(height);
-                x1 += (width - workspaceWidth) / 2;
-                x1 -= currentWorkspace * (workspaceWidth + spacing);
-            }
-            const fitSingleBox = new Clutter.ActorBox({x1, y1});
-            if (vertical) {
-                const [, workspaceHeight] = workspace.get_preferred_height(width);
-                fitSingleBox.set_size(width, workspaceHeight);
-            } else {
-                const [, workspaceWidth] = workspace.get_preferred_width(height);
-                fitSingleBox.set_size(workspaceWidth, height);
-            }
-            return fitSingleBox;
         };
         const origRedisplay = MonitorWorkspaceSwitcherPopup.prototype.redisplay;
         const wrappedRedisplay = function (activeWorkspaceIndex) {
@@ -4640,22 +4520,10 @@ export default class TilingWMExtension extends Extension {
             }
         };
         Meta.Workspace.prototype.get_neighbor = wrappedGetNeighbor;
-        WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = wrappedGetActiveWorkspace;
-        WorkspacesViewModule.WorkspacesView.prototype._scrollToActive = wrappedScrollToActive;
-        WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = wrappedUpdateVisibility;
-        WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged = wrappedOnScrollAdjustmentChanged;
-        WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox = wrappedGetFirstFitAllWorkspaceBox;
-        WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox = wrappedGetFirstFitSingleWorkspaceBox;
         MonitorWorkspaceSwitcherPopup.prototype.redisplay = wrappedRedisplay;
         WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails = wrappedAddThumbnails;
         this._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
-            origGetActiveWorkspace, wrappedGetActiveWorkspace,
-            origScrollToActive, wrappedScrollToActive,
-            origUpdateVisibility, wrappedUpdateVisibility,
-            origOnScrollAdjustmentChanged, wrappedOnScrollAdjustmentChanged,
-            origGetFirstFitAllWorkspaceBox, wrappedGetFirstFitAllWorkspaceBox,
-            origGetFirstFitSingleWorkspaceBox, wrappedGetFirstFitSingleWorkspaceBox,
             origRedisplay, wrappedRedisplay,
             origAddThumbnails, wrappedAddThumbnails,
         };
@@ -4689,18 +4557,6 @@ export default class TilingWMExtension extends Extension {
         try {
             if (Meta.Workspace.prototype.get_neighbor === h.wrappedGetNeighbor)
                 Meta.Workspace.prototype.get_neighbor = h.origGetNeighbor;
-            if (WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace === h.wrappedGetActiveWorkspace)
-                WorkspacesViewModule.WorkspacesView.prototype.getActiveWorkspace = h.origGetActiveWorkspace;
-            if (WorkspacesViewModule.WorkspacesView.prototype._scrollToActive === h.wrappedScrollToActive)
-                WorkspacesViewModule.WorkspacesView.prototype._scrollToActive = h.origScrollToActive;
-            if (WorkspacesViewModule.WorkspacesView.prototype._updateVisibility === h.wrappedUpdateVisibility)
-                WorkspacesViewModule.WorkspacesView.prototype._updateVisibility = h.origUpdateVisibility;
-            if (WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged === h.wrappedOnScrollAdjustmentChanged)
-                WorkspacesViewModule.WorkspacesView.prototype._onScrollAdjustmentChanged = h.origOnScrollAdjustmentChanged;
-            if (WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox === h.wrappedGetFirstFitAllWorkspaceBox)
-                WorkspacesViewModule.WorkspacesView.prototype._getFirstFitAllWorkspaceBox = h.origGetFirstFitAllWorkspaceBox;
-            if (WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox === h.wrappedGetFirstFitSingleWorkspaceBox)
-                WorkspacesViewModule.WorkspacesView.prototype._getFirstFitSingleWorkspaceBox = h.origGetFirstFitSingleWorkspaceBox;
             if (MonitorWorkspaceSwitcherPopup.prototype.redisplay === h.wrappedRedisplay)
                 MonitorWorkspaceSwitcherPopup.prototype.redisplay = h.origRedisplay;
             if (WorkspaceThumbnailModule.ThumbnailsBox.prototype.addThumbnails === h.wrappedAddThumbnails)
@@ -4898,11 +4754,16 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppProc = null;
         this._restoreBackgroundAppHiding();
         try {
-            if (this._backgroundAppParkingWs &&
+            // The front-reserved ws0 is the shell's own first workspace — never
+            // remove it (only the appended trailing fallback parking is
+            // removable). The reservation survives restarts and toggles.
+            if (!this._backgroundAppParkingFront &&
+                this._backgroundAppParkingWs &&
                 this._backgroundAppParkingWs.list_windows().length === 0)
                 global.workspace_manager.remove_workspace(this._backgroundAppParkingWs, this._currentTime());
         } catch (_e) {}
         this._backgroundAppParkingWs = null;
+        this._backgroundAppParkingFront = false;
     }
 
     _closeBackgroundAppWindow(win) {
