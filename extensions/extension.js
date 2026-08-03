@@ -4199,10 +4199,14 @@ export default class TilingWMExtension extends Extension {
                 this._workspacePillUnmanagedId = 0;
             }
 
-            // Never destroy the shared icon: it lives in the numbers row at
-            // the active slot, and destroying it would leave a dangling
-            // reference that the next add_child would crash on. Destroy only
-            // the label children.
+            // The icon lives in the numbers row at the active slot. Remove it
+            // first so the rebuild can place it at the correct position —
+            // add_child on an already-parented actor is a no-op (no reorder).
+            if (this._workspacePillIcon.get_parent() === this._workspacePillNumbers)
+                this._workspacePillNumbers.remove_child(this._workspacePillIcon);
+            // Never destroy the shared icon: destroying it would leave a
+            // dangling reference that the next add_child would crash on.
+            // Destroy only the label children.
             for (const child of this._workspacePillNumbers.get_children()) {
                 if (child !== this._workspacePillIcon)
                     child.destroy();
