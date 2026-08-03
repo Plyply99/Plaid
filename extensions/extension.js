@@ -330,6 +330,8 @@ export default class TilingWMExtension extends Extension {
         this._workspacePillTitle = null;
         this._workspacePillFocusedWin = null;
         this._workspacePillTitleId = 0;
+        this._workspacePillUnmanagedId = 0;
+        this._workspacePillUpdateId = 0;
         this._initWorkspacePill();
         this._initBackgroundApp();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
@@ -4125,6 +4127,13 @@ export default class TilingWMExtension extends Extension {
             for (const child of children) {
                 if (child.constructor.name === 'WorkspaceIndicators') {
                     this._workspacePillIndicators = child;
+                    // Disarm: the dots are connected to the shared workspaces
+                    // adjustment via connectObject(..., this); release those
+                    // handlers so a detached actor can never run them.
+                    try {
+                        if (child._workspacesAdjustment && child._workspacesAdjustment.disconnectObject)
+                            child._workspacesAdjustment.disconnectObject(child);
+                    } catch (_e) {}
                     activities.remove_child(child);
                     break;
                 }
@@ -4144,15 +4153,28 @@ export default class TilingWMExtension extends Extension {
             activities.add_child(pill);
             this._workspacePill = pill;
             this._addSignal(global.display, global.display.connect('notify::focus-window',
-                () => this._updateWorkspacePill()));
+                () => this._scheduleWorkspacePillUpdate()));
             this._addSignal(global.workspace_manager, global.workspace_manager.connect(
-                'active-workspace-changed', () => this._updateWorkspacePill()));
-            this._updateWorkspacePill();
+                'active-workspace-changed', () => this._scheduleWorkspacePillUpdate()));
+            this._scheduleWorkspacePillUpdate();
             log('[plaid] workspace pill initialized');
         } catch (e) {
             log(`[plaid] workspace pill init failed: ${e.message}`);
             this._workspacePill = null;
         }
+    }
+
+    _scheduleWorkspacePillUpdate() {
+        // Never churn actors synchronously inside a signal — the compositor is
+        // mid-cycle (stacking/redraw) and a destroy/create there can segfault.
+        // Coalesce the update onto the idle loop instead.
+        if (this._destroyed || this._workspacePillUpdateId) return;
+        this._workspacePillUpdateId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._workspacePillUpdateId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._updateWorkspacePill();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _updateWorkspacePill() {
@@ -4171,8 +4193,10 @@ export default class TilingWMExtension extends Extension {
 
             if (this._workspacePillFocusedWin) {
                 try { this._workspacePillFocusedWin.disconnect(this._workspacePillTitleId); } catch (_e) {}
+                try { this._workspacePillFocusedWin.disconnect(this._workspacePillUnmanagedId); } catch (_e) {}
                 this._workspacePillFocusedWin = null;
                 this._workspacePillTitleId = 0;
+                this._workspacePillUnmanagedId = 0;
             }
 
             this._workspacePillNumbers.destroy_all_children();
@@ -4204,7 +4228,14 @@ export default class TilingWMExtension extends Extension {
                 this._workspacePillTitle.visible = true;
                 this._workspacePillFocusedWin = focused;
                 this._workspacePillTitleId =
-                    focused.connect('notify::title', () => this._updateWorkspacePill());
+                    focused.connect('notify::title', () => this._scheduleWorkspacePillUpdate());
+                this._workspacePillUnmanagedId = focused.connect('unmanaged', () => {
+                    if (this._workspacePillFocusedWin !== focused) return;
+                    try { focused.disconnect(this._workspacePillTitleId); } catch (_e) {}
+                    this._workspacePillFocusedWin = null;
+                    this._workspacePillTitleId = 0;
+                    this._workspacePillUnmanagedId = 0;
+                });
             } else {
                 this._workspacePillTitle.set_text('');
                 this._workspacePillTitle.visible = false;
@@ -4215,10 +4246,16 @@ export default class TilingWMExtension extends Extension {
     }
 
     _restoreWorkspacePill() {
+        if (this._workspacePillUpdateId) {
+            GLib.source_remove(this._workspacePillUpdateId);
+            this._workspacePillUpdateId = 0;
+        }
         if (this._workspacePillFocusedWin) {
             try { this._workspacePillFocusedWin.disconnect(this._workspacePillTitleId); } catch (_e) {}
+            try { this._workspacePillFocusedWin.disconnect(this._workspacePillUnmanagedId); } catch (_e) {}
             this._workspacePillFocusedWin = null;
             this._workspacePillTitleId = 0;
+            this._workspacePillUnmanagedId = 0;
         }
         if (this._workspacePill) {
             try { this._workspacePill.destroy(); } catch (_e) {}
