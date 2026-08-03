@@ -4524,7 +4524,7 @@ export default class TilingWMExtension extends Extension {
             const logoSetting = this._settings ? this._settings.get_string('logo') : 'all';
             const logoNames = logoSetting === 'all'
                 ? ['logo-a-tartan', 'logo-b-bsp', 'logo-b-thread', 'logo-b-weave', 'logo-c-weave']
-                : [logoSetting];
+                : [`logo-${logoSetting}`];
             const logoSize = 140 * scaleFactor;
             for (const name of logoNames) {
                 const area = this._loadInitLogo(`${this.path}/assets/${name}`, logoSize);
