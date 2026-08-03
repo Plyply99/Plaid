@@ -4199,7 +4199,14 @@ export default class TilingWMExtension extends Extension {
                 this._workspacePillUnmanagedId = 0;
             }
 
-            this._workspacePillNumbers.destroy_all_children();
+            // Never destroy the shared icon: it lives in the numbers row at
+            // the active slot, and destroying it would leave a dangling
+            // reference that the next add_child would crash on. Destroy only
+            // the label children.
+            for (const child of this._workspacePillNumbers.get_children()) {
+                if (child !== this._workspacePillIcon)
+                    child.destroy();
+            }
             for (let i = 0; i < n; i++) {
                 if (i === parkingIdx) continue;
                 if (i === active && showFocus) {
