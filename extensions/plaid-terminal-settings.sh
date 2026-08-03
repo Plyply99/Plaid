@@ -44,13 +44,21 @@ _plaid_format() {
             esac
             ;;
         as)
-            local items=() item IFS=','
-            for item in $value; do
-                items+=("'$item'")
+            # Portable split (bash + zsh): zsh does not word-split unquoted
+            # variables, and its array-read flag differs (read -ra vs -rA).
+            local items=()
+            local _v="$value"
+            if [ -n "${BASH_VERSION:-}" ]; then
+                IFS=', ' read -ra items <<< "$_v"
+            else
+                IFS=', ' read -rA items <<< "$_v"
+            fi
+            local item list
+            local _joined=''
+            for item in "${items[@]}"; do
+                [ -n "$item" ] && _joined="${_joined:+$_joined,}'$item'"
             done
-            local list
-            printf -v list '[%s]' "$(IFS=,; echo "${items[*]}")"
-            echo "$list"
+            echo "[$_joined]"
             ;;
         *) echo "$value" ;;
     esac

@@ -333,7 +333,13 @@ export default class TilingWMExtension extends Extension {
         this._workspacePillTitleId = 0;
         this._workspacePillUnmanagedId = 0;
         this._workspacePillUpdateId = 0;
+        this._plaidTerminalProfileNotified = false;
         this._initWorkspacePill();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._ensureTerminalSettingsProfile();
+            return GLib.SOURCE_REMOVE;
+        });
         this._initBackgroundApp();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
@@ -4114,6 +4120,56 @@ export default class TilingWMExtension extends Extension {
         const parkingIdx = this._backgroundAppParkingWs ?
             this._wsIndex(this._backgroundAppParkingWs) : -1;
         return realIdx > parkingIdx ? realIdx - 1 : realIdx;
+    }
+
+    _ensureTerminalSettingsProfile() {
+        // Install the terminal settings source line into the user's shell
+        // profile based on $SHELL. Bash is auto-injected; other shells get a
+        // click-to-dismiss notice with the manual instruction.
+        try {
+            const scriptPath = `${this.path}/plaid-terminal-settings.sh`;
+            const shell = (GLib.getenv('SHELL') || '').toLowerCase();
+            const base = shell.split('/').pop() || shell;
+            if (base === 'bash') {
+                const block = `\n# --- Plaid: terminal settings ---\n[ -f '${scriptPath}' ] && source '${scriptPath}'\n# --- end Plaid ---\n`;
+                this._appendToShellProfile(`${GLib.get_home_dir()}/.bashrc`, block);
+                log('[plaid] terminal settings: bash profile updated');
+                return;
+            }
+            if (this._plaidTerminalProfileNotified) return;
+            this._plaidTerminalProfileNotified = true;
+            if (base === 'zsh') {
+                this._showWarningPopup('Plaid Terminal Settings',
+                    `Add this line to ~/.zshrc:\n[ -f '${scriptPath}' ] && source '${scriptPath}'`,
+                    'Click to dismiss');
+            } else {
+                this._showWarningPopup('Plaid Terminal Settings',
+                    `Plaid's terminal settings support bash and zsh. Your shell (${base}) needs manual setup — see the README.`,
+                    'Click to dismiss');
+            }
+        } catch (e) {
+            log(`[plaid] terminal settings profile failed: ${e.message}`);
+        }
+    }
+
+    _appendToShellProfile(path, block) {
+        try {
+            const f = Gio.File.new_for_path(path);
+            let contents = '';
+            if (f.query_exists(null)) {
+                const [, data] = f.load_contents(null);
+                if (data)
+                    contents = new TextDecoder().decode(data);
+            }
+            if (contents.includes('# --- Plaid: terminal settings ---')) return;
+            const tmp = Gio.File.new_for_path(`${path}.plaid-tmp`);
+            tmp.replace_contents(
+                (contents + block).toUtf8().toArray(), null, false,
+                Gio.FileCreateFlags.NONE, null);
+            tmp.move(f, Gio.FileCopyFlags.OVERWRITE, null);
+        } catch (e) {
+            log(`[plaid] terminal settings: profile write failed: ${e.message}`);
+        }
     }
 
     _initWorkspacePill() {
