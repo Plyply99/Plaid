@@ -3983,19 +3983,33 @@ export default class TilingWMExtension extends Extension {
     }
 
     _reserveBackgroundAppWorkspace() {
-        // BGAPP is integral to Plaid: workspace 1 is always reserved for it,
-        // whether or not a background app is configured. Hiding the FIRST
-        // card leaves the overview row gapless by construction — no phantom
-        // slot, no mid-row math.
+        // BGAPP is integral to Plaid: the first real workspace (ws0 — the
+        // user's perceived "workspace 1") is always reserved for it. No
+        // reorder — the parking IS the front; hiding its card leaves the
+        // overview row gapless. The user's content lives on real ws1+,
+        // numbered 1..n via _bgAppRealToDisplay.
         if (this._destroyed || this._backgroundAppParkingWs) return;
         try {
-            const parking = global.workspace_manager.append_new_workspace(false, this._currentTime());
-            this._backgroundAppParkingWs = parking;
-            global.workspace_manager.reorder_workspace(parking, 0);
+            const first = global.workspace_manager.get_workspace_by_index(0);
+            if (!first) return;
+            if (first.list_windows().length > 0) {
+                // Rare mid-session re-enable with content on ws0: fall back to
+                // a trailing parking (no reorder, canonical n-2 position).
+                const parking = global.workspace_manager.append_new_workspace(false, this._currentTime());
+                this._backgroundAppParkingWs = parking;
+                this._debugLog(`background app: reserved trailing parking (index=${this._wsIndex(parking)})`);
+            } else {
+                this._backgroundAppParkingWs = first;
+                this._debugLog('background app: reserved ws0 parking (index=0)');
+            }
+            // Move the active off the parking onto the first content workspace.
+            try {
+                if (global.workspace_manager.get_active_workspace() === this._backgroundAppParkingWs)
+                    global.workspace_manager.append_new_workspace(true, this._currentTime());
+            } catch (_e) {}
             this._applyBackgroundAppHiding();
-            // The reorder doesn't rebuild overview cards; refresh the views so
-            // the cards are rebuilt in the new order and the sweep removes the
-            // parking card from position 0.
+            // Refresh the overview views so the parking card is removed by the
+            // sweep (armed above).
             try {
                 const controls = Main.overview._overview.controls;
                 const display = controls && controls._workspacesDisplay;
@@ -4005,10 +4019,9 @@ export default class TilingWMExtension extends Extension {
                     }
                 }
             } catch (_e) {}
-            this._debugLog(`background app: reserved ws1 parking (index=${this._wsIndex(parking)})`);
         } catch (e) {
-        this._backgroundAppParkingWs = null;
-        this._backgroundAppReservationScheduled = false;
+            this._backgroundAppParkingWs = null;
+            this._backgroundAppReservationScheduled = false;
             this._debugLog(`background app: reservation failed: ${e.message}`);
         }
     }
@@ -4638,17 +4651,23 @@ export default class TilingWMExtension extends Extension {
             this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
             return;
         }
-        // The parking lives on workspace 1 permanently; content grows on
-        // 2..n and the shell keeps the trailing empty. If it ever leaves
-        // position 0, reorder it back.
-        if (this._wsIndex(this._backgroundAppParkingWs) !== 0) {
+        const n = global.workspace_manager.get_n_workspaces();
+        const parkingIdx = this._wsIndex(this._backgroundAppParkingWs);
+        // Stable homes: the front (ws0 — the normal reservation) or the
+        // trailing n-2 (rare fallback). Nothing reorders them; if the parking
+        // ever ends up elsewhere, relocate with the old append-and-move logic.
+        if (parkingIdx !== 0 && parkingIdx !== n - 2) {
             const now = Date.now();
             if (now - (this._backgroundAppParkingLastRelocate || 0) < 1000)
                 return;
             this._backgroundAppParkingLastRelocate = now;
+            const oldParking = this._backgroundAppParkingWs;
+            this._backgroundAppParkingWs =
+                global.workspace_manager.append_new_workspace(false, this._currentTime());
+            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
             try {
-                global.workspace_manager.reorder_workspace(this._backgroundAppParkingWs, 0);
-                this._debugLog('background app: parking reordered back to ws=0');
+                if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
+                    this._backgroundAppWin.change_workspace(this._backgroundAppParkingWs);
             } catch (_e) {}
         }
         try {
