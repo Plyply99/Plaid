@@ -221,6 +221,7 @@ export default class TilingWMExtension extends Extension {
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._windowBorders = new Map();
+        this._scratchpadRings = new Map();
         this._windowMasks = new Map();
         this._windowBlurs = new Map();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
@@ -479,6 +480,7 @@ export default class TilingWMExtension extends Extension {
         this._gappedMaxSet = null;
         this._anyGrabOp = null;
         this._windowBorders = null;
+        this._scratchpadRings = null;
         try { this._removeAllMasks(); } catch (_e) {}
         this._windowMasks = null;
         try { this._removeAllBlurs(); } catch (_e) {}
@@ -2202,17 +2204,6 @@ export default class TilingWMExtension extends Extension {
         let color1 = isFocused ? activeColor : inactiveColor;
         let color2 = isFocused ? activeColor2 : inactiveColor2;
 
-        // Scratchpad windows get a special flat border: the configured
-        // scratchpad color, hard-locked at 3px, regardless of focus.
-        if (this._scratchpadWindows && this._scratchpadWindows.has(win)) {
-            const scratchColor = (this._settings.get_strv('scratchpad-border-color') || [])[0] ||
-                '#f5c211';
-            borderWidth = 3;
-            color1 = scratchColor;
-            color2 = scratchColor;
-            log(`[plaid] scratch border: yellow on ${win.get_wm_class_instance() || '?'}`);
-        }
-
         if (borderWidth === 0) return false;
 
         const buffer = win.get_buffer_rect();
@@ -2251,6 +2242,34 @@ export default class TilingWMExtension extends Extension {
         }
         actor.add_child(border);
         this._windowBorders.set(win, border);
+
+        // Scratchpad windows get a Hyprland-style outer yellow ring: the
+        // normal border stays, plus a flat ring outside it whose width
+        // follows the user's active-border-width setting.
+        if (this._scratchpadWindows && this._scratchpadWindows.has(win)) {
+            try {
+                const ringWidth = Math.max(2, activeWidth);
+                const scratchColor =
+                    (this._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
+                const ring = new St.Widget({
+                    name: 'tiling-border',
+                    x: offsetX - borderWidth - ringWidth,
+                    y: offsetY - borderWidth - ringWidth,
+                    width: frame.width + (borderWidth + ringWidth) * 2,
+                    height: frame.height + (borderWidth + ringWidth) * 2,
+                    style: `border: ${ringWidth}px solid ${scratchColor}; ` +
+                        `border-radius: ${borderRadius + borderWidth + ringWidth}px; box-sizing: border-box;`,
+                    reactive: false,
+                    visible: true,
+                });
+                actor.add_child(ring);
+                const old = this._scratchpadRings.get(win);
+                if (old) {
+                    try { old.destroy(); } catch (_e) {}
+                }
+                this._scratchpadRings.set(win, ring);
+            } catch (_e) {}
+        }
         return true;
     }
 
@@ -2527,6 +2546,12 @@ export default class TilingWMExtension extends Extension {
             try { border.destroy(); } catch (_e) {}
         }
         this._windowBorders.clear();
+        if (this._scratchpadRings) {
+            for (const ring of this._scratchpadRings.values()) {
+                try { ring.destroy(); } catch (_e) {}
+            }
+            this._scratchpadRings.clear();
+        }
     }
 
     _removeBorder(win) {
@@ -2534,6 +2559,13 @@ export default class TilingWMExtension extends Extension {
         if (border) {
             try { border.destroy(); } catch (_e) {}
             this._windowBorders.delete(win);
+        }
+        if (this._scratchpadRings) {
+            const ring = this._scratchpadRings.get(win);
+            if (ring) {
+                try { ring.destroy(); } catch (_e) {}
+                this._scratchpadRings.delete(win);
+            }
         }
         this._removeMask(win);
     }
