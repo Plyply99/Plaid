@@ -1,2 +1,3 @@
-extensions/schemas/gschemas.compiled
 dist/
+AGENTS.md
+extensions/schemas/gschemas.compiled
