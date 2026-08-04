@@ -1,5 +1,9 @@
 # Plaid — polished and complete user experience
 
+<p align="center">
+  <img src="extensions/assets/plaid-logo.svg" alt="Plaid" width="160">
+</p>
+
 Plaid is a self-contained tiling window manager for GNOME Shell. One extension,
 one directory, zero extras — tiling, borders, rounded corners, and window blur,
 all built in.

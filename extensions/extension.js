@@ -4713,16 +4713,10 @@ export default class TilingWMExtension extends Extension {
             });
             logoRow.set_style('spacing: 24px;');
             const scaleFactor = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-            const logoSetting = this._settings ? this._settings.get_string('logo') : 'all';
-            const logoNames = logoSetting === 'all'
-                ? ['logo-a-tartan', 'logo-b-bsp', 'logo-b-thread', 'logo-b-weave', 'logo-c-weave']
-                : [`logo-${logoSetting}`];
             const logoSize = 140 * scaleFactor;
-            for (const name of logoNames) {
-                const area = this._loadInitLogo(`${this.path}/assets/${name}`, logoSize);
-                if (!area) continue;
+            const area = this._loadInitLogo(`${this.path}/assets/plaid-logo`, logoSize);
+            if (area)
                 logoRow.add_child(area);
-            }
             if (logoRow.get_children().length > 0)
                 column.add_child(logoRow);
             const wordmark = new St.Label({
@@ -5875,7 +5869,7 @@ export default class TilingWMExtension extends Extension {
                         }
                         this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
                     }
-                } else {
+                } else if (layout === 'master-stack' || layout === 'centered-master-stack') {
                     const areaW = workArea.width - gap * 2;
                     const areaH = workArea.height - gap * 2;
 
@@ -5966,6 +5960,7 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
 
         const layout = this._getWorkspaceLayout(ws);
+        if (layout === 'floating') return;
         if (layout === 'dwindle') {
             const tree = this._bspGetTree(ws);
             if (!tree) return;
