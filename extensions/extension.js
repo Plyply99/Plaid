@@ -1215,6 +1215,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _deferNewWindowPlacement(s, duration, done) {
+        const fadeDuration = Math.min(duration, 80);
         const fadeIn = () => {
             if (this._destroyed) return;
             this._scheduleBorders();
@@ -1229,8 +1230,8 @@ export default class TilingWMExtension extends Extension {
             try {
                 const actor = s.win.get_compositor_private();
                 if (actor) {
-                    actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: finishFade });
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, duration + 100, finishFade);
+                    actor.ease({ opacity: 255, duration: fadeDuration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: finishFade });
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, fadeDuration + 100, finishFade);
                     return;
                 }
             } catch (_e) {}
@@ -1245,15 +1246,15 @@ export default class TilingWMExtension extends Extension {
                 }
                 s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
             } catch (_e) {}
-            if (this._verifyAnimationLanding(s, 'new')) {
+            if (this._verifyAnimationLanding(s, 'new', true)) {
                 fadeIn();
             } else if (this._landingGivenUp && this._landingGivenUp.has(s.win)) {
                 fadeIn();
             } else {
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, attempt);
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, attempt);
             }
         };
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, attempt);
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, attempt);
     }
 
     _auditWorkspaceLandings(ws) {
@@ -1310,19 +1311,22 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _verifyAnimationLanding(s, kind) {
+    _verifyAnimationLanding(s, kind, pure = false) {
         try {
             const win = s.win;
             if (!win || !win.get_compositor_private()) {
-                log(`[plaid] anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
+                if (!pure)
+                    log(`[plaid] anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
                 return false;
             }
             if (this._landingGivenUp && this._landingGivenUp.has(win)) return false;
             const f = win.get_frame_rect();
             if (Math.abs(f.x - s.targetX) > 16 || Math.abs(f.y - s.targetY) > 16 ||
                 Math.abs(f.width - s.targetW) > 16 || Math.abs(f.height - s.targetH) > 16) {
-                log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
-                this._retryLanding(win);
+                if (!pure) {
+                    log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                    this._retryLanding(win);
+                }
                 return false;
             } else {
                 if (this._landingRetries) this._landingRetries.delete(win);
