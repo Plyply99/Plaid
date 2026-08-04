@@ -131,9 +131,20 @@ bottom; fill the status table; paste the journal excerpts back.
 
 - (none yet)
 
+## Known limitations
+
+- **Multi-monitor**: tiling targets the primary monitor's work area — windows
+  on secondary monitors get pulled to the primary. Per-monitor tiling is a
+  future project (needs a second monitor to test).
+- **X11**: Plaid is Wayland-only; on an X11 session it loads inert and shows
+  a pinned critical notification ("Plaid requires Wayland").
+
 ## Test protocol
 
 1. Set config → log out/in.
 2. Run the checklist.
 3. Paste `journalctl -b -o cat | grep '\[plaid\]'` output.
 4. Fixes land as commits; the status table tracks each config.
+5. Every round ends with a journal-hygiene check: zero `[plaid]` failures,
+   no JS exceptions (shell-internal `windowManager.js` destroy-animation
+   errors are a known non-Plaid quirk).

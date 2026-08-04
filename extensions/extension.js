@@ -235,6 +235,13 @@ const CornerMaskEffect = GObject.registerClass({
 
 export default class TilingWMExtension extends Extension {
     enable() {
+        try {
+            if (Meta.is_wayland_compositor && !Meta.is_wayland_compositor()) {
+                this._notifyCritical('Plaid', 'Plaid requires Wayland — the extension is disabled on X11.');
+                log('[plaid] disabled: Wayland-only (X11 session detected)');
+                return;
+            }
+        } catch (_e) {}
         this._destroyed = false;
         this._settings = this.getSettings();
         this._ensureBlurModule();
@@ -303,6 +310,7 @@ export default class TilingWMExtension extends Extension {
         this._dropdownGeometryIds = null;
         this._backgroundAppWin = null;
         this._backgroundAppWaiter = null;
+        this._backgroundAppReleaseId = 0;
         this._backgroundAppPending = false;
         this._backgroundAppPendingId = 0;
         this._backgroundAppUnmanagedId = 0;
@@ -1352,11 +1360,13 @@ export default class TilingWMExtension extends Extension {
         if (n > 3) {
             this._landingRetries.delete(win);
             this._landingGivenUp.add(win);
+            try { this._toggleFloatWindows.add(win); } catch (_e) {}
             const ws = win.get_workspace();
             const list = ws
                 ? ws.list_windows().map(w => `${w.get_id()}:${w.get_wm_class_instance() || '?'}:min=${w.minimized}:${Math.round(w.get_frame_rect().width)}x${Math.round(w.get_frame_rect().height)}`).join(' | ')
                 : 'no ws';
-            log(`[plaid] anim: landing failed after retries for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} — tiled set: ${list}`);
+            log(`[plaid] anim: landing failed after retries for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} — floated (tiled set: ${list})`);
+            if (ws) this._retileWorkspace(ws);
             return;
         }
         this._landingRetries.set(win, n);
@@ -4324,6 +4334,57 @@ export default class TilingWMExtension extends Extension {
         this._launchBackgroundApp();
     }
 
+    _notifyCritical(title, body) {
+        try {
+            const conn = Gio.DBus.session;
+            const hints = new GLib.Variant('a{sv}', {
+                urgency: new GLib.Variant('y', 2),
+            });
+            const variant = new GLib.Variant('(susssasa{sv}i)', [
+                'org.gnome.Shell.Extensions.Plaid', 0, '',
+                title, body, [], hints, -1,
+            ]);
+            conn.call(
+                'org.freedesktop.Notifications', '/org/freedesktop/Notifications',
+                'org.freedesktop.Notifications', 'Notify',
+                variant, null, Gio.DBusCallFlags.NONE, -1, null, null);
+        } catch (e) {
+            log(`[plaid] critical notification failed: ${e.message}`);
+        }
+    }
+
+    _scheduleBackgroundAppReleaseWatch() {
+        if (this._backgroundAppReleaseId) return;
+        this._backgroundAppReleaseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 20000, () => {
+            this._backgroundAppReleaseId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (this._backgroundAppWin || !this._backgroundAppPending) return GLib.SOURCE_REMOVE;
+            this._releaseBackgroundAppReservation();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _releaseBackgroundAppReservation() {
+        if (this._destroyed || !this._backgroundAppParkingWs) return;
+        log('[plaid] background app: release reservation (no window after 20s)');
+        try {
+            if (this._backgroundAppNWorkspacesId) {
+                global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId);
+                this._backgroundAppNWorkspacesId = 0;
+            }
+        } catch (_e) {}
+        try {
+            if (this._backgroundAppKeepAliveId) {
+                GLib.source_remove(this._backgroundAppKeepAliveId);
+                this._backgroundAppKeepAliveId = 0;
+            }
+        } catch (_e) {}
+        this._backgroundAppParkingWs = null;
+        this._backgroundAppParkingFront = false;
+        try { this._restoreBackgroundAppHiding(); } catch (_e) {}
+        this._scheduleWorkspacePillUpdate();
+    }
+
     _scheduleBackgroundAppReservation() {
         // Workspace mutations during the shell's login burst hang the
         // session; defer the reservation to the first idle plus a timeout
@@ -4893,6 +4954,7 @@ export default class TilingWMExtension extends Extension {
         // the park never races a missing parking workspace.
         if (!this._backgroundAppParkingWs)
             this._scheduleBackgroundAppReservation();
+        this._scheduleBackgroundAppReleaseWatch();
         this._debugLog(`background app: launching ${command}`);
         try {
             this._backgroundAppProc = Gio.Subprocess.new(
@@ -5526,6 +5588,10 @@ export default class TilingWMExtension extends Extension {
     }
 
     _clearBackgroundApp() {
+        if (this._backgroundAppReleaseId) {
+            GLib.source_remove(this._backgroundAppReleaseId);
+            this._backgroundAppReleaseId = 0;
+        }
         if (this._backgroundAppRestartId) {
             GLib.source_remove(this._backgroundAppRestartId);
             this._backgroundAppRestartId = 0;
