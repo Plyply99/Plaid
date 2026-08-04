@@ -4393,6 +4393,7 @@ export default class TilingWMExtension extends Extension {
                 }
             } catch (_e) {}
             this._applyBackgroundAppHiding();
+            this._scheduleWorkspacePillUpdate();
             // Controlled card removal: sweep shortly after the append/activate
             // settles, and re-sweep after any shell rebuild that re-adds the
             // parking card. No interception during rebuilds — no races.
