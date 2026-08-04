@@ -11,7 +11,7 @@ Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corne
 ## Features
 
 - **Four layouts**: Dwindle (BSP), Master-stack, Centered Master-stack, and
-  Floating.
+  Floating. Per workspace layouts.
 
 
 [Plaid-layouts.webm](https://github.com/user-attachments/assets/ca001f17-9bfd-49b9-9251-152579054011)
