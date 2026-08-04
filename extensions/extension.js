@@ -4350,7 +4350,8 @@ export default class TilingWMExtension extends Extension {
         try {
             const first = global.workspace_manager.get_workspace_by_index(0);
             if (!first) return;
-            if (first.list_windows().length > 0) {
+            const hasOtherWindows = first.list_windows().some(w => w !== this._backgroundAppWin);
+            if (hasOtherWindows) {
                 // Rare mid-session re-enable with content on ws0: fall back to
                 // a trailing parking (no reorder, canonical n-2 position).
                 const parking = global.workspace_manager.append_new_workspace(false, this._currentTime());
