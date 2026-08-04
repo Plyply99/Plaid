@@ -6,15 +6,12 @@
 
 
 
-Plaid is a self-contained tiling window manager for GNOME Shell. One extension,
-one directory, zero extras — tiling, borders, rounded corners, and window blur,
-all built in.
+Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corners, window blur and plenty more.
 
 ## Features
 
 - **Four layouts**: Dwindle (BSP), Master-stack, Centered Master-stack, and
-  Floating — a workspace can go fully floating (windows keep their positions,
-  new windows open centered) while all of Plaid's visual effects stay on.
+  Floating.
 
 
 [Plaid-layouts.webm](https://github.com/user-attachments/assets/ca001f17-9bfd-49b9-9251-152579054011)
@@ -23,9 +20,9 @@ all built in.
 
 
   
-- **Configurable gaps**: window gaps plus per-edge single-window gaps.
+- **Configurable gaps**: Window gaps plus per-edge single-window gaps.
 
-- **Gradient borders**: shader-drawn, three directions, animated rotation,
+- **Gradient borders**: Shader-drawn, three directions, animated rotation,
   active/inactive colors, focus-aware.
 
 
@@ -35,7 +32,7 @@ all built in.
 
 
 
-- **Rounded corners**: window content masked to the border radius.
+- **Rounded corners**: Window content masked to the border radius.
 
 
 [Plaid-rounded-corners.webm](https://github.com/user-attachments/assets/75dfde70-7e95-473a-8df6-bec05bf7bda9)
@@ -44,8 +41,7 @@ all built in.
 
 
  
-- **Window blur**: native shell blur with natively rounded corners via the
-  bundled gnome-rounded-blur library — no downloads, no system writes.
+- **Window blur**: Native shell blur via the bundled gnome-rounded-blur library.
 
 
 [Plaid-window-blur.webm](https://github.com/user-attachments/assets/297051c7-34fd-46f8-9428-b97ab9c60ae9)
@@ -54,13 +50,13 @@ all built in.
 
 
   
-- **Keybinds**: focus movement, swaps, resizing, floats, workspaces, scratchpad,
+- **Keybinds**: Focus movement, swaps, resizing, floats, workspaces, scratchpad,
   layout cycling, and more.
 
-- **Float rules**: per-app and per-title floating.
+- **Float rules**: Per-app and per-title floating.
 
 
-- **DDT Plaid's Drop Down Terminal**: toggle a terminal (configurable command, default
+- **DDT Plaid's Drop Down Terminal**: Toggle a terminal (configurable command, default
   ghostty) that drops from the top of the work area at a configurable height,
   with full Flair and live height updates.
 
@@ -92,8 +88,8 @@ all built in.
 
 
 
-- **Workspace pill**: the top bar's workspace indicator becomes a pill —
-  visible workspace numbers, the active workspace's app icon, and the focused
+- **PWP Plaid Workspace Pill**: The top bar's workspace indicator becomes a pill —
+  visible workspace numbers, active workspace's app icon and the focused
   window's title — while the overview and app switcher stay stock GNOME.
 
 
@@ -103,7 +99,7 @@ all built in.
 
 
 
-- **Terminal settings**: all 61 Plaid settings as shell functions.
+- **PTS Plaid Terminal settings**: Plaid settings as shell functions.
 
   
 [Plaid-cli.webm](https://github.com/user-attachments/assets/51279ba5-2ac2-4d81-a694-1490e0d3f473)
@@ -159,18 +155,8 @@ blur, which the stock `Shell.BlurEffect` cannot do.
   the stock blur (frosted glass) — nothing breaks
 - **Remove**: delete the library and `~/.config/environment.d/plaid-blur.conf`
 
-## Keybinds (defaults)
 
-- `Super+H/J/K/L` — move focus left/down/up/right
-- `Super+Shift+H/J/K/L` — swap windows
-- `Super+Ctrl+H/J/K/L` — resize
-- `Super+T` — toggle Plaid (tiling + visual effects)
-- `Super+Space` — toggle float
-- `Super+Enter` — center window
-- `Super+C` — cycle layout
-- `Super+F` — toggle fullscreen
-- `Super+Escape` — scratchpad toggle
-- `Super+Shift+Escape` — add window to scratchpad
-- `Super+Ctrl+Shift+Escape` — remove window from scratchpad
-- `Super+Shift+Return` — toggle drop-down terminal
 
+
+## Plaid is built for those who Love Gnome and love a tiling workflow, with LOTS of bling.
+## Welcome, to Plaid.
