@@ -263,6 +263,9 @@ export default class TilingWMExtension extends Extension {
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
         this._queuedAnimWorkspaces = new Set();
+        this._landingRetries = new Map();
+        this._landingGivenUp = new Set();
+        this._pendingWarp = new Set();
         this._toggleFloatWindows = new Set();
         this._keyboardFocusChange = false;
         this._grabOp = null;
@@ -528,6 +531,9 @@ export default class TilingWMExtension extends Extension {
         this._floatHooks = null;
         this._newWindowSet = null;
         this._queuedAnimWorkspaces = null;
+        this._landingRetries = null;
+        this._landingGivenUp = null;
+        this._pendingWarp = null;
     }
 
     _disableMutterDefaults() {
@@ -572,7 +578,6 @@ export default class TilingWMExtension extends Extension {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
                         doRetile();
-                        this._cursorWarpDeferred(win);
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
@@ -905,6 +910,25 @@ export default class TilingWMExtension extends Extension {
         if (this._windowWorkspaces.has(win)) return;
         this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
         this._newWindowSet.add(win);
+        try {
+            if (this._settings.get_boolean('enabled') && this._getAnimationTime() > 0 &&
+                !this._isFloating(win) && this._pendingWarp) {
+                const actor = win.get_compositor_private();
+                if (actor) {
+                    actor.set_opacity(0);
+                    this._pendingWarp.add(win);
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
+                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        if (this._pendingWarp) this._pendingWarp.delete(win);
+                        try {
+                            const a = win.get_compositor_private();
+                            if (a) a.set_opacity(255);
+                        } catch (_e) {}
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            }
+        } catch (_e) {}
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
         this._windowWSIndices.set(win, this._wsIndex(ws));
@@ -1048,6 +1072,7 @@ export default class TilingWMExtension extends Extension {
             w.get_window_type() === Meta.WindowType.NORMAL &&
             !w.is_skip_taskbar() &&
             !w.minimized &&
+            w !== this._backgroundAppWin &&
             this._windowWSIndices.get(w) === this._wsIndex(workspace)
         );
     }
@@ -1143,11 +1168,104 @@ export default class TilingWMExtension extends Extension {
         this._animating = false;
         this._animTargets = null;
         this._animStates = null;
+        if (this._queuedAnimWorkspaces && this._queuedAnimWorkspaces.size > 0) {
+            const pending = [...this._queuedAnimWorkspaces];
+            this._queuedAnimWorkspaces.clear();
+            log(`[plaid] anim: cancelled, draining ${pending.length} queued retiles`);
+            for (const ws of pending) this._scheduleRetile(ws);
+        }
+    }
+
+    _deferNewWindowPlacement(s, duration, done) {
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            try {
+                if (!s.win || !s.win.get_compositor_private()) {
+                    done();
+                    return GLib.SOURCE_REMOVE;
+                }
+                s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
+            } catch (_e) {}
+            this._verifyAnimationLanding(s, 'new');
+            this._scheduleBorders();
+            let faded = false;
+            const finishFade = () => {
+                if (this._destroyed) return;
+                if (!faded) {
+                    faded = true;
+                    done();
+                }
+            };
+            try {
+                const actor = s.win.get_compositor_private();
+                if (actor) {
+                    actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: finishFade });
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, duration + 100, finishFade);
+                    return GLib.SOURCE_REMOVE;
+                }
+            } catch (_e) {}
+            finishFade();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _verifyAnimationLanding(s, kind) {
+        try {
+            const win = s.win;
+            if (!win || !win.get_compositor_private()) {
+                log(`[plaid] anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
+                return;
+            }
+            if (this._landingGivenUp && this._landingGivenUp.has(win)) return;
+            const f = win.get_frame_rect();
+            if (Math.abs(f.x - s.targetX) > 16 || Math.abs(f.y - s.targetY) > 16 ||
+                Math.abs(f.width - s.targetW) > 16 || Math.abs(f.height - s.targetH) > 16) {
+                log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                this._retryLanding(win);
+            } else {
+                if (this._landingRetries) this._landingRetries.delete(win);
+                if (this._landingGivenUp) this._landingGivenUp.delete(win);
+                if (this._pendingWarp && this._pendingWarp.has(win)) {
+                    this._pendingWarp.delete(win);
+                    this._moveCursorToWindow(win);
+                }
+            }
+        } catch (_e) {}
+    }
+
+    _retryLanding(win) {
+        if (!this._landingRetries || !this._landingGivenUp || this._destroyed || !win) return;
+        if (!win.get_compositor_private()) {
+            log(`[plaid] anim: landing retry skipped (window gone) id=${win.get_id()}`);
+            return;
+        }
+        const n = (this._landingRetries.get(win) || 0) + 1;
+        if (n > 3) {
+            this._landingRetries.delete(win);
+            this._landingGivenUp.add(win);
+            const ws = win.get_workspace();
+            const list = ws
+                ? ws.list_windows().map(w => `${w.get_id()}:${w.get_wm_class_instance() || '?'}:min=${w.minimized}:${Math.round(w.get_frame_rect().width)}x${Math.round(w.get_frame_rect().height)}`).join(' | ')
+                : 'no ws';
+            log(`[plaid] anim: landing failed after retries for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} — tiled set: ${list}`);
+            return;
+        }
+        this._landingRetries.set(win, n);
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            const ws = win.get_workspace();
+            if (ws) {
+                log(`[plaid] anim: landing retry ${n} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized}`);
+                this._retileWorkspace(ws);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _animRetile(workspace, tiledWindows) {
         if (this._animating) {
             this._queuedAnimWorkspaces.add(workspace);
+            log(`[plaid] anim: retile queued while animating (queue=${this._queuedAnimWorkspaces.size})`);
             return;
         }
 
@@ -1237,17 +1355,13 @@ export default class TilingWMExtension extends Extension {
                     for (const s of existingStates) {
                         if (!s.win.get_compositor_private()) { dec(); continue; }
                         try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
+                        this._verifyAnimationLanding(s, 'tiled');
                         dec();
                     }
-                    // Now fade in new windows
+                    // Now fade in new windows (placement + fade handled deferred)
                     for (const s of newStates) {
                         if (s.actor) {
-                            try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
-                            try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => {
-                                if (this._destroyed) return;
-                                this._moveCursorToWindow(s.win);
-                                dec();
-                            } }); } catch (_e) { dec(); }
+                            this._deferNewWindowPlacement(s, duration, dec);
                         } else {
                             dec();
                         }
@@ -1257,15 +1371,10 @@ export default class TilingWMExtension extends Extension {
                 return GLib.SOURCE_CONTINUE;
             });
         } else {
-            // Only new windows — just fade them in immediately
+            // Only new windows — fade them in after the deferred placement
             for (const s of newStates) {
                 if (s.actor) {
-                    try { s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH); } catch (_e) {}
-                    try { s.actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: () => {
-                        if (this._destroyed) return;
-                        this._moveCursorToWindow(s.win);
-                        dec();
-                    } }); } catch (_e) { dec(); }
+                    this._deferNewWindowPlacement(s, duration, dec);
                 } else {
                     dec();
                 }
@@ -1287,6 +1396,8 @@ export default class TilingWMExtension extends Extension {
         const frame = win.get_frame_rect();
         try { win.move_resize_frame(true, x, y, w, h); } catch (_e) {}
         actor.remove_all_transitions();
+        actor.set_translation(0, 0, 0);
+        actor.set_scale(1, 1);
         const scaleX = frame.width > 0 ? frame.width / w : 1;
         const scaleY = frame.height > 0 ? frame.height / h : 1;
         actor.set_pivot_point(0, 0);
@@ -2024,7 +2135,7 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
         const rect = this._singleWindowRect(workArea);
         if (!rect) return;
-        this._debugLog(`maximize: converting to gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
+        log(`[plaid] maximize: converting to gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
         try { win.unmaximize(); } catch (_e) {}
         this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
     }
@@ -2176,7 +2287,7 @@ export default class TilingWMExtension extends Extension {
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
 
-            if (blurEnabled)
+            if (blurEnabled && !(this._pendingWarp && this._pendingWarp.has(win)))
                 this._ensureWindowBlur(win, actor);
 
             if (roundedCorners && borderRadius > 0) {
@@ -2856,6 +2967,7 @@ export default class TilingWMExtension extends Extension {
     _ensureWindowBlur(win, actor) {
         if (!this._windowBlurs || !actor || !actor.add_effect_with_name) return;
         if (!this._settings || !this._settings.get_boolean('window-blur')) return;
+        if (this._pendingWarp && this._pendingWarp.has(win)) return;
 
         let blur = this._windowBlurs.get(win);
 
@@ -2969,7 +3081,7 @@ export default class TilingWMExtension extends Extension {
                     blur.corner_radius = cr;
             }
             const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-            const radius = Math.round(this._settings.get_int('window-blur-radius') * scale);
+            const radius = Math.round(Math.min(this._settings.get_int('window-blur-radius') * scale, 28));
             if (blur.radius !== radius)
                 blur.radius = radius;
             const brightness = this._settings.get_double('window-blur-brightness');
