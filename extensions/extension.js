@@ -1216,16 +1216,8 @@ export default class TilingWMExtension extends Extension {
     }
 
     _deferNewWindowPlacement(s, duration, done) {
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
-            try {
-                if (!s.win || !s.win.get_compositor_private()) {
-                    done();
-                    return GLib.SOURCE_REMOVE;
-                }
-                s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
-            } catch (_e) {}
-            this._verifyAnimationLanding(s, 'new');
+        const fadeIn = () => {
+            if (this._destroyed) return;
             this._scheduleBorders();
             let faded = false;
             const finishFade = () => {
@@ -1240,12 +1232,30 @@ export default class TilingWMExtension extends Extension {
                 if (actor) {
                     actor.ease({ opacity: 255, duration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: finishFade });
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, duration + 100, finishFade);
-                    return GLib.SOURCE_REMOVE;
+                    return;
                 }
             } catch (_e) {}
             finishFade();
-            return GLib.SOURCE_REMOVE;
-        });
+        };
+        const attempt = () => {
+            if (this._destroyed) return;
+            try {
+                if (!s.win || !s.win.get_compositor_private()) {
+                    done();
+                    return;
+                }
+                s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
+            } catch (_e) {}
+            if (this._verifyAnimationLanding(s, 'new')) {
+                fadeIn();
+            } else if (Date.now() < this._deferNewPlacementDeadline) {
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, attempt);
+            } else {
+                fadeIn();
+            }
+        };
+        this._deferNewPlacementDeadline = Date.now() + 1200;
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, attempt);
     }
 
     _auditWorkspaceLandings(ws) {
@@ -1307,14 +1317,15 @@ export default class TilingWMExtension extends Extension {
             const win = s.win;
             if (!win || !win.get_compositor_private()) {
                 log(`[plaid] anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
-                return;
+                return false;
             }
-            if (this._landingGivenUp && this._landingGivenUp.has(win)) return;
+            if (this._landingGivenUp && this._landingGivenUp.has(win)) return false;
             const f = win.get_frame_rect();
             if (Math.abs(f.x - s.targetX) > 16 || Math.abs(f.y - s.targetY) > 16 ||
                 Math.abs(f.width - s.targetW) > 16 || Math.abs(f.height - s.targetH) > 16) {
                 log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
                 this._retryLanding(win);
+                return false;
             } else {
                 if (this._landingRetries) this._landingRetries.delete(win);
                 if (this._landingGivenUp) this._landingGivenUp.delete(win);
@@ -1322,8 +1333,11 @@ export default class TilingWMExtension extends Extension {
                     this._pendingWarp.delete(win);
                     this._moveCursorToWindow(win);
                 }
+                return true;
             }
-        } catch (_e) {}
+        } catch (_e) {
+            return false;
+        }
     }
 
     _retryLanding(win) {
