@@ -26,57 +26,57 @@ bottom; fill the status table; paste the journal excerpts back.
 ## Per-config checklist
 
 ### Login moment
-- [ ] B-weave logo above "Plaid" — proportion looks right (not too large/small)
-- [ ] Wordmark + subtitle spacing and centering
-- [ ] Overlay blocks input, then clears cleanly once the desktop is ready
-- [ ] No flash of the desktop before the overlay
+- [x] B-weave logo above "Plaid" — proportion looks right (not too large/small)
+- [x] Wordmark + subtitle spacing and centering
+- [x] Overlay blocks input, then clears cleanly once the desktop is ready
+- [x] No flash of the desktop before the overlay
 
 ### Background app
-- [ ] Parked at login (journal: `reserved ws0 parking`, `parked ws=0->0`)
-- [ ] Clone full-bleed, edge to edge (journal: `clone at (0,0,W,H)`)
-- [ ] Click-through (clicks pass to windows; no pointer interaction with it)
-- [ ] Present on every workspace; workspace cycling never lands on parking
-- [ ] Toggle (disable/enable) still works without a relogin
+- [x] Parked at login (journal: `reserved ws0 parking`, `parked ws=0->0`)
+- [x] Clone full-bleed, edge to edge (journal: `clone at (0,0,W,H)`)
+- [x] Click-through (clicks pass to windows; no pointer interaction with it)
+- [x] Present on every workspace; workspace cycling never lands on parking
+- [x] Toggle (disable/enable) still works without a relogin
 
 ### Tiling
-- [ ] All four layouts (Dwindle / Master-stack / Centered Master / Floating)
+- [x] All four layouts (Dwindle / Master-stack / Centered Master / Floating)
       with 3–5 windows — gaps look right
-- [ ] Maximize respects per-edge gaps
-- [ ] Float toggle restores exact geometry
-- [ ] Mouse resize / swap
+- [x] Maximize respects per-edge gaps
+- [x] Float toggle restores exact geometry
+- [x] Mouse resize / swap
 
 ### Floating layout
-- [ ] `Super+C` cycles to Floating (popup shows "Layout: Floating")
-- [ ] New windows open centered, fade in at the slot, cursor warps to them
-- [ ] Windows keep positions — no re-tiling, no slot-snapping on resize
-- [ ] Move-focus (H/J/K/L) navigates spatially; resize grows/shrinks the
+- [x] `Super+C` cycles to Floating (popup shows "Layout: Floating")
+- [x] New windows open centered, fade in at the slot, cursor warps to them
+- [x] Windows keep positions — no re-tiling, no slot-snapping on resize
+- [x] Move-focus (H/J/K/L) navigates spatially; resize grows/shrinks the
       focused window; swap is inert
-- [ ] Switch back to a tiling layout re-tiles normally
-- [ ] All Flair (borders, rounded corners, blur) stays on
+- [x] Switch back to a tiling layout re-tiles normally
+- [x] All Flair (borders, rounded corners, blur) stays on
 
 ### Borders & corners
-- [ ] Gradient border renders (active/inactive colors), animation smooth
-- [ ] Rounded corners + mask on all windows
-- [ ] Window blur: parity with 4K look (radius/opacity — see suspects)
+- [x] Gradient border renders (active/inactive colors), animation smooth
+- [x] Rounded corners + mask on all windows
+- [x] Window blur: parity with 4K look (radius/opacity — see suspects)
 
 ### Scratchpad
-- [ ] Add (`Super+Shift+Escape`) → window minimizes, `scratch add: added`
-- [ ] Toggle (`Super+Escape`) shows/hides
-- [ ] Yellow double border (ring outside the gradient border, rounded)
+- [x] Add (`Super+Shift+Escape`) → window minimizes, `scratch add: added`
+- [x] Toggle (`Super+Escape`) shows/hides
+- [x] Yellow double border (ring outside the gradient border, rounded)
 
 ### Workspace pill
-- [ ] Numbers correct (parking never shown), app icon on active, title fits
-- [ ] No overflow in the top bar at this scale
+- [x] Numbers correct (parking never shown), app icon on active, title fits
+- [x] No overflow in the top bar at this scale
 
 ### Overview
-- [ ] Parking card hidden (workspace row + app grid)
-- [ ] Workspace switch keys (1..12, last) land on visible workspaces
+- [x] Parking card hidden (workspace row + app grid)
+- [x] Workspace switch keys (1..12, last) land on visible workspaces
 
 ### Drop-down terminal
-- [ ] Drops at ~33% height, live height updates follow the setting
+- [x] Drops at ~33% height, live height updates follow the setting
 
 ### Journal hygiene
-- [ ] `journalctl -b -o cat | grep '\[plaid\]'` — zero errors, no JS exceptions
+- [x] `journalctl -b -o cat | grep '\[plaid\]'` — zero errors, no JS exceptions
 
 ## Known suspects (eyeball specifically)
 
