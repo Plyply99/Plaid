@@ -4,6 +4,8 @@
   <img src="extensions/assets/plaid-logo.svg" alt="Plaid" width="160">
 </p>
 
+
+
 Plaid is a self-contained tiling window manager for GNOME Shell. One extension,
 one directory, zero extras — tiling, borders, rounded corners, and window blur,
 all built in.
@@ -14,7 +16,11 @@ all built in.
   Floating — a workspace can go fully floating (windows keep their positions,
   new windows open centered) while all of Plaid's visual effects stay on.
 
+
 [Plaid-layouts.webm](https://github.com/user-attachments/assets/ca001f17-9bfd-49b9-9251-152579054011)
+
+
+
 
   
 - **Configurable gaps**: window gaps plus per-edge single-window gaps.
@@ -22,18 +28,30 @@ all built in.
 - **Gradient borders**: shader-drawn, three directions, animated rotation,
   active/inactive colors, focus-aware.
 
+
 [Plaid-animated-gradient-borders.webm](https://github.com/user-attachments/assets/c703251e-84ab-4baa-8535-6d5fc05e8c4c)
+
+
+
 
 
 - **Rounded corners**: window content masked to the border radius.
 
+
 [Plaid-rounded-corners.webm](https://github.com/user-attachments/assets/75dfde70-7e95-473a-8df6-bec05bf7bda9)
+
+
+
 
  
 - **Window blur**: native shell blur with natively rounded corners via the
   bundled gnome-rounded-blur library — no downloads, no system writes.
 
+
 [Plaid-window-blur.webm](https://github.com/user-attachments/assets/297051c7-34fd-46f8-9428-b97ab9c60ae9)
+
+
+
 
   
 - **Keybinds**: focus movement, swaps, resizing, floats, workspaces, scratchpad,
@@ -46,54 +64,71 @@ all built in.
   ghostty) that drops from the top of the work area at a configurable height,
   with full Flair and live height updates.
 
+
 [Plaid-DDT.webm](https://github.com/user-attachments/assets/71d99fdc-aa8b-47d2-bbcf-e8c9ff18b856)
 
 
-- **BGAPP Plaid Background App**: pin any app — e.g. a frameless terminal running cava —
-  behind all windows as a live desktop background, on every workspace,
-  click-through like a wallpaper. Terminal-agnostic (ghostty, Ptyxis, kitty…)
-  and sandbox-agnostic: the app runs natively (Wayland, flatpak included),
-  reserved on a hidden parking workspace and mirrored full-bleed behind
-  everything — inert by construction, butter-smooth in animations, and fully
-  functional at login. Workspaces cycle without ever landing on the parking
-  slot, and the parking card is hidden from the overview and app switcher.
-  For video bg apps, use `mpv --panscan=1.0` so the frame fills the screen
+
+
+
+- **BGAPP Plaid Background App**: Run applications as non-interactive backgrounds.
+- Terminal running cava, pipes, you name it. ghostty -e cava
+- MPV for video backgrounds. mpv --loop --panscan=1.0 /yur/mum.mp4
+- Firefox with --kiosk mode. firefox --kiosk https://example.com
+
 
 [Plaid-BGAPP.webm](https://github.com/user-attachments/assets/f89533b6-8f0f-4189-acb3-2ce62a1a38a0)
 
 
-- **Plaid login moment**: a black "Plaid is initializing…" screen blocks input
-  until the background app and session are settled.
+
+
+
+- **Plaid Welcome**: Plaid does serious hokus pokus, a few moments to ready your session.
+
 
 <img width="3840" height="2160" alt="Plaid-initialize" src="https://github.com/user-attachments/assets/981d98f0-0121-4ecb-831f-d66e872b3fe2" />
+
+
+
 
 
 - **Workspace pill**: the top bar's workspace indicator becomes a pill —
   visible workspace numbers, the active workspace's app icon, and the focused
   window's title — while the overview and app switcher stay stock GNOME.
 
+
 [Plaid-PWP.webm](https://github.com/user-attachments/assets/2c5c4604-236b-43e1-8d7c-1feb413f8cee)
 
 
-- **Terminal settings**: all 61 Plaid settings as shell functions
-  (`plaid-<key>`, e.g. `plaid-gaps 8`), sourced automatically from `~/.bashrc`
-  on enable, plus `plaid-settings` and `plaid-settings-help`; zsh supported
-  with a manual source line
 
+
+
+- **Terminal settings**: all 61 Plaid settings as shell functions.
+
+  
 [Plaid-cli.webm](https://github.com/user-attachments/assets/51279ba5-2ac2-4d81-a694-1490e0d3f473)
+
+
+
 
 
 - **Dynamic workspaces ready**: built on GNOME's dynamic-workspaces behavior:
   workspaces appear and disappear with your content, no fixed slot count.
 
+
 - **Maximize respects gaps**: maximizing a window fills the work area within
   the per-edge gaps instead of flush to the edges; floating windows restore
   their exact original geometry on toggle.
 
+
 - **PSL Plaid Scratch Layer**: stash any window (it minimizes away) and toggle it back
   instantly. Scratched windows have an additional yellow border.
 
+
 [Plaid-PSL.webm](https://github.com/user-attachments/assets/dcb1c904-b165-490f-8666-98327cf29f8e)
+
+
+
 
 
 ## Install
