@@ -134,11 +134,12 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         singleEdgeRow.add_suffix(edgeGrid);
         group.add(singleEdgeRow);
 
-        const layoutNames = ['dwindle', 'master-stack', 'centered-master-stack'];
+        const layoutNames = ['dwindle', 'master-stack', 'centered-master-stack', 'floating'];
         const layoutCaptions = {
             'dwindle': _('Dwindle'),
             'master-stack': _('Master-stack'),
             'centered-master-stack': _('Centered Master-stack'),
+            'floating': _('Floating'),
         };
         const previewDrawings = new Map();
         const refreshLayoutPreviews = () => {
@@ -201,7 +202,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         const updateRatioVisibility = () => {
             const layout = settings.get_string('layout');
             dwindleRatioRow.set_visible(layout === 'dwindle');
-            masterRatioRow.set_visible(layout !== 'dwindle');
+            masterRatioRow.set_visible(layout === 'master-stack' || layout === 'centered-master-stack');
         };
         updateRatioVisibility();
         settings.connect('changed::layout', () => {
@@ -278,7 +279,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 const sh = Math.floor((H - gap * 2) / 3);
                 for (let i = 0; i < 3; i++)
                     rect(sx, y0 + i * (sh + gap), sw, sh);
-            } else {
+            } else if (layout === 'centered-master-stack') {
                 const mw = Math.floor(W * 0.4);
                 const mx = x0 + Math.floor((W - mw) / 2);
                 rect(mx, y0, mw, H);
@@ -294,6 +295,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     rect(rx, y0, rw, sh);
                     rect(rx, y0 + sh + gap, rw, H - sh - gap);
                 }
+            } else if (layout === 'floating') {
+                const cw = Math.floor(W * 0.52);
+                const ch = Math.floor(H * 0.52);
+                const step = 9;
+                rect(x0 + step * 2, y0 + step * 2, cw, ch);
+                rect(x0 + step, y0 + step, cw, ch);
+                rect(x0, y0, cw, ch);
             }
         });
 
@@ -329,7 +337,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const compatRow = new Adw.ActionRow({
             title: _('Disable other window-effect extensions'),
-            subtitle: _('Plaid handles window borders, rounded corners, and blur itself. Other window-effect extensions (Rounded Window Corners Reborn, Blur My Shell, etc.) may conflict visually.'),
+            subtitle: _('Plaid handles window borders, rounded corners, and blur itself. Other window-effect extensions may conflict visually — e.g., Rounded Window Corners Reborn, Blur My Shell, Burn-My-Windows, Compiz effects, and similar.'),
             icon_name: 'dialog-warning-symbolic',
         });
         compatGroup.add(compatRow);
