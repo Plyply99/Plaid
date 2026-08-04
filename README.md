@@ -53,10 +53,11 @@ Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corne
 - **Keybinds**: Focus movement, swaps, resizing, floats, workspaces, scratchpad,
   layout cycling, and more.
 
+
 - **Float rules**: Per-app and per-title floating.
 
 
-- **DDT Plaid's Drop Down Terminal**: Toggle a terminal (configurable command, default
+- **DDT Plaid Drop Down Terminal**: Toggle a terminal (configurable command, default
   ghostty) that drops from the top of the work area at a configurable height,
   with full Flair and live height updates.
 
@@ -112,7 +113,7 @@ Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corne
   workspaces appear and disappear with your content, no fixed slot count.
 
 
-- **Maximize respects gaps**: maximizing a window fills the work area within
+- **Maximize respects gaps**: Maximizing a window fills the work area within
   the per-edge gaps instead of flush to the edges; floating windows restore
   their exact original geometry on toggle.
 
@@ -133,12 +134,6 @@ Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corne
 gnome-extensions install plaid@plyply99.zip
 ```
 
-Log out and back in. **The bundled blur library provisions itself** — on first
-enable it writes `~/.config/environment.d/plaid-blur.conf` (home directory only,
-no privileges), so the next login activates rounded blur corners. If the library
-is ever unavailable, Plaid falls back gracefully to frosted-glass blur.
-
-
 ## The bundled blur library
 
 Plaid bundles [gnome-rounded-blur](https://github.com/kancko/gnome-rounded-blur)
@@ -146,12 +141,6 @@ Plaid bundles [gnome-rounded-blur](https://github.com/kancko/gnome-rounded-blur)
 with license and attribution. It provides natively rounded corners for the window
 blur, which the stock `Shell.BlurEffect` cannot do.
 
-- **Rebuild after GNOME updates**: `./build-blur.sh` (builds against the running
-  mutter, requires the build toolchain: `mutter-devel`, `gobject-introspection-devel`,
-  `glib2-devel`, `meson`, `ninja-build`, `gcc-c++`)
-- **Fallback**: if the library is missing or fails to load, Plaid silently uses
-  the stock blur (frosted glass) — nothing breaks
-- **Remove**: delete the library and `~/.config/environment.d/plaid-blur.conf`
 
 
 
