@@ -1162,16 +1162,7 @@ export default class TilingWMExtension extends Extension {
 
         const layout = this._getWorkspaceLayout(workspace);
         if (layout === 'floating') {
-            try {
-                const workArea = workspace.get_work_area_for_monitor(global.display.get_primary_monitor());
-                if (workArea) {
-                    for (const win of tiledWindows) {
-                        if (!this._newWindowSet.has(win)) continue;
-                        const rect = this._floatingPlacementRect(win, workArea);
-                        if (rect) this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
-                    }
-                }
-            } catch (_e) {}
+            // GNOME owns floating placement — nothing to do here.
         } else if (layout === 'dwindle')
             this._retileDwindle(workspace, tiledWindows);
         else if (layout === 'centered-master-stack')
@@ -1387,14 +1378,14 @@ export default class TilingWMExtension extends Extension {
 
         const layout = this._getWorkspaceLayout(workspace);
         if (layout === 'floating') {
+            // GNOME owns floating placement; the fade-in choreography just
+            // anchors at the window's current (GNOME-placed) position.
             try {
-                const workArea = workspace.get_work_area_for_monitor(global.display.get_primary_monitor());
-                if (workArea) {
-                    for (const win of tiledWindows) {
-                        if (!this._newWindowSet.has(win)) continue;
-                        const rect = this._floatingPlacementRect(win, workArea);
-                        if (rect) this._animTargets.set(win, rect);
-                    }
+                for (const win of tiledWindows) {
+                    if (!this._newWindowSet.has(win)) continue;
+                    const f = win.get_frame_rect();
+                    if (f.width > 0 && f.height > 0)
+                        this._animTargets.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
                 }
             } catch (_e) {}
         } else if (layout === 'dwindle')
@@ -2226,19 +2217,6 @@ export default class TilingWMExtension extends Extension {
         } catch (e) {
             log(`[plaid] _moveWindow failed: ${e.message}`);
         }
-    }
-
-    _floatingPlacementRect(win, workArea) {
-        if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
-        const f = win.get_frame_rect();
-        const w = Math.min(f.width > 0 ? f.width : 800, workArea.width);
-        const h = Math.min(f.height > 0 ? f.height : 600, workArea.height);
-        return {
-            x: Math.round(workArea.x + (workArea.width - w) / 2),
-            y: Math.round(workArea.y + (workArea.height - h) / 2),
-            w,
-            h,
-        };
     }
 
     _singleWindowRect(workArea) {
@@ -3512,7 +3490,10 @@ export default class TilingWMExtension extends Extension {
         }
         const ws = focused.get_workspace();
         if (!ws) return;
-        if (this._getWorkspaceLayout(ws) === 'floating') return;
+        if (this._getWorkspaceLayout(ws) === 'floating') {
+            this._moveFloating(focused, direction);
+            return;
+        }
 
         const windows = this._getWindowsForWorkspace(ws)
             .filter(w => !this._isFloating(w));
@@ -6366,6 +6347,10 @@ export default class TilingWMExtension extends Extension {
         if (!metaWindow || !this._settings) return;
         const ws = metaWindow.get_workspace();
         if (!ws) return;
+        if (this._getWorkspaceLayout(ws) === 'floating') {
+            this._hideDropPreview();
+            return;
+        }
 
         const [px, py] = global.get_pointer();
         const tiledWindows = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
@@ -6491,6 +6476,7 @@ export default class TilingWMExtension extends Extension {
 
     _repositionWindow(window, ws) {
         if (!window || !ws || !this._settings) return;
+        if (this._getWorkspaceLayout(ws) === 'floating') return;
         const [px, py] = global.get_pointer();
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiled.length <= 1) return;
