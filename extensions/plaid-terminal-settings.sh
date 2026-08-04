@@ -99,7 +99,7 @@ _PLAID_TABLE=(
     "single-gap-bottom|i|Bottom gap around a single window"
     "single-gap-left|i|Left gap around a single window"
     "single-gap-right|i|Right gap around a single window"
-    "layout|s|Layout mode"
+    "layout|s|Layout mode (dwindle, master-stack, centered-master-stack, floating)",
     "dwindle-ratio|d|Dwindle split ratio"
     "master-ratio|d|Master area ratio"
     "borders-enabled|b|Show window borders"
@@ -135,7 +135,7 @@ _PLAID_TABLE=(
     "resize-shrink-height|as|Shrink window height"
     "resize-grow-height|as|Grow window height"
     "toggle-float|as|Toggle floating for focused window"
-    "toggle-tiling|as|Toggle tiling mode on/off"
+    "toggle-tiling|as|Toggle Plaid on/off (tiling + visual effects)"
     "center-window|as|Center focused window"
     "follow-focus|b|Move cursor to focused window"
     "mouse-resize|b|Enable mouse-based resize and swap"

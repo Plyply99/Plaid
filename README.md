@@ -6,7 +6,9 @@ all built in.
 
 ## Features
 
-- **Three layouts**: Dwindle (BSP), Master-stack, and Centered Master-stack
+- **Four layouts**: Dwindle (BSP), Master-stack, Centered Master-stack, and
+  Floating — a workspace can go fully floating (windows keep their positions,
+  new windows open centered) while all of Plaid's visual effects stay on
 - **Configurable gaps**: window gaps plus per-edge single-window gaps
 - **Gradient borders**: shader-drawn, three directions, animated rotation,
   active/inactive colors, focus-aware
@@ -83,7 +85,7 @@ blur, which the stock `Shell.BlurEffect` cannot do.
 - `Super+H/J/K/L` — move focus left/down/up/right
 - `Super+Shift+H/J/K/L` — swap windows
 - `Super+Ctrl+H/J/K/L` — resize
-- `Super+T` — toggle tiling
+- `Super+T` — toggle Plaid (tiling + visual effects)
 - `Super+Space` — toggle float
 - `Super+Enter` — center window
 - `Super+C` — cycle layout

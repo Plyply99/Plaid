@@ -46,7 +46,7 @@
     <key name="layout" type="s">
       <default>'dwindle'</default>
       <summary>Layout mode</summary>
-      <description>dwindle, master-stack, or centered-master-stack</description>
+      <description>dwindle, master-stack, centered-master-stack, or floating</description>
     </key>
 
     <key name="dwindle-ratio" type="d">
@@ -257,10 +257,11 @@
       <summary>Toggle floating for focused window</summary>
     </key>
 
-    <!-- Keybinding: Toggle Tiling -->
+    <!-- Keybinding: Toggle Plaid -->
     <key name="toggle-tiling" type="as">
       <default><![CDATA[['<Super>t']]]></default>
-      <summary>Toggle tiling mode on/off</summary>
+      <summary>Toggle Plaid on/off</summary>
+      <description>Master switch: disables and re-enables tiling and all visual effects (borders, rounded corners, blur)</description>
     </key>
 
     <key name="center-window" type="as">

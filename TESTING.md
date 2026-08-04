@@ -39,11 +39,20 @@ bottom; fill the status table; paste the journal excerpts back.
 - [ ] Toggle (disable/enable) still works without a relogin
 
 ### Tiling
-- [ ] All three layouts (Dwindle / Master-stack / Centered Master) with 3–5
-      windows — gaps look right
+- [ ] All four layouts (Dwindle / Master-stack / Centered Master / Floating)
+      with 3–5 windows — gaps look right
 - [ ] Maximize respects per-edge gaps
 - [ ] Float toggle restores exact geometry
 - [ ] Mouse resize / swap
+
+### Floating layout
+- [ ] `Super+C` cycles to Floating (popup shows "Layout: Floating")
+- [ ] New windows open centered, fade in at the slot, cursor warps to them
+- [ ] Windows keep positions — no re-tiling, no slot-snapping on resize
+- [ ] Move-focus (H/J/K/L) navigates spatially; resize grows/shrinks the
+      focused window; swap is inert
+- [ ] Switch back to a tiling layout re-tiles normally
+- [ ] All Flair (borders, rounded corners, blur) stays on
 
 ### Borders & corners
 - [ ] Gradient border renders (active/inactive colors), animation smooth
@@ -75,20 +84,48 @@ bottom; fill the status table; paste the journal excerpts back.
    mark is ~13% of screen height; at 1080p@1.75 it's ~22.7% — larger
    relative to the screen but consistent with UI scaling. Verdict: looks
    right, or needs a proportion-based formula.
-2. **Blur radius parity** — `window-blur-radius × scale` keeps physical
-   consistency; confirm it still looks good at scale 1.
+2. **Blur radius parity** — `window-blur-radius × scale` (capped at 28)
+   keeps physical consistency; confirm it still looks good at scale 1.
 3. **Wordmark/logo spacing** at fractional scales.
+
+## Performance findings (v50.41)
+
+### Mode-change freeze — SOLVED
+- **Symptom**: changing resolution *down* (2160p → 1440p → 1080p) with
+  windows open froze the system (hard power-down required). Up-changes
+  worked; empty-desktop worked; tiling disabled (`Super+Shift+T`) worked.
+- **Root cause**: the blur sibling size-mismatch handler removed and
+  re-created blur effects *synchronously* during the window
+  re-configuration flood of a shrinking mode change (`sW > monitorW + 64`
+  only fires on shrink — hence the asymmetry). The compositor stalled
+  before the extension's `monitors-changed` handler ever ran.
+- **Fix**: the mismatch re-attach is now deferred to an idle (per-window
+  `_reAttachPending` guard), letting mutter finish the mode change first.
+- **Signature**: `[plaid] blur: sibling mismatch → deferred re-attach …`
+- **Validated**: 2160 → 1440 → 1080 and back, blur on, all smooth.
+- **Related**: the map-time placement race (dropped `move_resize_frame` on
+  freshly mapped windows) was fixed with deferred new-window placement +
+  verified landing + bounded retries (`anim: landing mismatch …` →
+  `landing retry N`); new windows now materialize in their slots, invisible
+  at the map position, with cursor warp only after verified placement.
+
+### Blur at 4K-class configs
+- Blur at rest is cheap — the earlier freezes were attach/re-sync churn,
+  not steady-state cost. Radius is capped at `min(setting × scale, 28)`.
+- Fractional scaling (1.25/1.5/1.75) renders at the integer scale
+  internally — up to 2.56× the pixels — worth keeping in mind for
+  performance expectations on 4K-class fractional configs.
 
 ## Status table
 
 | Config | Date | Result | Journal excerpt / notes |
 |--------|------|--------|-------------------------|
-| T1     |      |        |                         |
-| T2     |      |        |                         |
-| T3     |      |        |                         |
-| T4     |      |        |                         |
-| T5     |      |        |                         |
-| T6     |      |        |                         |
+| T1     | 08-04 | PASS   | 4K@2.0 daily config; mode-change freeze fixed (blur deferral) |
+| T2     |       |        |                         |
+| T3     |       |        |                         |
+| T4     |       |        |                         |
+| T5     |       |        |                         |
+| T6     |       |        |                         |
 
 ## Follow-ups (filled in after each config)
 

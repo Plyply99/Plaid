@@ -19,6 +19,7 @@ const LAYOUT_NAMES = {
     'dwindle': 'Dwindle',
     'master-stack': 'Master-stack',
     'centered-master-stack': 'Centered Master-stack',
+    'floating': 'Floating',
 };
 
 const BORDER_SEG_STEP = 12;
@@ -266,6 +267,7 @@ export default class TilingWMExtension extends Extension {
         this._landingRetries = new Map();
         this._landingGivenUp = new Set();
         this._pendingWarp = new Set();
+        this._lastMonitorsGeom = null;
         this._toggleFloatWindows = new Set();
         this._keyboardFocusChange = false;
         this._grabOp = null;
@@ -534,6 +536,7 @@ export default class TilingWMExtension extends Extension {
         this._landingRetries = null;
         this._landingGivenUp = null;
         this._pendingWarp = null;
+        this._lastMonitorsGeom = null;
     }
 
     _disableMutterDefaults() {
@@ -634,9 +637,32 @@ export default class TilingWMExtension extends Extension {
             }
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
+            try {
+                const mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
+                let wins = 0;
+                try {
+                    const ws = global.workspace_manager.get_active_workspace();
+                    if (ws) wins = this._getWindowsForWorkspace(ws).length;
+                } catch (_e) {}
+                const prev = this._lastMonitorsGeom
+                    ? `(${this._lastMonitorsGeom.x},${this._lastMonitorsGeom.y},${this._lastMonitorsGeom.width},${this._lastMonitorsGeom.height})`
+                    : 'none';
+                const cur = mon ? `(${mon.x},${mon.y},${mon.width},${mon.height})` : 'unavailable';
+                log(`[plaid] monitors-changed: prev=${prev} new=${cur} wins=${wins}`);
+            } catch (e) {
+                log(`[plaid] monitors-changed: entry failed: ${e.message}`);
+            }
             this._updateDropOverlaySize();
+            log('[plaid] monitors-changed: drop overlay done');
             this._refillBackgroundApp();
+            log('[plaid] monitors-changed: refill bgapp done');
             this._retileAll();
+            log('[plaid] monitors-changed: retile all done');
+            try {
+                const mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
+                if (mon) this._lastMonitorsGeom = mon;
+            } catch (_e) {}
+            log('[plaid] monitors-changed: handled');
         }));
         try {
             if (this._mutterSettings) {
@@ -1126,7 +1152,18 @@ export default class TilingWMExtension extends Extension {
         }
 
         const layout = this._getWorkspaceLayout(workspace);
-        if (layout === 'dwindle')
+        if (layout === 'floating') {
+            try {
+                const workArea = workspace.get_work_area_for_monitor(global.display.get_primary_monitor());
+                if (workArea) {
+                    for (const win of tiledWindows) {
+                        if (!this._newWindowSet.has(win)) continue;
+                        const rect = this._floatingPlacementRect(win, workArea);
+                        if (rect) this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
+                    }
+                }
+            } catch (_e) {}
+        } else if (layout === 'dwindle')
             this._retileDwindle(workspace, tiledWindows);
         else if (layout === 'centered-master-stack')
             this._retileCenteredMasterStack(workspace, tiledWindows);
@@ -1272,7 +1309,18 @@ export default class TilingWMExtension extends Extension {
         this._animTargets = new Map();
 
         const layout = this._getWorkspaceLayout(workspace);
-        if (layout === 'dwindle')
+        if (layout === 'floating') {
+            try {
+                const workArea = workspace.get_work_area_for_monitor(global.display.get_primary_monitor());
+                if (workArea) {
+                    for (const win of tiledWindows) {
+                        if (!this._newWindowSet.has(win)) continue;
+                        const rect = this._floatingPlacementRect(win, workArea);
+                        if (rect) this._animTargets.set(win, rect);
+                    }
+                }
+            } catch (_e) {}
+        } else if (layout === 'dwindle')
             this._retileDwindle(workspace, tiledWindows);
         else if (layout === 'centered-master-stack')
             this._retileCenteredMasterStack(workspace, tiledWindows);
@@ -2101,6 +2149,19 @@ export default class TilingWMExtension extends Extension {
         } catch (e) {
             log(`[plaid] _moveWindow failed: ${e.message}`);
         }
+    }
+
+    _floatingPlacementRect(win, workArea) {
+        if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
+        const f = win.get_frame_rect();
+        const w = Math.min(f.width > 0 ? f.width : 800, workArea.width);
+        const h = Math.min(f.height > 0 ? f.height : 600, workArea.height);
+        return {
+            x: Math.round(workArea.x + (workArea.width - w) / 2),
+            y: Math.round(workArea.y + (workArea.height - h) / 2),
+            w,
+            h,
+        };
     }
 
     _singleWindowRect(workArea) {
@@ -3125,8 +3186,22 @@ export default class TilingWMExtension extends Extension {
                     Math.abs(sW - aW) > aW * 0.15 + 64 ||
                     Math.abs(sH - aH) > aH * 0.15 + 64;
                 if (mismatched) {
-                    this._removeBlur(win);
-                    this._ensureWindowBlur(win, win.get_compositor_private() || source);
+                    log(`[plaid] blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
+                    if (!blur._reAttachPending) {
+                        blur._reAttachPending = true;
+                        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                            if (this._destroyed) return GLib.SOURCE_REMOVE;
+                            blur._reAttachPending = false;
+                            if (!this._windowBlurs || !this._windowBlurs.has(win)) return GLib.SOURCE_REMOVE;
+                            try {
+                                this._removeBlur(win);
+                                this._ensureWindowBlur(win, win.get_compositor_private() || source);
+                            } catch (e) {
+                                log(`[plaid] blur: deferred re-attach failed: ${e.message}`);
+                            }
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    }
                 } else {
                     global.window_group.set_child_below_sibling(sibling, source);
                 }
@@ -3360,6 +3435,7 @@ export default class TilingWMExtension extends Extension {
         }
         const ws = focused.get_workspace();
         if (!ws) return;
+        if (this._getWorkspaceLayout(ws) === 'floating') return;
 
         const windows = this._getWindowsForWorkspace(ws)
             .filter(w => !this._isFloating(w));
@@ -3402,6 +3478,10 @@ export default class TilingWMExtension extends Extension {
 
         const ws = focused.get_workspace();
         if (!ws) return;
+        if (this._getWorkspaceLayout(ws) === 'floating') {
+            this._resizeFloating(focused, axis, delta);
+            return;
+        }
 
         const tiledWindows = this._getWindowsForWorkspace(ws)
             .filter(w => !this._isFloating(w));
@@ -3524,12 +3604,12 @@ export default class TilingWMExtension extends Extension {
             });
             this._checkDynamicWorkspaces();
             if (this._settings.get_boolean('tiling-popup'))
-                this._showPopup('Tiling Enabled');
+                this._showPopup('Plaid Enabled');
         } else {
             this._removeAllBorders();
             this._restoreSavedPositions();
             if (this._settings.get_boolean('tiling-popup'))
-                this._showPopup('Tiling Disabled');
+                this._showPopup('Plaid Disabled');
         }
     }
 
@@ -3588,7 +3668,7 @@ export default class TilingWMExtension extends Extension {
 
 
     _cycleLayout() {
-        const layouts = ['dwindle', 'master-stack', 'centered-master-stack'];
+        const layouts = ['dwindle', 'master-stack', 'centered-master-stack', 'floating'];
         const ws = global.workspace_manager.get_active_workspace();
         if (!ws) return;
         const current = this._getWorkspaceLayout(ws);
@@ -5904,6 +5984,7 @@ export default class TilingWMExtension extends Extension {
 
     _windowSlotRect(win, ws, layout, workArea, gap) {
         if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
+        if (layout === 'floating') return null;
         const areaX = workArea.x + gap;
         const areaY = workArea.y + gap;
         const areaW = workArea.width - gap * 2;
@@ -6056,6 +6137,7 @@ export default class TilingWMExtension extends Extension {
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
         if (!workArea || workArea.width === 0) return;
         const layout = this._getWorkspaceLayout(ws);
+        if (layout === 'floating') return;
         const slot = this._windowSlotRect(win, ws, layout, workArea, gap);
         if (!slot) return;
         const f = win.get_frame_rect();
