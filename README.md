@@ -130,7 +130,7 @@ Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corne
 ## Install
 
 ```bash
-gnome-extensions install dist/plaid@plyply99.zip
+gnome-extensions install plaid@plyply99.zip
 ```
 
 Log out and back in. **The bundled blur library provisions itself** — on first
@@ -138,8 +138,6 @@ enable it writes `~/.config/environment.d/plaid-blur.conf` (home directory only,
 no privileges), so the next login activates rounded blur corners. If the library
 is ever unavailable, Plaid falls back gracefully to frosted-glass blur.
 
-Everything lives in `~/.local/share/gnome-shell/extensions/plaid@plyply99/` —
-immutable-OS-safe, no system directories touched.
 
 ## The bundled blur library
 
