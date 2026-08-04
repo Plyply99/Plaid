@@ -1248,13 +1248,12 @@ export default class TilingWMExtension extends Extension {
             } catch (_e) {}
             if (this._verifyAnimationLanding(s, 'new')) {
                 fadeIn();
-            } else if (Date.now() < this._deferNewPlacementDeadline) {
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, attempt);
-            } else {
+            } else if (this._landingGivenUp && this._landingGivenUp.has(s.win)) {
                 fadeIn();
+            } else {
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, attempt);
             }
         };
-        this._deferNewPlacementDeadline = Date.now() + 1200;
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, attempt);
     }
 
