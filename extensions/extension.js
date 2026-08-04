@@ -717,6 +717,7 @@ export default class TilingWMExtension extends Extension {
                 if (this._settings.get_boolean('workspace-popup'))
                     this._showWorkspacePopup(ws);
             } catch (_e) {}
+            try { this._auditWorkspaceLandings(ws); } catch (_e) {}
             const windows = this._getWindowsForWorkspace(ws);
             if (windows.length === 0) return;
             let target = this._lastFocusedPerWorkspace.get(ws);
@@ -1173,6 +1174,7 @@ export default class TilingWMExtension extends Extension {
         try { this._doUpdateBorders(); } catch (e) {
             log(`[plaid] _doUpdateBorders after retile failed: ${e.message}`);
         }
+        try { this._verifyRetileLandings(workspace); } catch (_e) {}
         this._raiseFloatingWindows(workspace);
         for (const win of tiledWindows)
             this._newWindowSet.delete(win);
@@ -1244,6 +1246,60 @@ export default class TilingWMExtension extends Extension {
             finishFade();
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    _auditWorkspaceLandings(ws) {
+        if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled')) return;
+        const layout = this._getWorkspaceLayout(ws);
+        if (layout === 'floating') return;
+        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+        if (tiled.length === 0) return;
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        let workArea = null;
+        try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
+        if (!workArea || workArea.width === 0) return;
+        let off = 0;
+        for (const win of tiled) {
+            if (win.minimized || win.is_fullscreen()) continue;
+            if (this._landingGivenUp && this._landingGivenUp.has(win)) continue;
+            const slot = this._windowSlotRect(win, ws, layout, workArea, gap);
+            if (!slot) continue;
+            const f = win.get_frame_rect();
+            if (Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16 ||
+                Math.abs(f.width - slot.w) > 16 || Math.abs(f.height - slot.h) > 16)
+                off++;
+        }
+        if (off > 0) {
+            log(`[plaid] audit: ws re-tiled (${off}/${tiled.length} windows off-slot)`);
+            this._scheduleRetile(ws);
+        }
+    }
+
+    _verifyRetileLandings(ws) {
+        if (this._destroyed || !this._settings) return;
+        const layout = this._getWorkspaceLayout(ws);
+        if (layout === 'floating') return;
+        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+        if (tiled.length === 0) return;
+        const gap = this._settings.get_int('gap');
+        const monitor = global.display.get_primary_monitor();
+        let workArea = null;
+        try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
+        if (!workArea || workArea.width === 0) return;
+        for (const win of tiled) {
+            if (win.minimized || win.is_fullscreen()) continue;
+            if (this._landingGivenUp && this._landingGivenUp.has(win)) continue;
+            const slot = this._windowSlotRect(win, ws, layout, workArea, gap);
+            if (!slot) continue;
+            const f = win.get_frame_rect();
+            if (Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16 ||
+                Math.abs(f.width - slot.w) > 16 || Math.abs(f.height - slot.h) > 16) {
+                log(`[plaid] retile verify: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} off-slot frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+                this._retryLanding(win);
+                return;
+            }
+        }
     }
 
     _verifyAnimationLanding(s, kind) {
@@ -6120,7 +6176,12 @@ export default class TilingWMExtension extends Extension {
     _maybeReassertSlot(win) {
         if (this._destroyed || !this._settings) return;
         if (!this._settings.get_boolean('enabled')) return;
-        if (this._grabOp || this._animating) return;
+        if (this._grabOp) return;
+        if (this._animating) {
+            const ws = win.get_workspace();
+            if (ws && this._queuedAnimWorkspaces) this._queuedAnimWorkspaces.add(ws);
+            return;
+        }
         if (!win || win.is_fullscreen() || win.minimized) return;
         if (this._isFloating(win)) return;
         if (!this._windowWorkspaces.has(win)) return;
