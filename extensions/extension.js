@@ -580,12 +580,13 @@ export default class TilingWMExtension extends Extension {
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
+                        this._markPendingWindowInvisible(win, actor);
                         doRetile();
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                        this._markPendingWindowInvisible(win, win.get_compositor_private());
                         doRetile();
-                        this._cursorWarpDeferred(win);
                         return false;
                     });
                 }
@@ -932,30 +933,37 @@ export default class TilingWMExtension extends Extension {
         return this._workspaceLayouts.get(workspace) || this._settings.get_string('layout');
     }
 
+    _markPendingWindowInvisible(win, actor) {
+        if (this._destroyed || !win || !actor) return;
+        if (!this._settings || !this._settings.get_boolean('enabled')) return;
+        if (this._getAnimationTime() <= 0) return;
+        if (this._isFloating(win)) return;
+        if (!this._pendingWarp || !this._newWindowSet) return;
+        if (!this._newWindowSet.has(win)) return;
+        try {
+            actor.set_opacity(0);
+            this._pendingWarp.add(win);
+        } catch (_e) {}
+        if (!win._plaidInvisibleTimer) {
+            win._plaidInvisibleTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
+                win._plaidInvisibleTimer = 0;
+                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                if (this._pendingWarp) this._pendingWarp.delete(win);
+                try {
+                    const a = win.get_compositor_private();
+                    if (a) a.set_opacity(255);
+                } catch (_e) {}
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+    }
+
     _addWindow(win) {
         if (!this._settings) return;
         if (this._windowWorkspaces.has(win)) return;
         this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
         this._newWindowSet.add(win);
-        try {
-            if (this._settings.get_boolean('enabled') && this._getAnimationTime() > 0 &&
-                !this._isFloating(win) && this._pendingWarp) {
-                const actor = win.get_compositor_private();
-                if (actor) {
-                    actor.set_opacity(0);
-                    this._pendingWarp.add(win);
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
-                        if (this._destroyed) return GLib.SOURCE_REMOVE;
-                        if (this._pendingWarp) this._pendingWarp.delete(win);
-                        try {
-                            const a = win.get_compositor_private();
-                            if (a) a.set_opacity(255);
-                        } catch (_e) {}
-                        return GLib.SOURCE_REMOVE;
-                    });
-                }
-            }
-        } catch (_e) {}
+        try { this._markPendingWindowInvisible(win, win.get_compositor_private()); } catch (_e) {}
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
         this._windowWSIndices.set(win, this._wsIndex(ws));
