@@ -314,6 +314,7 @@ export default class TilingWMExtension extends Extension {
         this._plaidSetupNoticeBlur = false;
         this._plaidSetupNoticeTerminal = false;
         this._setupPopupCheckId = 0;
+        this._maximizeToggleRects = new Map();
         this._backgroundAppPending = false;
         this._backgroundAppPendingId = 0;
         this._backgroundAppUnmanagedId = 0;
@@ -548,6 +549,7 @@ export default class TilingWMExtension extends Extension {
         this._landingGivenUp = null;
         this._pendingWarp = null;
         this._lastMonitorsGeom = null;
+        this._maximizeToggleRects = null;
     }
 
     _disableMutterDefaults() {
@@ -1001,6 +1003,7 @@ export default class TilingWMExtension extends Extension {
         this._windowWorkspaces.delete(win);
         this._windowWSIndices.delete(win);
         this._toggleFloatWindows.delete(win);
+        if (this._maximizeToggleRects) this._maximizeToggleRects.delete(win);
         this._savedRects.delete(win);
         this._scratchpadWindows.delete(win);
         this._gappedMaxSet.delete(win);
@@ -3673,10 +3676,22 @@ export default class TilingWMExtension extends Extension {
         const win = this._getActiveWindow();
         if (!win) return;
         try {
-            if (win.is_maximized())
+            if (win.is_maximized()) {
                 win.unmaximize();
-            else
-                win.maximize();
+                return;
+            }
+            const saved = this._maximizeToggleRects && this._maximizeToggleRects.get(win);
+            if (saved) {
+                this._maximizeToggleRects.delete(win);
+                try { win.unmaximize(); } catch (_e) {}
+                if (saved.w > 0)
+                    win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
+                return;
+            }
+            const f = win.get_frame_rect();
+            if (this._maximizeToggleRects)
+                this._maximizeToggleRects.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+            win.maximize();
         } catch (e) {
             log(`[plaid] toggle maximize failed: ${e.message}`);
         }
