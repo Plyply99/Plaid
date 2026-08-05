@@ -3080,7 +3080,7 @@ export default class TilingWMExtension extends Extension {
                             GLib.file_set_contents(confFile, content);
                             log('[plaid] blur library provisioned - relogin to activate');
                             try {
-                                Main.notify('Plaid', 'Window blur is set to frosted glass until re-log — the blur library was provisioned.');
+                                this._notifyCritical('Plaid', 'Window blur is set to frosted glass until the next boot — the blur library was provisioned.');
                             } catch (_e) {}
                         }
                     } catch (e) {
