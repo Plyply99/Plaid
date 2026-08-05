@@ -560,9 +560,11 @@ export default class TilingWMExtension extends Extension {
         this._savedMaximize = this._wmKeybindings.get_strv('maximize');
         this._savedMaximizeHoriz = this._wmKeybindings.get_strv('maximize-horizontally');
         this._savedMaximizeVert = this._wmKeybindings.get_strv('maximize-vertically');
+        this._savedToggleMaximize = this._wmKeybindings.get_strv('toggle-maximize');
         this._wmKeybindings.set_strv('maximize', []);
         this._wmKeybindings.set_strv('maximize-horizontally', []);
         this._wmKeybindings.set_strv('maximize-vertically', []);
+        this._wmKeybindings.set_strv('toggle-maximize', []);
     }
 
     _restoreMutterDefaults() {
@@ -574,6 +576,7 @@ export default class TilingWMExtension extends Extension {
             this._wmKeybindings.set_strv('maximize', this._savedMaximize);
             this._wmKeybindings.set_strv('maximize-horizontally', this._savedMaximizeHoriz);
             this._wmKeybindings.set_strv('maximize-vertically', this._savedMaximizeVert);
+            this._wmKeybindings.set_strv('toggle-maximize', this._savedToggleMaximize);
             this._wmKeybindings = null;
         }
     }
