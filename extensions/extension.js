@@ -1147,8 +1147,13 @@ export default class TilingWMExtension extends Extension {
             .filter(w => !this._isFloating(w));
         const windows = workspace.list_windows();
         for (const win of windows) {
+            if (!tiled.includes(win) && win !== this._backgroundAppWin) {
+                try { win.make_above(); } catch (_e) {}
+            }
+        }
+        for (const win of windows) {
             if (!tiled.includes(win) && win !== this._backgroundAppWin &&
-                !win.get_transient_for()) {
+                win.get_transient_for()) {
                 try { win.raise(); } catch (_e) {}
             }
         }
