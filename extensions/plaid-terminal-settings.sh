@@ -135,7 +135,8 @@ _PLAID_TABLE=(
     "resize-shrink-height|as|Shrink window height"
     "resize-grow-height|as|Grow window height"
     "toggle-float|as|Toggle floating for focused window"
-    "toggle-tiling|as|Toggle Plaid on/off (tiling + visual effects)"
+    "toggle-tiling|as|Toggle Plaid on/off (tiling + visual effects)",
+    "toggle-maximize|as|Toggle maximize (maximize, press again to restore)"
     "center-window|as|Center focused window"
     "follow-focus|b|Move cursor to focused window"
     "mouse-resize|b|Enable mouse-based resize and swap"

@@ -264,6 +264,12 @@
       <description>Master switch: disables and re-enables tiling and all visual effects (borders, rounded corners, blur)</description>
     </key>
 
+    <key name="toggle-maximize" type="as">
+      <default><![CDATA[['<Super><Shift>m']]]></default>
+      <summary>Toggle maximize</summary>
+      <description>Maximize the focused window; press again to restore its previous geometry</description>
+    </key>
+
     <key name="center-window" type="as">
       <default><![CDATA[['<Super><Shift>c']]]></default>
       <summary>Center focused window</summary>

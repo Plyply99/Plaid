@@ -311,6 +311,9 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppWin = null;
         this._backgroundAppWaiter = null;
         this._backgroundAppReleaseId = 0;
+        this._plaidSetupNoticeBlur = false;
+        this._plaidSetupNoticeTerminal = false;
+        this._setupPopupCheckId = 0;
         this._backgroundAppPending = false;
         this._backgroundAppPendingId = 0;
         this._backgroundAppUnmanagedId = 0;
@@ -3079,16 +3082,8 @@ export default class TilingWMExtension extends Extension {
                                 `LD_LIBRARY_PATH=${libDir}\n`;
                             GLib.file_set_contents(confFile, content);
                             log('[plaid] blur library provisioned - relogin to activate');
-                            // Deferred past the login overlay (3s minimum +
-                            // dismissal) so the pinned banner lands on a
-                            // visible desktop.
-                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 6000, () => {
-                                if (this._destroyed) return GLib.SOURCE_REMOVE;
-                                try {
-                                    this._notifyCritical('Plaid', 'Window blur is set to frosted glass until the next boot — the blur library was provisioned.');
-                                } catch (_e) {}
-                                return GLib.SOURCE_REMOVE;
-                            });
+                            this._plaidSetupNoticeBlur = true;
+                            this._scheduleSetupPopupCheck();
                         }
                     } catch (e) {
                         log(`[plaid] blur provision failed: ${e.message}`);
@@ -3376,6 +3371,7 @@ export default class TilingWMExtension extends Extension {
             { key: 'resize-grow-height', fn: () => this._resizeWindow('grow', 'height') },
             { key: 'toggle-float', fn: () => this._toggleFloat() },
             { key: 'toggle-tiling', fn: () => this._toggleTiling() },
+            { key: 'toggle-maximize', fn: () => this._toggleMaximize() },
             { key: 'center-window', fn: () => this._centerWindow() },
             { key: 'pick-float-window', fn: () => this._handlePickFloat() },
             { key: 'cycle-layout', fn: () => this._cycleLayout() },
@@ -3408,7 +3404,7 @@ export default class TilingWMExtension extends Extension {
             'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
-            'toggle-float', 'toggle-tiling', 'center-window', 'pick-float-window',
+            'toggle-float', 'toggle-tiling', 'toggle-maximize', 'center-window', 'pick-float-window',
             'cycle-layout', 'scratchpad-toggle', 'scratchpad-add', 'scratchpad-remove',
             'dropdown-terminal',
         ];
@@ -3669,6 +3665,19 @@ export default class TilingWMExtension extends Extension {
 
     _toggleTiling() {
         this._settings.set_boolean('enabled', !this._settings.get_boolean('enabled'));
+    }
+
+    _toggleMaximize() {
+        const win = this._getActiveWindow();
+        if (!win) return;
+        try {
+            if (win.is_maximized())
+                win.unmaximize();
+            else
+                win.maximize();
+        } catch (e) {
+            log(`[plaid] toggle maximize failed: ${e.message}`);
+        }
     }
 
     _onTilingEnabledChanged() {
@@ -4344,6 +4353,24 @@ export default class TilingWMExtension extends Extension {
         this._launchBackgroundApp();
     }
 
+    _scheduleSetupPopupCheck() {
+        if (this._setupPopupCheckId) return;
+        this._setupPopupCheckId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 6000, () => {
+            this._setupPopupCheckId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            const lines = [];
+            if (this._plaidSetupNoticeBlur)
+                lines.push('• Window blur is on frosted glass until the next boot — the blur library was provisioned.');
+            if (this._plaidSetupNoticeTerminal)
+                lines.push("• Plaid's terminal settings were added to ~/.bashrc — available in new terminals.");
+            this._plaidSetupNoticeBlur = false;
+            this._plaidSetupNoticeTerminal = false;
+            if (lines.length > 0)
+                this._showWarningPopup('Plaid setup complete. Reboot to take effect', lines.join('\n'), 'Click to dismiss');
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     _notifyCritical(title, body) {
         try {
             const conn = Gio.DBus.session;
@@ -4545,8 +4572,11 @@ export default class TilingWMExtension extends Extension {
             if (base === 'bash') {
                 const block = `\n# --- Plaid: terminal settings ---\n[ -f '${scriptPath}' ] && source '${scriptPath}'\n# --- end Plaid ---\n`;
                 const written = this._appendToShellProfile(`${GLib.get_home_dir()}/.bashrc`, block);
-                if (written)
+                if (written) {
                     log('[plaid] terminal settings: bash profile updated');
+                    this._plaidSetupNoticeTerminal = true;
+                    this._scheduleSetupPopupCheck();
+                }
                 return;
             }
             if (this._plaidTerminalProfileNotified) return;
@@ -5596,6 +5626,12 @@ export default class TilingWMExtension extends Extension {
     }
 
     _clearBackgroundApp() {
+        if (this._setupPopupCheckId) {
+            GLib.source_remove(this._setupPopupCheckId);
+            this._setupPopupCheckId = 0;
+        }
+        this._plaidSetupNoticeBlur = false;
+        this._plaidSetupNoticeTerminal = false;
         if (this._backgroundAppReleaseId) {
             GLib.source_remove(this._backgroundAppReleaseId);
             this._backgroundAppReleaseId = 0;

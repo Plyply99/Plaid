@@ -134,6 +134,8 @@ Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corne
 gnome-extensions install plaid@plyply99.zip
 ```
 
+While running, Plaid disables Gnome edge-tiling and maximize keybindings (restored when disabled).
+
 ## The bundled blur library
 
 Plaid bundles [gnome-rounded-blur](https://github.com/kancko/gnome-rounded-blur)
