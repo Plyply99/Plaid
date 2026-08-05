@@ -1149,7 +1149,7 @@ export default class TilingWMExtension extends Extension {
         for (const win of windows) {
             if (!tiled.includes(win) && win !== this._backgroundAppWin &&
                 !win.get_transient_for()) {
-                try { win.make_above(); } catch (_e) {}
+                try { win.raise(); } catch (_e) {}
             }
         }
         for (const win of tiled) {
