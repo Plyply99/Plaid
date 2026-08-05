@@ -553,18 +553,26 @@ export default class TilingWMExtension extends Extension {
     }
 
     _disableMutterDefaults() {
-        this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
-        this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
-        this._mutterSettings.set_boolean('edge-tiling', false);
-        this._wmKeybindings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
-        this._savedMaximize = this._wmKeybindings.get_strv('maximize');
-        this._savedMaximizeHoriz = this._wmKeybindings.get_strv('maximize-horizontally');
-        this._savedMaximizeVert = this._wmKeybindings.get_strv('maximize-vertically');
-        this._savedToggleMaximize = this._wmKeybindings.get_strv('toggle-maximize');
-        this._wmKeybindings.set_strv('maximize', []);
-        this._wmKeybindings.set_strv('maximize-horizontally', []);
-        this._wmKeybindings.set_strv('maximize-vertically', []);
-        this._wmKeybindings.set_strv('toggle-maximize', []);
+        try {
+            this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+            this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
+            this._mutterSettings.set_boolean('edge-tiling', false);
+            this._wmKeybindings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
+            this._savedMaximize = this._wmKeybindings.get_strv('maximize');
+            this._savedMaximizeHoriz = this._wmKeybindings.get_strv('maximize-horizontally');
+            this._savedMaximizeVert = this._wmKeybindings.get_strv('maximize-vertically');
+            this._wmKeybindings.set_strv('maximize', []);
+            this._wmKeybindings.set_strv('maximize-horizontally', []);
+            this._wmKeybindings.set_strv('maximize-vertically', []);
+            try {
+                this._savedToggleMaximized = this._wmKeybindings.get_strv('toggle-maximized');
+                this._wmKeybindings.set_strv('toggle-maximized', []);
+            } catch (e) {
+                log(`[plaid] wm toggle-maximized key unavailable: ${e.message}`);
+            }
+        } catch (e) {
+            log(`[plaid] mutter defaults disable failed: ${e.message}`);
+        }
     }
 
     _restoreMutterDefaults() {
@@ -576,7 +584,11 @@ export default class TilingWMExtension extends Extension {
             this._wmKeybindings.set_strv('maximize', this._savedMaximize);
             this._wmKeybindings.set_strv('maximize-horizontally', this._savedMaximizeHoriz);
             this._wmKeybindings.set_strv('maximize-vertically', this._savedMaximizeVert);
-            this._wmKeybindings.set_strv('toggle-maximize', this._savedToggleMaximize);
+            try {
+                this._wmKeybindings.set_strv('toggle-maximized', this._savedToggleMaximized);
+            } catch (e) {
+                log(`[plaid] wm toggle-maximized restore unavailable: ${e.message}`);
+            }
             this._wmKeybindings = null;
         }
     }
