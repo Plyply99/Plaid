@@ -3078,7 +3078,10 @@ export default class TilingWMExtension extends Extension {
                                 `GI_TYPELIB_PATH=${libDir}\n` +
                                 `LD_LIBRARY_PATH=${libDir}\n`;
                             GLib.file_set_contents(confFile, content);
-                            this._debugLog('blur library provisioned - relogin to activate');
+                            log('[plaid] blur library provisioned - relogin to activate');
+                            try {
+                                Main.notify('Plaid', 'Window blur is set to frosted glass until re-log — the blur library was provisioned.');
+                            } catch (_e) {}
                         }
                     } catch (e) {
                         log(`[plaid] blur provision failed: ${e.message}`);
