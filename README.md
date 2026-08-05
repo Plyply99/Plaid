@@ -141,6 +141,19 @@ Plaid bundles [gnome-rounded-blur](https://github.com/kancko/gnome-rounded-blur)
 with license and attribution. It provides natively rounded corners for the window
 blur, which the stock `Shell.BlurEffect` cannot do.
 
+## Report bugs / contribute
+
+Plaid is in active community testing — your reports make it better. If something
+misbehaves, open an issue and include this journal output (it tells us exactly
+what Plaid was doing):
+
+```
+journalctl -b -o cat | grep '\[plaid\]'
+```
+
+Multi-monitor setups are especially valuable to test. Feature ideas and pull
+requests are welcome: [github.com/Plyply99/Plaid/issues](https://github.com/Plyply99/Plaid/issues)
+
 
 
 
