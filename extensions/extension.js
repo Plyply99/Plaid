@@ -3079,9 +3079,16 @@ export default class TilingWMExtension extends Extension {
                                 `LD_LIBRARY_PATH=${libDir}\n`;
                             GLib.file_set_contents(confFile, content);
                             log('[plaid] blur library provisioned - relogin to activate');
-                            try {
-                                this._notifyCritical('Plaid', 'Window blur is set to frosted glass until the next boot — the blur library was provisioned.');
-                            } catch (_e) {}
+                            // Deferred past the login overlay (3s minimum +
+                            // dismissal) so the pinned banner lands on a
+                            // visible desktop.
+                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 6000, () => {
+                                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                                try {
+                                    this._notifyCritical('Plaid', 'Window blur is set to frosted glass until the next boot — the blur library was provisioned.');
+                                } catch (_e) {}
+                                return GLib.SOURCE_REMOVE;
+                            });
                         }
                     } catch (e) {
                         log(`[plaid] blur provision failed: ${e.message}`);
@@ -4340,12 +4347,10 @@ export default class TilingWMExtension extends Extension {
     _notifyCritical(title, body) {
         try {
             const conn = Gio.DBus.session;
-            const hints = new GLib.Variant('a{sv}', {
-                urgency: new GLib.Variant('y', 2),
-            });
             const variant = new GLib.Variant('(susssasa{sv}i)', [
                 'org.gnome.Shell.Extensions.Plaid', 0, '',
-                title, body, [], hints, -1,
+                title, body, [],
+                { urgency: new GLib.Variant('y', 2) }, -1,
             ]);
             conn.call(
                 'org.freedesktop.Notifications', '/org/freedesktop/Notifications',
