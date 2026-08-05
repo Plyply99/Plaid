@@ -1148,34 +1148,44 @@ export default class TilingWMExtension extends Extension {
         try {
             if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled'))
                 return;
-            const actorIndex = (w) => {
+            const index = (w) => {
                 const a = w.get_compositor_private();
-                return a ? global.window_group.get_child_index(a) : -1;
+                return a && a.get_parent() === global.window_group
+                    ? global.window_group.get_child_index(a) : -1;
             };
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 const order = ws.list_windows();
-                // Floats above the tiled set (compositor order, not the
-                // meta list — the above layer is gone).
                 const tiled = order.filter(w => !this._isFloating(w));
+                // Floats: reposition each float's actor above the topmost
+                // tiled actor — pure compositor layering, no meta above state.
                 for (const win of order) {
                     if (tiled.includes(win) || win === this._backgroundAppWin ||
                         win.get_transient_for()) continue;
-                    const wi = actorIndex(win);
-                    if (wi < 0) continue;
-                    const belowTiled = tiled.some(t => actorIndex(t) > wi);
-                    if (belowTiled) {
-                        try { win.raise(); } catch (_e) {}
+                    const a = win.get_compositor_private();
+                    if (!a || a.get_parent() !== global.window_group) continue;
+                    let topTiledIdx = -1;
+                    let topTiledActor = null;
+                    for (const t of tiled) {
+                        const ti = index(t);
+                        if (ti > topTiledIdx) {
+                            topTiledIdx = ti;
+                            topTiledActor = t.get_compositor_private();
+                        }
                     }
+                    if (topTiledActor && index(win) < topTiledIdx)
+                        global.window_group.set_child_above_sibling(a, topTiledActor);
                 }
                 // Transients above their floating parents.
                 for (const win of order) {
                     const parent = win.get_transient_for();
                     if (!parent || !this._isFloating(parent)) continue;
-                    const wi = actorIndex(win);
-                    if (wi >= 0 && wi < actorIndex(parent)) {
+                    const a = win.get_compositor_private();
+                    const pa = parent.get_compositor_private();
+                    if (!a || !pa || a.get_parent() !== global.window_group) continue;
+                    if (index(win) >= 0 && index(win) < index(parent)) {
                         this._logStackDiagnostic(win, 'reassert');
-                        try { win.raise(); } catch (_e) {}
+                        global.window_group.set_child_above_sibling(a, pa);
                     }
                 }
             }
@@ -1202,29 +1212,9 @@ export default class TilingWMExtension extends Extension {
     }
 
     _raiseFloatingWindows(workspace) {
-        if (!workspace) return;
-        const tiled = this._getWindowsForWorkspace(workspace)
-            .filter(w => !this._isFloating(w));
-        const windows = workspace.list_windows();
-        // Raise floats above the tiled set — no persistent above layer,
-        // which broke Qt popup-surface stacking.
-        for (const win of windows) {
-            if (!tiled.includes(win) && win !== this._backgroundAppWin &&
-                !win.get_transient_for()) {
-                try { win.raise(); } catch (_e) {}
-            }
-        }
-        // Windowed transients above their floating parents.
-        for (const win of windows) {
-            if (!tiled.includes(win) && win !== this._backgroundAppWin &&
-                win.get_transient_for()) {
-                this._logStackDiagnostic(win, 'raise');
-                try { win.raise(); } catch (_e) {}
-            }
-        }
-        for (const win of tiled) {
-            try { win.unmake_above(); } catch (_e) {}
-        }
+        // Own-layer approach: the meta stack is left natural (no above
+        // state — it breaks Qt popup surfaces). Visual layering is
+        // maintained by the restacked-driven actor re-assert.
     }
 
     _retileAll() {
