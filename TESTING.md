@@ -47,7 +47,7 @@ bottom; fill the status table; paste the journal excerpts back.
 
 ### Floating layout
 - [x] `Super+C` cycles to Floating (popup shows "Layout: Floating")
-- [x] New windows open centered, fade in at the slot, cursor warps to them
+- [x] New windows fade in at GNOME's placement, cursor warps to them
 - [x] Windows keep positions — no re-tiling, no slot-snapping on resize
 - [x] Move-focus (H/J/K/L) navigates spatially; resize grows/shrinks the
       focused window; swap is inert
@@ -116,16 +116,19 @@ bottom; fill the status table; paste the journal excerpts back.
   internally — up to 2.56× the pixels — worth keeping in mind for
   performance expectations on 4K-class fractional configs.
 
+### Final verdict (v50.43)
+- **Resolution and scale changes validated across the full range**
+  (2160p / 1440p / 1080p, integer and fractional scales, live changes in
+  both directions) **with BGAPP, blur, and the full effect stack active —
+  zero failures.**
+
 ## Status table
 
 | Config | Date | Result | Journal excerpt / notes |
 |--------|------|--------|-------------------------|
 | T1     | 08-04 | PASS   | 4K@2.0 daily config; mode-change freeze fixed (blur deferral) |
-| T2     |       |        |                         |
-| T3     |       |        |                         |
-| T4     |       |        |                         |
-| T5     |       |        |                         |
-| T6     |       |        |                         |
+| T2–T5  | 08-04 | PASS   | 2160p / 1440p / 1080p, integer + fractional scales — validated with BGAPP, blur, and the full effect stack |
+| T6     | 08-04 | PASS   | live 2160 ↔ 1440 ↔ 1080 changes (blur on) |
 
 ## Follow-ups (filled in after each config)
 
