@@ -6027,7 +6027,16 @@ export default class TilingWMExtension extends Extension {
             const ws = metaWindow.get_workspace();
             if (ws) {
                 if (this._isMoveGrab(grabOp)) {
-                    this._repositionWindow(metaWindow, ws);
+                    // Click-vs-drag guard: a titlebar click on a decorated
+                    // window starts a move grab with no real movement — only
+                    // reposition when the pointer actually travelled.
+                    try {
+                        const [ex, ey] = global.get_pointer();
+                        const dx = ex - this._grabStartX;
+                        const dy = ey - this._grabStartY;
+                        if (Math.hypot(dx, dy) >= 10)
+                            this._repositionWindow(metaWindow, ws);
+                    } catch (_e) {}
                 }
                 this._retileWorkspace(ws);
                 try { metaWindow.raise(); } catch (_e) {}
@@ -6543,6 +6552,17 @@ export default class TilingWMExtension extends Extension {
         if (!metaWindow || !this._settings) return;
         const ws = metaWindow.get_workspace();
         if (!ws) return;
+        // Click-vs-drag gate: keep the overlay hidden until the pointer
+        // actually travelled — a titlebar click must not show a drag preview.
+        try {
+            const [px, py] = global.get_pointer();
+            const dx = px - this._grabStartX;
+            const dy = py - this._grabStartY;
+            if (Math.hypot(dx, dy) < 10) {
+                this._hideDropPreview();
+                return;
+            }
+        } catch (_e) {}
         if (this._getWorkspaceLayout(ws) === 'floating') {
             this._hideDropPreview();
             return;
