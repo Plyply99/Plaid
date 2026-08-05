@@ -597,7 +597,6 @@ export default class TilingWMExtension extends Extension {
 
     _connectSignals() {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
-            this._logStackDiagnostic(win, 'created');
             if (this._handleDropdownWindowCreated(win)) return;
             if (this._handleBackgroundAppWindowCreated(win)) return;
             if (this._shouldManage(win)) {
@@ -1184,30 +1183,16 @@ export default class TilingWMExtension extends Extension {
                     const pa = parent.get_compositor_private();
                     if (!a || !pa || a.get_parent() !== global.window_group) continue;
                     if (index(win) >= 0 && index(win) < index(parent)) {
-                        this._logStackDiagnostic(win, 'reassert');
+                        try {
+                            if (this._stackDiagnostics && !this._stackDiagnostics.has(win.get_id())) {
+                                this._stackDiagnostics.add(win.get_id());
+                                log(`[plaid] stack reassert: transient ${win.get_id()} re-positioned above ${parent.get_wm_class_instance() || '?'}`);
+                            }
+                        } catch (_e) {}
                         global.window_group.set_child_above_sibling(a, pa);
                     }
                 }
             }
-        } catch (_e) {}
-    }
-
-    _logStackDiagnostic(win, context) {
-        try {
-            if (!this._stackDiagnostics || !win) return;
-            const id = win.get_id();
-            if (this._stackDiagnostics.has(id)) return;
-            const wmClass = win.get_wm_class_instance() || '?';
-            const lower = wmClass.toLowerCase();
-            if (!lower.includes('goverlay') && !lower.includes('qt') &&
-                !win.get_transient_for()) return;
-            this._stackDiagnostics.add(id);
-            const parent = win.get_transient_for();
-            log(`[plaid] stack diag (${context}): id=${id} class=${wmClass} ` +
-                `type=${win.get_window_type()} ` +
-                `transient=${parent ? `${parent.get_id()}:${parent.get_wm_class_instance() || '?'}` : 'none'} ` +
-                `min=${win.minimized} skipTaskbar=${win.is_skip_taskbar()} ` +
-                `monitor=${win.get_monitor()}`);
         } catch (_e) {}
     }
 

@@ -142,6 +142,22 @@ bottom; fill the status table; paste the journal excerpts back.
 - **X11**: Plaid is Wayland-only; on an X11 session it loads inert and shows
   a pinned critical notification ("Plaid requires Wayland").
 
+## Stacking model
+
+- Floating windows sit visually above the tiled set via a Plaid-managed
+  compositor layer: the restacked re-assert repositions window actors in the
+  window group (`set_child_above_sibling`) — **no meta "Always on Top" state
+  is ever applied**, so app popup surfaces (Qt included) stack naturally with
+  their parents.
+- Windowed transients of floating windows are kept above their parents by the
+  same re-assert (one-time `stack reassert` log per window as a guard).
+- Known GNOME quirk (reproducible without Plaid): GNOME's own "Always on Top"
+  can place some Qt app popup surfaces behind their parent. Plaid never
+  applies that state; users who want hard-sticky windows can use GNOME's
+  feature knowingly.
+- The drop-down terminal keeps its dedicated always-on-top behavior (a real
+  window with no popups — unaffected by the quirk).
+
 ## Test protocol
 
 1. Set config → log out/in.
