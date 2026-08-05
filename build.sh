@@ -21,17 +21,30 @@ if [ -f "$OUT/plaid@plyply99.shell-extension.zip" ]; then
     mv -f "$OUT/plaid@plyply99.shell-extension.zip" "$OUT/plaid@plyply99.zip"
 fi
 
-# gnome-extensions pack does not include the bundled library; append it.
-if [ -d "$SOURCE/lib" ]; then
+# gnome-extensions pack drops non-standard files; append everything it
+# skips (lib/, assets/, and the terminal-settings script).
+if [ -d "$SOURCE/lib" ] || [ -d "$SOURCE/assets" ] || [ -f "$SOURCE/plaid-terminal-settings.sh" ]; then
     (cd "$SOURCE" && python3 -c "
 import zipfile, os
 out = '$OUT/plaid@plyply99.zip'
+paths = ['lib', 'assets', 'plaid-terminal-settings.sh']
+appended = []
 with zipfile.ZipFile(out, 'a') as z:
-    for root, _dirs, files in os.walk('lib'):
-        for f in files:
-            p = os.path.join(root, f)
+    existing = set(z.namelist())
+    for p in paths:
+        if not os.path.exists(p):
+            continue
+        if os.path.isdir(p):
+            for root, _dirs, files in os.walk(p):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    if fp not in existing:
+                        z.write(fp, fp)
+                        appended.append(fp)
+        elif p not in existing:
             z.write(p, p)
-print('appended lib/ to zip')
+            appended.append(p)
+print('appended to zip:', ', '.join(appended) if appended else 'nothing (already present)')
 ")
 fi
 
