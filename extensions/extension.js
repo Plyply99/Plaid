@@ -1144,6 +1144,25 @@ export default class TilingWMExtension extends Extension {
         );
     }
 
+    _reassertFloatingTransients() {
+        try {
+            if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled'))
+                return;
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                const order = ws.list_windows();
+                for (const win of order) {
+                    const parent = win.get_transient_for();
+                    if (!parent || !this._isFloating(parent)) continue;
+                    if (order.indexOf(win) < order.indexOf(parent)) {
+                        this._logStackDiagnostic(win, 'reassert');
+                        try { win.raise(); } catch (_e) {}
+                    }
+                }
+            }
+        } catch (_e) {}
+    }
+
     _logStackDiagnostic(win, context) {
         try {
             if (!this._stackDiagnostics || !win) return;
@@ -5925,6 +5944,7 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(global.display, global.display.connect('restacked', () => {
             this._syncBlurStacking();
+            try { this._reassertFloatingTransients(); } catch (_e) {}
         }));
     }
 
