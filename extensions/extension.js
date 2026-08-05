@@ -275,6 +275,7 @@ export default class TilingWMExtension extends Extension {
         this._landingGivenUp = new Set();
         this._pendingWarp = new Set();
         this._lastMonitorsGeom = null;
+        this._stackDiagnostics = new Set();
         this._toggleFloatWindows = new Set();
         this._keyboardFocusChange = false;
         this._grabOp = null;
@@ -549,6 +550,7 @@ export default class TilingWMExtension extends Extension {
         this._landingGivenUp = null;
         this._pendingWarp = null;
         this._lastMonitorsGeom = null;
+        this._stackDiagnostics = null;
         this._maximizeToggleRects = null;
     }
 
@@ -595,6 +597,7 @@ export default class TilingWMExtension extends Extension {
 
     _connectSignals() {
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
+            this._logStackDiagnostic(win, 'created');
             if (this._handleDropdownWindowCreated(win)) return;
             if (this._handleBackgroundAppWindowCreated(win)) return;
             if (this._shouldManage(win)) {
@@ -1141,6 +1144,25 @@ export default class TilingWMExtension extends Extension {
         );
     }
 
+    _logStackDiagnostic(win, context) {
+        try {
+            if (!this._stackDiagnostics || !win) return;
+            const id = win.get_id();
+            if (this._stackDiagnostics.has(id)) return;
+            const wmClass = win.get_wm_class_instance() || '?';
+            const lower = wmClass.toLowerCase();
+            if (!lower.includes('goverlay') && !lower.includes('qt') &&
+                !win.get_transient_for()) return;
+            this._stackDiagnostics.add(id);
+            const parent = win.get_transient_for();
+            log(`[plaid] stack diag (${context}): id=${id} class=${wmClass} ` +
+                `type=${win.get_window_type()} ` +
+                `transient=${parent ? `${parent.get_id()}:${parent.get_wm_class_instance() || '?'}` : 'none'} ` +
+                `min=${win.minimized} skipTaskbar=${win.is_skip_taskbar()} ` +
+                `monitor=${win.get_monitor()}`);
+        } catch (_e) {}
+    }
+
     _raiseFloatingWindows(workspace) {
         if (!workspace) return;
         const tiled = this._getWindowsForWorkspace(workspace)
@@ -1154,6 +1176,7 @@ export default class TilingWMExtension extends Extension {
         for (const win of windows) {
             if (!tiled.includes(win) && win !== this._backgroundAppWin &&
                 win.get_transient_for()) {
+                this._logStackDiagnostic(win, 'raise');
                 try { win.raise(); } catch (_e) {}
             }
         }
