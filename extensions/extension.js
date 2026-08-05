@@ -3068,27 +3068,29 @@ export default class TilingWMExtension extends Extension {
             if (!ok)
                 ok = await tryImport('esm', () => import('gi://Blur'));
 
-            if (!ok) {
-                const typelibEnv = GLib.getenv('GI_TYPELIB_PATH') || '';
-                const libEnv = GLib.getenv('LD_LIBRARY_PATH') || '';
-                if (!typelibEnv.includes(libDir) || !libEnv.includes(libDir)) {
-                    try {
-                        const confDir = GLib.get_home_dir() + '/.config/environment.d';
-                        const confFile = confDir + '/plaid-blur.conf';
-                        if (!GLib.file_test(confFile, GLib.FileTest.EXISTS)) {
-                            GLib.mkdir_with_parents(confDir, 0o755);
-                            const content =
-                                `GI_TYPELIB_PATH=${libDir}\n` +
-                                `LD_LIBRARY_PATH=${libDir}\n`;
-                            GLib.file_set_contents(confFile, content);
-                            log('[plaid] blur library provisioned - relogin to activate');
-                            this._plaidSetupNoticeBlur = true;
-                            this._scheduleSetupPopupCheck();
-                        }
-                    } catch (e) {
-                        log(`[plaid] blur provision failed: ${e.message}`);
-                    }
+            // Provision whenever the conf is missing — the session
+            // environment may still carry the library paths from a previous
+            // setup (inherited), which would make the import succeed and
+            // skip the old provisioning. The conf must exist so the NEXT
+            // session activates it — otherwise the user needs two reboots.
+            try {
+                const confDir = GLib.get_home_dir() + '/.config/environment.d';
+                const confFile = confDir + '/plaid-blur.conf';
+                if (!GLib.file_test(confFile, GLib.FileTest.EXISTS)) {
+                    GLib.mkdir_with_parents(confDir, 0o755);
+                    const content =
+                        `GI_TYPELIB_PATH=${libDir}\n` +
+                        `LD_LIBRARY_PATH=${libDir}\n`;
+                    GLib.file_set_contents(confFile, content);
+                    log('[plaid] blur library provisioned - relogin to activate');
+                    this._plaidSetupNoticeBlur = true;
+                    this._scheduleSetupPopupCheck();
                 }
+            } catch (e) {
+                log(`[plaid] blur provision failed: ${e.message}`);
+            }
+
+            if (!ok) {
                 this._blurModule = null;
                 this._debugLog('bundled blur unavailable, using Shell.BlurEffect');
             }
@@ -4012,22 +4014,22 @@ export default class TilingWMExtension extends Extension {
 
         const box = new St.BoxLayout({
             vertical: true,
-            style: `background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px; spacing: 4px; margin-top: ${bottomMargin}px;`,
+            style: `background-color: rgba(0, 0, 0, 0.75); border-radius: 16px; padding: 22px 40px; spacing: 8px; margin-top: ${bottomMargin}px; min-width: 480px;`,
         });
         box.add_child(new St.Label({
             text: title,
-            style: 'font-size: 20px; font-weight: bold; color: #ffffff;',
+            style: 'font-size: 24px; font-weight: bold; color: #ffffff;',
         }));
         if (subtitle) {
             box.add_child(new St.Label({
                 text: subtitle,
-                style: 'font-size: 14px; color: rgba(255, 255, 255, 0.8);',
+                style: 'font-size: 16px; color: rgba(255, 255, 255, 0.85);',
             }));
         }
         if (hint) {
             box.add_child(new St.Label({
                 text: hint,
-                style: 'font-size: 12px; color: rgba(255, 255, 255, 0.5);',
+                style: 'font-size: 14px; color: rgba(255, 255, 255, 0.6);',
             }));
         }
 
