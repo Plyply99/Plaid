@@ -2330,14 +2330,14 @@ export default class TilingWMExtension extends Extension {
     }
 
     _getWindowMinSize(win) {
+        const entry = this._minSizeOverrides?.get((win.get_wm_class_instance() || '').toLowerCase());
+        if (entry) return { w: entry.w, h: entry.h };
         try {
             const [mw, mh] = win.get_min_size();
             const w = Number.isFinite(mw) ? mw : 0;
             const h = Number.isFinite(mh) ? mh : 0;
             if (w > 0 || h > 0) return { w, h };
         } catch (_e) {}
-        const entry = this._minSizeOverrides?.get((win.get_wm_class_instance() || '').toLowerCase());
-        if (entry) return { w: entry.w, h: entry.h };
         return { w: 0, h: 0 };
     }
 
