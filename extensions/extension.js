@@ -248,6 +248,8 @@ export default class TilingWMExtension extends Extension {
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
+        if (this._minSizeOverrides.size > 0)
+            log(`[plaid] min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
         this._windowBorders = new Map();
         this._scratchpadRings = new Map();
         this._windowMasks = new Map();
@@ -784,9 +786,7 @@ export default class TilingWMExtension extends Extension {
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::min-window-sizes', () => {
-        this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
-        if (this._minSizeOverrides.size > 0)
-            log(`[plaid] min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
+            this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
@@ -1450,6 +1450,15 @@ export default class TilingWMExtension extends Extension {
                 Math.abs(f.width - s.targetW) > 16 || Math.abs(f.height - s.targetH) > 16) {
                 if (!pure) {
                     log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                    try {
+                        const mws = win.get_workspace();
+                        if (mws) {
+                            const tree = this._bspGetTree(mws);
+                            const min = this._getWindowMinSize(win);
+                            if (tree)
+                                log(`[plaid] diag: tree=${JSON.stringify(tree)} min=${min.w}x${min.h}`);
+                        }
+                    } catch (_e) {}
                     const prev = this._mismatchFrames?.get(win);
                     this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
                     const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
@@ -2323,7 +2332,9 @@ export default class TilingWMExtension extends Extension {
     _getWindowMinSize(win) {
         try {
             const [mw, mh] = win.get_min_size();
-            if ((mw || 0) > 0 || (mh || 0) > 0) return { w: mw || 0, h: mh || 0 };
+            const w = Number.isFinite(mw) ? mw : 0;
+            const h = Number.isFinite(mh) ? mh : 0;
+            if (w > 0 || h > 0) return { w, h };
         } catch (_e) {}
         const entry = this._minSizeOverrides?.get((win.get_wm_class_instance() || '').toLowerCase());
         if (entry) return { w: entry.w, h: entry.h };
