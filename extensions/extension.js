@@ -2102,6 +2102,7 @@ export default class TilingWMExtension extends Extension {
                 return 0;
 
             const leftCount = Math.ceil(numStack / 2);
+            const rightCount = numStack - leftCount;
             const stackRatios = this._getStackRatios(ws);
 
             if (px < masterX && leftStackW > 0 && leftCount > 0) {
