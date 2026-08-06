@@ -2333,12 +2333,12 @@ export default class TilingWMExtension extends Extension {
         const cls = (win.get_wm_class_instance() || '').toLowerCase();
         let entry = this._minSizeOverrides?.get(cls);
         if (!entry) {
-            const full = (win.get_wm_class() || '').toLowerCase();
-            entry = this._minSizeOverrides?.get(full);
-        }
-        if (!entry) {
             const title = (win.get_title() || '').toLowerCase();
             entry = this._minSizeOverrides?.get(title);
+        }
+        if (!entry) {
+            const full = (win.get_wm_class() || '').toLowerCase();
+            entry = this._minSizeOverrides?.get(full);
         }
         if (entry) return { w: entry.w, h: entry.h };
         try {
