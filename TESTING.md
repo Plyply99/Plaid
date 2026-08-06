@@ -158,6 +158,53 @@ bottom; fill the status table; paste the journal excerpts back.
 - The drop-down terminal keeps its dedicated always-on-top behavior (a real
   window with no popups — unaffected by the quirk).
 
+## Window minimum sizes
+
+Three tiers of protection keep tiled slots from ever targeting a size a
+window physically cannot take (verified end-to-end against steam, whose
+main window declares a 1364px minimum the compositor misreports).
+
+- **Tier 1 — `min-window-sizes` overrides (deterministic, any window
+  type).** Entries in the form `"name:WxH"` (e.g. `Steam:1364x810`),
+  matched by lookup order **wm_class_instance → window title → wm_class**.
+  Title-keyed entries are the only way to separate steam's windows, which
+  share the `steamwebhelper` instance and `steam` class (`Steam:1364x810`
+  and `Friends List:306x540` in the reference config).
+- **Tier 2 — the compositor API (`get_min_size()`).** Reliable for native
+  Wayland windows (the `xdg_toplevel` minimum). XWayland windows are
+  unreliable: mutter returns a `[0, width]`-shaped value with the significant
+  width in the second slot, so the API path applies `Number.isFinite`
+  normalization and the override is consulted **first** and wins
+  unconditionally (the width must never be treated as a height).
+- **Tier 3 — observe-and-adjust (the universal net).** After a landing
+  mismatch, if a window's frame provably did not move across retries (the
+  pinned evidence), the layout bends to the frame: the dwindle walker
+  adjusts split ratios, master/stack windows adjust the master ratio or
+  their stack weights. Compositing-agnostic — the frame is the truth.
+  Guarded by the grab gate (no verdicts mid-drag) and the direction guard
+  (only genuine shrink refusals trigger it).
+
+Where it applies:
+
+- **Dwindle** — split ratios clamped to subtree minimum sizes before every
+  layout; the drag loop clamps its bounds the same way, so the drag
+  physically stops at a window's floor.
+- **Master-stack** — the master ratio clamped so the master slot never goes
+  below the master window's minimum and the stack column always fits its
+  widest window; stack heights clamp to each window's minimum.
+- **Centered master-stack** — same, with per-column bounds (each side column
+  is only half the remaining width, so the bound is
+  `1 − 2·max(colMinW)/basis` — the flat bound would leave a 1364px window in
+  a ~700px column).
+- **Verdict insurance** — `_windowSlotRect` min-clamps every reported slot
+  (all layouts), so a landing target below a window's minimum can never be
+  produced.
+- **Floating** — no clamping needed (windows keep their own size).
+
+Verification status: all four layouts verified with steam's 1364/306 floors
+(v50.53 → v50.57) — drags hard-stop at both, zero give-up floats, zero
+mismatch churn.
+
 ## Test protocol
 
 1. Set config → log out/in.
