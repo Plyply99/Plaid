@@ -5,7 +5,7 @@
     "shell-version": [
         "50"
     ],
-    "version": 5045,
+    "version": 5046,
     "url": "https://github.com/Plyply99/Plaid",
     "settings-schema": "org.gnome.shell.extensions.plaid"
 }

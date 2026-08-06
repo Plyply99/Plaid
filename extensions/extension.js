@@ -1344,6 +1344,7 @@ export default class TilingWMExtension extends Extension {
 
     _auditWorkspaceLandings(ws) {
         if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled')) return;
+        if (this._grabOp) return;
         const layout = this._getWorkspaceLayout(ws);
         if (layout === 'floating') return;
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
@@ -1372,6 +1373,7 @@ export default class TilingWMExtension extends Extension {
 
     _verifyRetileLandings(ws) {
         if (this._destroyed || !this._settings) return;
+        if (this._grabOp) return;
         const layout = this._getWorkspaceLayout(ws);
         if (layout === 'floating') return;
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
@@ -6226,20 +6228,37 @@ export default class TilingWMExtension extends Extension {
                         const areaW = workArea.width - gap * 2;
                         const areaH = workArea.height - gap * 2;
 
+                        this._treeMinSizes(tree);
                         if (this._grabResizeNodeW) {
                             const axis = this._grabResizeNodeW._w;
                             if (axis - gap > 0) {
-                                const raw = this._grabInitialRatioW + (dx * this._grabWidthSign) / (axis - gap);
+                                const axisSize = axis - gap;
+                                const minW1 = this._grabResizeNodeW.first?._minW || 0;
+                                const minW2 = this._grabResizeNodeW.second?._minW || 0;
+                                const minRatio = minW1 / axisSize;
+                                const maxRatio = 1 - minW2 / axisSize;
+                                const lo = maxRatio <= minRatio
+                                    ? (minW1 + minW2 > 0 ? minW1 / (minW1 + minW2) : 0.15) : minRatio;
+                                const hi = maxRatio <= minRatio ? lo : maxRatio;
+                                const raw = this._grabInitialRatioW + (dx * this._grabWidthSign) / axisSize;
                                 if (Number.isFinite(raw))
-                                    this._grabResizeNodeW.ratio = Math.max(0.15, Math.min(0.85, raw));
+                                    this._grabResizeNodeW.ratio = Math.max(lo, Math.min(hi, raw));
                             }
                         }
                         if (this._grabResizeNodeH) {
                             const axis = this._grabResizeNodeH._h;
                             if (axis - gap > 0) {
-                                const raw = this._grabInitialRatioH + (dy * this._grabHeightSign) / (axis - gap);
+                                const axisSize = axis - gap;
+                                const minH1 = this._grabResizeNodeH.first?._minH || 0;
+                                const minH2 = this._grabResizeNodeH.second?._minH || 0;
+                                const minRatio = minH1 / axisSize;
+                                const maxRatio = 1 - minH2 / axisSize;
+                                const lo = maxRatio <= minRatio
+                                    ? (minH1 + minH2 > 0 ? minH1 / (minH1 + minH2) : 0.15) : minRatio;
+                                const hi = maxRatio <= minRatio ? lo : maxRatio;
+                                const raw = this._grabInitialRatioH + (dy * this._grabHeightSign) / axisSize;
                                 if (Number.isFinite(raw))
-                                    this._grabResizeNodeH.ratio = Math.max(0.15, Math.min(0.85, raw));
+                                    this._grabResizeNodeH.ratio = Math.max(lo, Math.min(hi, raw));
                             }
                         }
                         this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
@@ -6260,8 +6279,15 @@ export default class TilingWMExtension extends Extension {
                             if (layout === 'centered-master-stack' && idx > 0)
                                 ratioDelta *= 2;
                             const newRatio = this._grabInitialMasterRatio + ratioDelta;
+                            const masterMin = tiled.length > 0 ? (this._getWindowMinSize(tiled[0]).w || 0) : 0;
+                            let stackMinW = 0;
+                            for (let i = 1; i < tiled.length; i++)
+                                stackMinW = Math.max(stackMinW, this._getWindowMinSize(tiled[i]).w || 0);
+                            let lo = masterMin / masterDenom;
+                            let hi = 1 - stackMinW / masterDenom;
+                            if (hi <= lo) { lo = 0.5; hi = 0.5; }
                             if (Number.isFinite(newRatio))
-                                this._masterRatios.set(ws, Math.max(0.15, Math.min(0.85, newRatio)));
+                                this._masterRatios.set(ws, Math.max(lo, Math.min(hi, newRatio)));
                         }
                     }
                     if (this._grabHeightSign !== 0) {
@@ -6287,7 +6313,9 @@ export default class TilingWMExtension extends Extension {
                                         ? this._grabInitialStackRatios.get(j) : 1.0;
                                     const initH = totalStackH * initW / initTotal;
                                     const delta = j === draggedStackIdx ? pixelDelta : otherDelta;
-                                    newHeights.push(Math.max(10, initH + delta));
+                                    const minH = tiled.length > j + 1
+                                        ? (this._getWindowMinSize(tiled[j + 1]).h || 0) : 0;
+                                    newHeights.push(Math.max(minH, initH + delta));
                                 }
                                 const newTotalH = newHeights.reduce((a, b) => a + b, 0);
                                 if (newTotalH > 0) {
@@ -6299,7 +6327,10 @@ export default class TilingWMExtension extends Extension {
                             } else if (totalStackH > 0) {
                                 const initialWeight = this._grabInitialStackRatios.has(idx - 1)
                                     ? this._grabInitialStackRatios.get(idx - 1) : 1.0;
-                                const newWeight = Math.max(0.1,
+                                const minH = tiled.length > idx
+                                    ? (this._getWindowMinSize(tiled[idx]).h || 0) : 0;
+                                const minWeight = totalStackH > 0 ? minH / totalStackH * numStack : 0.1;
+                                const newWeight = Math.max(Math.max(0.1, minWeight),
                                     initialWeight + (dy * this._grabHeightSign) / totalStackH * numStack);
                                 const stackRatios = this._getStackRatios(ws);
                                 stackRatios.set(idx - 1, newWeight);
