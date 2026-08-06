@@ -1561,6 +1561,7 @@ export default class TilingWMExtension extends Extension {
             this._animStartTime = Date.now();
             this._animTickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
                 if (this._destroyed) { this._animTickId = 0; return GLib.SOURCE_REMOVE; }
+                if (!this._animStates) { this._animTickId = 0; this._animating = false; return GLib.SOURCE_REMOVE; }
                 const elapsed = Date.now() - this._animStartTime;
                 const t = Math.min(elapsed / duration, 1);
                 const e = 1 - Math.pow(1 - t, 3);
