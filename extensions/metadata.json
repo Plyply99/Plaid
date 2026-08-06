@@ -1,9 +1,11 @@
 {
-  "uuid": "plaid@plyply99",
-  "name": "Plaid",
-  "description": "Plaid — polished and complete tiling for GNOME: three layouts, configurable gaps, gradient borders, rounded corners, window blur, keybinds, float rules, scratchpad, mouse resize/swap, popups, and cursor warp. Self-contained — no extra extensions or downloads.",
-  "shell-version": ["50"],
-  "version": 5043,
-  "url": "https://github.com/Plyply99/Plaid",
-  "settings-schema": "org.gnome.shell.extensions.plaid"
+    "uuid": "plaid@plyply99",
+    "name": "Plaid",
+    "description": "Plaid \u2014 polished and complete tiling for GNOME: three layouts, configurable gaps, gradient borders, rounded corners, window blur, keybinds, float rules, scratchpad, mouse resize/swap, popups, and cursor warp. Self-contained \u2014 no extra extensions or downloads.",
+    "shell-version": [
+        "50"
+    ],
+    "version": 5044,
+    "url": "https://github.com/Plyply99/Plaid",
+    "settings-schema": "org.gnome.shell.extensions.plaid"
 }

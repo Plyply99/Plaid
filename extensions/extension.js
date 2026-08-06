@@ -636,12 +636,16 @@ export default class TilingWMExtension extends Extension {
                         actor.disconnect(firstFrameId);
                         doRaise();
                         doRestore();
+                        if (this._settings.get_boolean('follow-focus'))
+                            this._cursorWarpDeferred(win);
                         this._connectFloatHooks(win);
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         doRaise();
                         doRestore();
+                        if (this._settings.get_boolean('follow-focus'))
+                            this._cursorWarpDeferred(win);
                         this._connectFloatHooks(win);
                         return false;
                     });
@@ -966,8 +970,12 @@ export default class TilingWMExtension extends Extension {
     _markPendingWindowInvisible(win, actor) {
         if (this._destroyed || !win || !actor) return;
         if (!this._settings || !this._settings.get_boolean('enabled')) return;
+        if (this._isFloating(win)) {
+            if (this._settings.get_boolean('follow-focus'))
+                this._cursorWarpDeferred(win);
+            return;
+        }
         if (this._getAnimationTime() <= 0) return;
-        if (this._isFloating(win)) return;
         if (!this._pendingWarp || !this._newWindowSet) return;
         if (!this._newWindowSet.has(win)) return;
         try {
@@ -3641,6 +3649,8 @@ export default class TilingWMExtension extends Extension {
             this._resizeMasterStack(focused, ws, axis, delta);
 
         this._retileWorkspace(ws);
+        if (this._settings.get_boolean('follow-focus'))
+            this._cursorWarpDeferred(focused);
     }
 
     _resizeFloating(win, axis, delta) {
@@ -5948,6 +5958,18 @@ export default class TilingWMExtension extends Extension {
         }));
     }
 
+    _computeGrabGraceThreshold() {
+        try {
+            const [px, py] = global.get_pointer();
+            const monitorIdx = global.display.get_monitor_at_point(px, py);
+            const mon = global.display.get_monitor_geometry(monitorIdx);
+            const minDim = Math.min(mon.width, mon.height);
+            return Math.max(10, Math.min(30, Math.round(minDim / 100)));
+        } catch (_e) {
+            return 10;
+        }
+    }
+
     _handleGrabBegin(metaWindow, grabOp) {
         if (!metaWindow || metaWindow.get_window_type() !== Meta.WindowType.NORMAL) return;
         if (metaWindow.is_skip_taskbar()) return;
@@ -5966,6 +5988,7 @@ export default class TilingWMExtension extends Extension {
         const [startX, startY] = global.get_pointer();
         this._grabStartX = startX;
         this._grabStartY = startY;
+        this._grabGrace = this._computeGrabGraceThreshold();
 
         if (this._isResizeGrab(grabOp)) {
             this._grabWindow = metaWindow;
@@ -6040,7 +6063,8 @@ export default class TilingWMExtension extends Extension {
                         const [ex, ey] = global.get_pointer();
                         const dx = ex - this._grabStartX;
                         const dy = ey - this._grabStartY;
-                        if (Math.hypot(dx, dy) >= 10)
+                        const grace = this._grabGrace ?? 10;
+                        if (Math.hypot(dx, dy) >= grace)
                             this._repositionWindow(metaWindow, ws);
                     } catch (_e) {}
                 }
@@ -6564,7 +6588,8 @@ export default class TilingWMExtension extends Extension {
             const [px, py] = global.get_pointer();
             const dx = px - this._grabStartX;
             const dy = py - this._grabStartY;
-            if (Math.hypot(dx, dy) < 10) {
+            const grace = this._grabGrace ?? 10;
+            if (Math.hypot(dx, dy) < grace) {
                 this._hideDropPreview();
                 return;
             }
