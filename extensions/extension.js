@@ -2104,6 +2104,10 @@ export default class TilingWMExtension extends Extension {
         if (!node) return;
         if (node.type === 'empty') return;
         if (node.type === 'leaf') {
+            node._x = x;
+            node._y = y;
+            node._w = w;
+            node._h = h;
             if (node.window !== skipWindow) {
                 this._safeMove(node.window, x, y, w, h);
             } else {
@@ -6399,6 +6403,11 @@ export default class TilingWMExtension extends Extension {
             if (!leaf || leaf._w === undefined) return null;
             const r = { x: leaf._x, y: leaf._y, w: leaf._w, h: leaf._h };
             if (!(r.w > 0) || !(r.h > 0) || !Number.isFinite(r.x + r.y + r.w + r.h)) return null;
+            // Insurance: never report a slot narrower than the window's
+            // minimum — the layout clamps, so verdicts must agree.
+            const min = this._getWindowMinSize(win);
+            if (min.w > 0 && r.w < min.w) r.w = Math.min(min.w, areaW);
+            if (min.h > 0 && r.h < min.h) r.h = Math.min(min.h, areaH);
             return r;
         }
 
