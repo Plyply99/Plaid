@@ -5958,6 +5958,13 @@ export default class TilingWMExtension extends Extension {
 
         this._grabOp = grabOp;
 
+        // Capture the pointer for every tracked grab — the move-grab path
+        // (e.g. SSD titlebar clicks) must compare against the real click
+        // position, not the constructor's zeroed coords.
+        const [startX, startY] = global.get_pointer();
+        this._grabStartX = startX;
+        this._grabStartY = startY;
+
         if (this._isResizeGrab(grabOp)) {
             this._grabWindow = metaWindow;
             const effect = this._windowMasks?.get(metaWindow);
@@ -5969,9 +5976,6 @@ export default class TilingWMExtension extends Extension {
         this._debugLog(`GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(frame)} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
 
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
-            const [startX, startY] = global.get_pointer();
-            this._grabStartX = startX;
-            this._grabStartY = startY;
             const direction = (grabOp >> 12) & 0xF;
             this._grabWidthSign = (direction & 1) ? -1 : (direction & 2) ? 1 : 0;
             this._grabHeightSign = (direction & 8) ? -1 : (direction & 4) ? 1 : 0;
