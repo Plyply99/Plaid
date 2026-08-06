@@ -1751,8 +1751,23 @@ export default class TilingWMExtension extends Extension {
             stackMinW = Math.max(stackMinW, this._getWindowMinSize(tiledWindows[i]).w || 0);
         const basis = centered ? areaW - gap * 2 : areaW - gap;
         if (basis <= 0) return;
-        const lo = masterMin / basis;
-        const hi = 1 - stackMinW / basis;
+        let lo = masterMin / basis;
+        let hi = 1 - stackMinW / basis;
+        if (centered) {
+            // The stack splits into two side columns, each roughly half the
+            // remaining width — a window in one column needs double the
+            // headroom the flat bound assumes.
+            const numStack = tiledWindows.length - 1;
+            const leftCount = Math.ceil(numStack / 2);
+            let leftMinW = 0;
+            let rightMinW = 0;
+            for (let i = 1; i < tiledWindows.length; i++) {
+                const m = this._getWindowMinSize(tiledWindows[i]).w || 0;
+                if (i <= leftCount) leftMinW = Math.max(leftMinW, m);
+                else rightMinW = Math.max(rightMinW, m);
+            }
+            hi = 1 - 2 * Math.max(leftMinW, rightMinW) / basis;
+        }
         const ratio = this._getMasterRatio(ws);
         let clamped;
         if (hi <= lo) {
@@ -6475,6 +6490,18 @@ export default class TilingWMExtension extends Extension {
                                 stackMinW = Math.max(stackMinW, this._getWindowMinSize(tiled[i]).w || 0);
                             let lo = masterMin / masterDenom;
                             let hi = 1 - stackMinW / masterDenom;
+                            if (layout === 'centered-master-stack') {
+                                const numStack = tiled.length - 1;
+                                const leftCount = Math.ceil(numStack / 2);
+                                let leftMinW = 0;
+                                let rightMinW = 0;
+                                for (let i = 1; i < tiled.length; i++) {
+                                    const m = this._getWindowMinSize(tiled[i]).w || 0;
+                                    if (i <= leftCount) leftMinW = Math.max(leftMinW, m);
+                                    else rightMinW = Math.max(rightMinW, m);
+                                }
+                                hi = 1 - 2 * Math.max(leftMinW, rightMinW) / masterDenom;
+                            }
                             if (hi <= lo) { lo = 0.5; hi = 0.5; }
                             if (Number.isFinite(newRatio))
                                 this._masterRatios.set(ws, Math.max(lo, Math.min(hi, newRatio)));
