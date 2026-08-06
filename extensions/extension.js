@@ -784,7 +784,9 @@ export default class TilingWMExtension extends Extension {
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::min-window-sizes', () => {
-            this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
+        this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
+        if (this._minSizeOverrides.size > 0)
+            log(`[plaid] min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
@@ -1392,8 +1394,10 @@ export default class TilingWMExtension extends Extension {
             const areaW = workArea.width - gap * 2;
             const areaH = workArea.height - gap * 2;
             const f = win.get_frame_rect();
+            const min = this._getWindowMinSize(win);
+            const minSrc = min.w > 0 || min.h > 0 ? `min=${min.w}x${min.h}` : 'min=none';
             this._adjustForConstraints(tree, null, true, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
-            log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio`);
+            log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
         } catch (_e) {}
     }
 
@@ -1420,7 +1424,9 @@ export default class TilingWMExtension extends Extension {
                 log(`[plaid] retile verify: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} off-slot frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
                 const prev = this._mismatchFrames?.get(win);
                 this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
-                if (prev && Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
+                const refusesShrink = f.width > slot.w + 16 || f.height > slot.h + 16;
+                if (prev && refusesShrink &&
+                    Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
                     Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1)
                     this._adjustPinnedTree(win, ws);
                 this._retryLanding(win);
@@ -1431,6 +1437,7 @@ export default class TilingWMExtension extends Extension {
 
     _verifyAnimationLanding(s, kind, pure = false) {
         try {
+            if (this._grabOp) return false;
             const win = s.win;
             if (!win || !win.get_compositor_private()) {
                 if (!pure)
@@ -1445,7 +1452,9 @@ export default class TilingWMExtension extends Extension {
                     log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
                     const prev = this._mismatchFrames?.get(win);
                     this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
-                    if (prev && Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
+                    const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
+                    if (prev && refusesShrink &&
+                        Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
                         Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1)
                         this._adjustPinnedTree(win, win.get_workspace());
                     this._retryLanding(win);
