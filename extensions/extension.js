@@ -2159,7 +2159,7 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _bspReplaceLeaf(node, targetLeaf, newWin) {
+    _bspReplaceLeaf(node, targetLeaf, newWin, preferredRatio = null) {
         if (!node) return null;
         if (node.type === 'empty') {
             if (node === targetLeaf)
@@ -2169,13 +2169,15 @@ export default class TilingWMExtension extends Extension {
         if (node.type === 'leaf') {
             if (node === targetLeaf) {
                 const dir = ((node._w || 0) >= (node._h || 0)) ? 'h' : 'v';
-                const ratio = this._settings.get_double('dwindle-ratio');
+                const ratio = (preferredRatio && preferredRatio > 0 && preferredRatio < 1)
+                    ? preferredRatio
+                    : this._settings.get_double('dwindle-ratio');
                 return this._bspMakeSplit(dir, ratio, node, this._bspMakeLeaf(newWin));
             }
             return node;
         }
-        node.first = this._bspReplaceLeaf(node.first, targetLeaf, newWin);
-        node.second = this._bspReplaceLeaf(node.second, targetLeaf, newWin);
+        node.first = this._bspReplaceLeaf(node.first, targetLeaf, newWin, preferredRatio);
+        node.second = this._bspReplaceLeaf(node.second, targetLeaf, newWin, preferredRatio);
         return node;
     }
 
@@ -6709,12 +6711,25 @@ export default class TilingWMExtension extends Extension {
             const tree = this._bspGetTree(ws);
             if (!tree) return;
 
+            // Preserve the split ratio at the drop target so the re-insert
+            // mirrors the previous proportions instead of resetting to the
+            // default dwindle-ratio.
+            let targetRatio = null;
+            const path = [];
+            this._bspFindPath(tree, targetLeaf.window, path);
+            for (let i = path.length - 1; i >= 0; i--) {
+                if (path[i].type === 'split' && path[i].ratio > 0 && path[i].ratio < 1) {
+                    targetRatio = path[i].ratio;
+                    break;
+                }
+            }
+
             const gap = this._settings.get_int('gap');
             let newTree = this._bspRemove(tree, window);
             if (newTree.type === 'empty') newTree = null;
 
             if (newTree && targetLeaf.window !== window) {
-                newTree = this._bspReplaceLeaf(newTree, targetLeaf, window);
+                newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, targetRatio);
             }
             this._bspTrees.set(ws, newTree);
         } else {
