@@ -271,6 +271,7 @@ export default class TilingWMExtension extends Extension {
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
         this._queuedAnimWorkspaces = new Set();
+        this._animStartedAt = 0;
         this._landingRetries = new Map();
         this._landingGivenUp = new Set();
         this._pendingWarp = new Set();
@@ -546,6 +547,7 @@ export default class TilingWMExtension extends Extension {
         this._floatHooks = null;
         this._newWindowSet = null;
         this._queuedAnimWorkspaces = null;
+        this._animStartedAt = 0;
         this._landingRetries = null;
         this._landingGivenUp = null;
         this._pendingWarp = null;
@@ -1447,6 +1449,7 @@ export default class TilingWMExtension extends Extension {
         this._landingRetries.set(win, n);
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (this._landingGivenUp && this._landingGivenUp.has(win)) return GLib.SOURCE_REMOVE;
             const ws = win.get_workspace();
             if (ws) {
                 log(`[plaid] anim: landing retry ${n} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized}`);
@@ -1458,10 +1461,23 @@ export default class TilingWMExtension extends Extension {
 
     _animRetile(workspace, tiledWindows) {
         if (this._animating) {
-            this._queuedAnimWorkspaces.add(workspace);
-            log(`[plaid] anim: retile queued while animating (queue=${this._queuedAnimWorkspaces.size})`);
-            return;
+            // Stall watchdog: the in-flight animation's completion signal
+            // can be missed (interrupted transitions, destroyed windows).
+            // If it has not completed within a generous budget, force-finish
+            // so queued retiles keep running instead of wedging forever.
+            if (this._animStartedAt && Date.now() - this._animStartedAt > 800) {
+                this._animating = false;
+                const pending = [...this._queuedAnimWorkspaces];
+                this._queuedAnimWorkspaces.clear();
+                log(`[plaid] anim: watchdog drained stalled queue (${pending.length})`);
+                for (const ws of pending) this._scheduleRetile(ws);
+            } else {
+                this._queuedAnimWorkspaces.add(workspace);
+                log(`[plaid] anim: retile queued while animating (queue=${this._queuedAnimWorkspaces.size})`);
+                return;
+            }
         }
+        this._animStartedAt = Date.now();
 
         this._animTargets = new Map();
 
@@ -2241,6 +2257,70 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees.set(ws, tree);
     }
 
+    _getWindowMinSize(win) {
+        try {
+            const [mw, mh] = win.get_min_size();
+            return { w: mw || 0, h: mh || 0 };
+        } catch (_e) {
+            return { w: 0, h: 0 };
+        }
+    }
+
+    _treeMinSizes(node) {
+        if (!node || node.type === 'empty') return { w: 0, h: 0 };
+        if (node.type === 'leaf') {
+            const min = node.window ? this._getWindowMinSize(node.window) : { w: 0, h: 0 };
+            node._minW = min.w;
+            node._minH = min.h;
+            return min;
+        }
+        const a = this._treeMinSizes(node.first);
+        const b = this._treeMinSizes(node.second);
+        if (node.direction === 'h') {
+            node._minW = Math.max(a.w, b.w);
+            node._minH = a.h + b.h;
+        } else {
+            node._minW = a.w + b.w;
+            node._minH = Math.max(a.h, b.h);
+        }
+        return { w: node._minW, h: node._minH };
+    }
+
+    _clampTreeToMinSizes(node, areaW, areaH, gap) {
+        if (!node || node.type !== 'split') return;
+        this._clampTreeToMinSizes(node.first, areaW, areaH, gap);
+        this._clampTreeToMinSizes(node.second, areaW, areaH, gap);
+        if (node.direction === 'h') {
+            const minW1 = node.first?._minW || 0;
+            const minW2 = node.second?._minW || 0;
+            const axisSize = areaW - gap;
+            if (axisSize > 0) {
+                const minRatio = minW1 / axisSize;
+                const maxRatio = 1 - minW2 / axisSize;
+                if (maxRatio <= minRatio) {
+                    const need = minW1 + minW2;
+                    node.ratio = need > 0 ? minW1 / need : 0.5;
+                } else {
+                    node.ratio = Math.max(minRatio, Math.min(maxRatio, node.ratio));
+                }
+            }
+        } else {
+            const minH1 = node.first?._minH || 0;
+            const minH2 = node.second?._minH || 0;
+            const axisSize = areaH - gap;
+            if (axisSize > 0) {
+                const minRatio = minH1 / axisSize;
+                const maxRatio = 1 - minH2 / axisSize;
+                if (maxRatio <= minRatio) {
+                    const need = minH1 + minH2;
+                    node.ratio = need > 0 ? minH1 / need : 0.5;
+                } else {
+                    node.ratio = Math.max(minRatio, Math.min(maxRatio, node.ratio));
+                }
+            }
+        }
+    }
+
     _retileDwindle(workspace, tiledWindows) {
         const gap = this._settings.get_int('gap');
         const monitor = global.display.get_primary_monitor();
@@ -2286,6 +2366,8 @@ export default class TilingWMExtension extends Extension {
             this._bspTrees.set(workspace, tree);
         }
 
+        this._treeMinSizes(tree);
+        this._clampTreeToMinSizes(tree, areaW, areaH, gap);
         this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap);
     }
 
