@@ -274,6 +274,7 @@ export default class TilingWMExtension extends Extension {
         this._queuedAnimWorkspaces = new Set();
         this._animStartedAt = 0;
         this._landingRetries = new Map();
+        this._mismatchFrames = new Map();
         this._landingGivenUp = new Set();
         this._pendingWarp = new Set();
         this._lastMonitorsGeom = null;
@@ -551,6 +552,7 @@ export default class TilingWMExtension extends Extension {
         this._queuedAnimWorkspaces = null;
         this._animStartedAt = 0;
         this._landingRetries = null;
+        this._mismatchFrames = null;
         this._landingGivenUp = null;
         this._pendingWarp = null;
         this._lastMonitorsGeom = null;
@@ -1377,6 +1379,24 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _adjustPinnedTree(win, ws) {
+        try {
+            if (!win || !ws) return;
+            if (this._getWorkspaceLayout(ws) !== 'dwindle') return;
+            const tree = this._bspGetTree(ws);
+            if (!tree) return;
+            const gap = this._settings.get_int('gap');
+            const monitor = global.display.get_primary_monitor();
+            const workArea = ws.get_work_area_for_monitor(monitor);
+            if (!workArea || workArea.width === 0) return;
+            const areaW = workArea.width - gap * 2;
+            const areaH = workArea.height - gap * 2;
+            const f = win.get_frame_rect();
+            this._adjustForConstraints(tree, null, true, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+            log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio`);
+        } catch (_e) {}
+    }
+
     _verifyRetileLandings(ws) {
         if (this._destroyed || !this._settings) return;
         if (this._grabOp) return;
@@ -1398,6 +1418,11 @@ export default class TilingWMExtension extends Extension {
             if (Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16 ||
                 Math.abs(f.width - slot.w) > 16 || Math.abs(f.height - slot.h) > 16) {
                 log(`[plaid] retile verify: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} off-slot frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+                const prev = this._mismatchFrames?.get(win);
+                this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+                if (prev && Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
+                    Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1)
+                    this._adjustPinnedTree(win, ws);
                 this._retryLanding(win);
                 return;
             }
@@ -1418,12 +1443,18 @@ export default class TilingWMExtension extends Extension {
                 Math.abs(f.width - s.targetW) > 16 || Math.abs(f.height - s.targetH) > 16) {
                 if (!pure) {
                     log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                    const prev = this._mismatchFrames?.get(win);
+                    this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+                    if (prev && Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
+                        Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1)
+                        this._adjustPinnedTree(win, win.get_workspace());
                     this._retryLanding(win);
                 }
                 return false;
             } else {
                 if (this._landingRetries) this._landingRetries.delete(win);
                 if (this._landingGivenUp) this._landingGivenUp.delete(win);
+                if (this._mismatchFrames) this._mismatchFrames.delete(win);
                 if (this._pendingWarp && this._pendingWarp.has(win)) {
                     this._pendingWarp.delete(win);
                     this._moveCursorToWindow(win);
@@ -1445,6 +1476,7 @@ export default class TilingWMExtension extends Extension {
         if (n > 3) {
             this._landingRetries.delete(win);
             this._landingGivenUp.add(win);
+            if (this._mismatchFrames) this._mismatchFrames.delete(win);
             try { this._toggleFloatWindows.add(win); } catch (_e) {}
             const ws = win.get_workspace();
             const list = ws
@@ -2436,21 +2468,6 @@ export default class TilingWMExtension extends Extension {
         this._treeMinSizes(tree);
         this._clampTreeToMinSizes(tree, areaW, areaH, gap);
         this._bspLayout(tree, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
-
-        // Observe-and-adjust: when a window's frame refuses a slot (a
-        // minimum the compositor didn't report), bend the split ratio to
-        // reality instead of judging the window a landing failure.
-        let passes = 0;
-        let changed = true;
-        while (changed && passes < 3) {
-            changed = this._adjustForConstraints(tree, null, true, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
-            if (changed) {
-                this._bspLayout(tree, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
-                passes++;
-            }
-        }
-        if (passes > 0)
-            log(`[plaid] constraint: adjusted dwindle ratios to pinned frames (${passes} pass${passes === 1 ? '' : 'es'})`);
     }
 
     _moveWindow(win, x, y, w, h) {
