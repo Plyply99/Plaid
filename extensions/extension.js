@@ -1384,9 +1384,8 @@ export default class TilingWMExtension extends Extension {
     _adjustPinnedTree(win, ws) {
         try {
             if (!win || !ws) return;
-            if (this._getWorkspaceLayout(ws) !== 'dwindle') return;
-            const tree = this._bspGetTree(ws);
-            if (!tree) return;
+            const layout = this._getWorkspaceLayout(ws);
+            if (layout === 'floating') return;
             const gap = this._settings.get_int('gap');
             const monitor = global.display.get_primary_monitor();
             const workArea = ws.get_work_area_for_monitor(monitor);
@@ -1396,7 +1395,40 @@ export default class TilingWMExtension extends Extension {
             const f = win.get_frame_rect();
             const min = this._getWindowMinSize(win);
             const minSrc = min.w > 0 || min.h > 0 ? `min=${min.w}x${min.h}` : 'min=none';
-            this._adjustForConstraints(tree, null, true, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+            if (layout === 'dwindle') {
+                const tree = this._bspGetTree(ws);
+                if (!tree) return;
+                this._adjustForConstraints(tree, null, true, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+            } else if (layout === 'master-stack' || layout === 'centered-master-stack') {
+                const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+                if (tiled.length < 2) return;
+                if (win === tiled[0]) {
+                    const basis = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
+                    if (basis > 0) {
+                        const ratio = this._getMasterRatio(ws);
+                        this._masterRatios.set(ws, Math.min(0.95, Math.max(ratio, f.width / basis)));
+                    }
+                } else {
+                    const idx = tiled.indexOf(win) - 1;
+                    const stackRatios = this._getStackRatios(ws);
+                    const numStack = tiled.length - 1;
+                    const totalStackH = areaH - gap * (numStack - 1);
+                    if (totalStackH > 0 && idx >= 0) {
+                        let total = 0;
+                        const weights = [];
+                        for (let i = 0; i < numStack; i++) {
+                            const w = stackRatios.has(i) ? stackRatios.get(i) : 1.0;
+                            weights.push(w);
+                            total += w;
+                        }
+                        const curH = total > 0 ? Math.floor(totalStackH * weights[idx] / total) : 0;
+                        if (curH > 0 && f.height > curH + 1)
+                            stackRatios.set(idx, weights[idx] * (f.height / curH));
+                    }
+                }
+            } else {
+                return;
+            }
             log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
         } catch (_e) {}
     }
@@ -1708,6 +1740,27 @@ export default class TilingWMExtension extends Extension {
         return this._stackRatios.get(ws);
     }
 
+    _clampMasterStackRatios(ws, tiledWindows, areaW, gap, centered) {
+        if (!tiledWindows || tiledWindows.length < 2) return;
+        const masterMin = this._getWindowMinSize(tiledWindows[0]).w || 0;
+        let stackMinW = 0;
+        for (let i = 1; i < tiledWindows.length; i++)
+            stackMinW = Math.max(stackMinW, this._getWindowMinSize(tiledWindows[i]).w || 0);
+        const basis = centered ? areaW - gap * 2 : areaW - gap;
+        if (basis <= 0) return;
+        const lo = masterMin / basis;
+        const hi = 1 - stackMinW / basis;
+        const ratio = this._getMasterRatio(ws);
+        let clamped;
+        if (hi <= lo) {
+            const need = masterMin + stackMinW;
+            clamped = need > 0 ? masterMin / need : 0.5;
+        } else {
+            clamped = Math.max(lo, Math.min(hi, ratio));
+        }
+        this._masterRatios.set(ws, clamped);
+    }
+
     _retileMasterStack(workspace, tiledWindows, skipWindow = null) {
         const gap = this._settings.get_int('gap');
         const monitor = global.display.get_primary_monitor();
@@ -1727,6 +1780,7 @@ export default class TilingWMExtension extends Extension {
         const areaY = workArea.y + gap;
         const areaW = workArea.width - gap * 2;
         const areaH = workArea.height - gap * 2;
+        this._clampMasterStackRatios(workspace, tiledWindows, areaW, gap, false);
         const masterRatio = this._getMasterRatio(workspace);
         const masterW = Math.floor((areaW - gap) * masterRatio);
         const stackW = areaW - masterW - gap;
@@ -1765,9 +1819,10 @@ export default class TilingWMExtension extends Extension {
                         if (i === draggedIdx) {
                             h = draggedH;
                         } else if (isLast) {
-                            h = areaY + areaH - y;
+                            h = Math.max(10, areaY + areaH - y);
                         } else {
-                            h = Math.floor(weights[i] * scale);
+                            h = Math.max(this._getWindowMinSize(win).h || 0, Math.floor(weights[i] * scale));
+                            if (y + h > areaY + areaH) h = Math.max(10, areaY + areaH - y);
                         }
                         if (win !== skipWindow)
                             this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
@@ -1783,10 +1838,12 @@ export default class TilingWMExtension extends Extension {
         let y = areaY;
         for (let i = 0; i < numStack; i++) {
             const isLast = i === numStack - 1;
-            const h = isLast
-                ? (areaY + areaH - y)
-                : Math.floor(totalStackH * weights[i] / totalWeight);
             const win = tiledWindows[i + 1];
+            const minH = this._getWindowMinSize(win).h || 0;
+            let h = isLast
+                ? Math.max(10, areaY + areaH - y)
+                : Math.max(minH, Math.floor(totalStackH * weights[i] / totalWeight));
+            if (!isLast && y + h > areaY + areaH) h = Math.max(10, areaY + areaH - y);
             if (win !== skipWindow)
                 this._moveWindow(win, areaX + masterW + gap, y, stackW, h);
             else
@@ -1821,6 +1878,7 @@ export default class TilingWMExtension extends Extension {
         const areaY = workArea.y + gap;
         const areaW = workArea.width - gap * 2;
         const areaH = workArea.height - gap * 2;
+        this._clampMasterStackRatios(workspace, tiledWindows, areaW, gap, true);
         const numStack = numWindows - 1;
         const leftCount = Math.ceil(numStack / 2);
         const rightCount = numStack - leftCount;
@@ -1888,9 +1946,10 @@ export default class TilingWMExtension extends Extension {
                         if (i === draggedIdx) {
                             h = draggedH;
                         } else if (isLast) {
-                            h = areaY + areaH - y;
+                            h = Math.max(10, areaY + areaH - y);
                         } else {
-                            h = Math.floor(stackWeights[i] * scale);
+                            h = Math.max(this._getWindowMinSize(win).h || 0, Math.floor(stackWeights[i] * scale));
+                            if (y + h > areaY + areaH) h = Math.max(10, areaY + areaH - y);
                         }
                         if (win !== skipWindow)
                             this._moveWindow(win, x, y, w, h);
@@ -1904,10 +1963,12 @@ export default class TilingWMExtension extends Extension {
             let y = areaY;
             for (let i = 0; i < count; i++) {
                 const isLast = i === count - 1;
-                const h = isLast
-                    ? (areaY + areaH - y)
-                    : Math.floor(totalStackH * stackWeights[i] / stackTotal);
                 const win = stackWindows[i];
+                const minH = this._getWindowMinSize(win).h || 0;
+                let h = isLast
+                    ? Math.max(10, areaY + areaH - y)
+                    : Math.max(minH, Math.floor(totalStackH * stackWeights[i] / stackTotal));
+                if (!isLast && y + h > areaY + areaH) h = Math.max(10, areaY + areaH - y);
                 if (win !== skipWindow)
                     this._moveWindow(win, x, y, w, h);
                 else
@@ -6509,6 +6570,14 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _minClampSlot(r, win, areaW, areaH) {
+        if (!r) return r;
+        const min = this._getWindowMinSize(win);
+        if (min.w > 0 && r.w < min.w) r.w = Math.min(min.w, areaW);
+        if (min.h > 0 && r.h < min.h) r.h = Math.min(min.h, areaH);
+        return r;
+    }
+
     _windowSlotRect(win, ws, layout, workArea, gap) {
         if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
         if (layout === 'floating') return null;
@@ -6551,7 +6620,7 @@ export default class TilingWMExtension extends Extension {
             masterX = areaX + Math.floor((areaW - masterW) / 2);
             if (idx === 0) {
                 const r = { x: masterX, y: areaY, w: masterW, h: areaH };
-                return r;
+                return this._minClampSlot(r, win, areaW, areaH);
             }
             const leftCount = Math.ceil(numStack / 2);
             const stackIdxIn = idx - 1;
@@ -6574,7 +6643,7 @@ export default class TilingWMExtension extends Extension {
             masterX = areaX;
             if (idx === 0) {
                 const r = { x: areaX, y: areaY, w: masterW, h: areaH };
-                return r;
+                return this._minClampSlot(r, win, areaW, areaH);
             }
             stackX = areaX + masterW + gap;
             stackW = areaW - masterW - gap;
@@ -6598,7 +6667,7 @@ export default class TilingWMExtension extends Extension {
             if (i === stackIdx) {
                 const r = { x: stackX, y, w: stackW, h };
                 if (!(r.w > 0) || !(r.h > 0) || !Number.isFinite(r.x + r.y + r.w + r.h)) return null;
-                return r;
+                return this._minClampSlot(r, win, areaW, areaH);
             }
             y += h + gap;
         }
