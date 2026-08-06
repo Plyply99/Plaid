@@ -247,6 +247,7 @@ export default class TilingWMExtension extends Extension {
         this._ensureBlurModule();
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
+        this._floatingTitlePatterns = this._compileTitlePatterns(this._floatingTitles);
         this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
         if (this._minSizeOverrides.size > 0)
             log(`[plaid] min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
@@ -517,6 +518,7 @@ export default class TilingWMExtension extends Extension {
         this._settings = null;
         this._floatingClasses = null;
         this._floatingTitles = null;
+        this._floatingTitlePatterns = null;
         this._minSizeOverrides = null;
         this._toggleFloatWindows = null;
         this._floatMaxRects = null;
@@ -784,6 +786,7 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(this._settings, this._settings.connect('changed::float-titles', () => {
             this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
+            this._floatingTitlePatterns = this._compileTitlePatterns(this._floatingTitles);
             this._reapplyFloatRules();
             this._retileAll();
         }));
@@ -904,6 +907,26 @@ export default class TilingWMExtension extends Extension {
         });
     }
 
+    _compileTitlePatterns(titles) {
+        const patterns = [];
+        for (const t of titles || []) {
+            if (t.includes('*'))
+                patterns.push(new RegExp('^' + t.split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
+        }
+        return patterns;
+    }
+
+    _floatingTitleMatches(title) {
+        if (!title) return false;
+        if (this._floatingTitles && this._floatingTitles.has(title)) return true;
+        const patterns = this._floatingTitlePatterns;
+        if (!patterns) return false;
+        for (const re of patterns) {
+            if (re.test(title)) return true;
+        }
+        return false;
+    }
+
     _shouldManage(win) {
         if (this._dropdownWin === win ||
             (this._dropdownWaiters && this._dropdownWaiters.has(win))) return false;
@@ -914,7 +937,7 @@ export default class TilingWMExtension extends Extension {
         if (win.is_skip_taskbar()) return false;
         if (win.get_transient_for()) return false;
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
-        if (title && this._floatingTitles.has(title)) return false;
+        if (this._floatingTitleMatches(title)) return false;
         return true;
     }
 
@@ -963,7 +986,7 @@ export default class TilingWMExtension extends Extension {
         const wms = win.get_wm_class_instance();
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return true;
         const title = win.get_title();
-        if (title && this._floatingTitles.has(title)) return true;
+        if (this._floatingTitleMatches(title)) return true;
         if (win.is_fullscreen()) return true;
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return true;
         if (win.is_skip_taskbar()) return true;
@@ -1014,7 +1037,7 @@ export default class TilingWMExtension extends Extension {
     _addWindow(win) {
         if (!this._settings) return;
         if (this._windowWorkspaces.has(win)) return;
-        this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
+        this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
         this._newWindowSet.add(win);
         try { this._markPendingWindowInvisible(win, win.get_compositor_private()); } catch (_e) {}
         const ws = win.get_workspace();
