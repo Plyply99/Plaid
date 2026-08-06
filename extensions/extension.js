@@ -644,7 +644,8 @@ export default class TilingWMExtension extends Extension {
                         actor.disconnect(firstFrameId);
                         doRaise();
                         doRestore();
-                        if (this._settings.get_boolean('follow-focus'))
+                        if (this._settings.get_boolean('follow-focus') &&
+                            win.get_window_type() === Meta.WindowType.NORMAL)
                             this._cursorWarpDeferred(win);
                         this._connectFloatHooks(win);
                     });
@@ -652,7 +653,8 @@ export default class TilingWMExtension extends Extension {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         doRaise();
                         doRestore();
-                        if (this._settings.get_boolean('follow-focus'))
+                        if (this._settings.get_boolean('follow-focus') &&
+                            win.get_window_type() === Meta.WindowType.NORMAL)
                             this._cursorWarpDeferred(win);
                         this._connectFloatHooks(win);
                         return false;
@@ -983,7 +985,8 @@ export default class TilingWMExtension extends Extension {
         if (this._destroyed || !win || !actor) return;
         if (!this._settings || !this._settings.get_boolean('enabled')) return;
         if (this._isFloating(win)) {
-            if (this._settings.get_boolean('follow-focus'))
+            if (this._settings.get_boolean('follow-focus') &&
+                win.get_window_type() === Meta.WindowType.NORMAL)
                 this._cursorWarpDeferred(win);
             return;
         }
