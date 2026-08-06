@@ -924,7 +924,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const minSizeGroup = new Adw.PreferencesGroup({
             title: _('Minimum Window Sizes'),
-            description: _('Hard minimum sizes for window classes that do not report them (e.g. steam:1364x810)'),
+            description: _('Hard minimum sizes for window classes or exact titles that do not report them (e.g. Steam:1364x810)'),
         });
         page.add(minSizeGroup);
         this._minSizeRows = [];
@@ -1096,7 +1096,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
 
         const classEntry = new Gtk.Entry({
-            placeholder_text: _('WM_CLASS instance name (e.g. steam)'),
+            placeholder_text: _('WM_CLASS instance or exact window title (e.g. Steam)'),
             hexpand: true,
         });
         box.append(classEntry);
