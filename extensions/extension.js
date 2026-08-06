@@ -247,6 +247,7 @@ export default class TilingWMExtension extends Extension {
         this._ensureBlurModule();
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
+        this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
         this._windowBorders = new Map();
         this._scratchpadRings = new Map();
         this._windowMasks = new Map();
@@ -513,6 +514,7 @@ export default class TilingWMExtension extends Extension {
         this._settings = null;
         this._floatingClasses = null;
         this._floatingTitles = null;
+        this._minSizeOverrides = null;
         this._toggleFloatWindows = null;
         this._floatMaxRects = null;
         this._gappedMaxSet = null;
@@ -777,6 +779,10 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::float-titles', () => {
             this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
             this._reapplyFloatRules();
+            this._retileAll();
+        }));
+        this._addSignal(this._settings, this._settings.connect('changed::min-window-sizes', () => {
+            this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
             this._retileAll();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
@@ -2264,13 +2270,23 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees.set(ws, tree);
     }
 
+    _parseMinSizeOverrides(entries) {
+        const map = new Map();
+        for (const entry of entries || []) {
+            const m = /^(.+?):(\d+)x(\d+)$/.exec(entry);
+            if (m) map.set(m[1].toLowerCase(), { w: parseInt(m[2], 10), h: parseInt(m[3], 10) });
+        }
+        return map;
+    }
+
     _getWindowMinSize(win) {
         try {
             const [mw, mh] = win.get_min_size();
-            return { w: mw || 0, h: mh || 0 };
-        } catch (_e) {
-            return { w: 0, h: 0 };
-        }
+            if ((mw || 0) > 0 || (mh || 0) > 0) return { w: mw || 0, h: mh || 0 };
+        } catch (_e) {}
+        const entry = this._minSizeOverrides?.get((win.get_wm_class_instance() || '').toLowerCase());
+        if (entry) return { w: entry.w, h: entry.h };
+        return { w: 0, h: 0 };
     }
 
     _treeMinSizes(node) {
@@ -2328,6 +2344,50 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _adjustForConstraints(node, parent, isFirst, x, y, w, h, gap) {
+        if (!node) return false;
+        if (node.type === 'leaf') {
+            if (!parent || !node.window) return false;
+            const f = node.window.get_frame_rect();
+            if (f.width === 0 || f.height === 0) return false;
+            if (parent.direction === 'h' && f.width > node._w + 1) {
+                const axisSize = w - gap;
+                if (axisSize <= 0) return false;
+                if (isFirst) {
+                    parent.ratio = Math.min(0.95, Math.max(parent.ratio, f.width / axisSize));
+                } else {
+                    parent.ratio = Math.max(0.05, Math.min(parent.ratio, 1 - f.width / axisSize));
+                }
+                return true;
+            }
+            if (parent.direction === 'v' && f.height > node._h + 1) {
+                const axisSize = h - gap;
+                if (axisSize <= 0) return false;
+                if (isFirst) {
+                    parent.ratio = Math.min(0.95, Math.max(parent.ratio, f.height / axisSize));
+                } else {
+                    parent.ratio = Math.max(0.05, Math.min(parent.ratio, 1 - f.height / axisSize));
+                }
+                return true;
+            }
+            return false;
+        }
+        if (node.type !== 'split') return false;
+        const isH = node.direction === 'h';
+        const axisSize = isH ? w : h;
+        const split = Math.floor((axisSize - gap) * node.ratio);
+        const secondSize = axisSize - split - gap;
+        let changed = false;
+        if (isH) {
+            changed = this._adjustForConstraints(node.first, node, true, x, y, split, h, gap) || changed;
+            changed = this._adjustForConstraints(node.second, node, false, x + split + gap, y, secondSize, h, gap) || changed;
+        } else {
+            changed = this._adjustForConstraints(node.first, node, true, x, y, w, split, gap) || changed;
+            changed = this._adjustForConstraints(node.second, node, false, x, y + split + gap, w, secondSize, gap) || changed;
+        }
+        return changed;
+    }
+
     _retileDwindle(workspace, tiledWindows) {
         const gap = this._settings.get_int('gap');
         const monitor = global.display.get_primary_monitor();
@@ -2375,7 +2435,22 @@ export default class TilingWMExtension extends Extension {
 
         this._treeMinSizes(tree);
         this._clampTreeToMinSizes(tree, areaW, areaH, gap);
-        this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap);
+        this._bspLayout(tree, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+
+        // Observe-and-adjust: when a window's frame refuses a slot (a
+        // minimum the compositor didn't report), bend the split ratio to
+        // reality instead of judging the window a landing failure.
+        let passes = 0;
+        let changed = true;
+        while (changed && passes < 3) {
+            changed = this._adjustForConstraints(tree, null, true, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+            if (changed) {
+                this._bspLayout(tree, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+                passes++;
+            }
+        }
+        if (passes > 0)
+            log(`[plaid] constraint: adjusted dwindle ratios to pinned frames (${passes} pass${passes === 1 ? '' : 'es'})`);
     }
 
     _moveWindow(win, x, y, w, h) {

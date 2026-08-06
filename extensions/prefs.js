@@ -921,6 +921,31 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
 
         this._rebuildFloatList(settings, titleGroup, addTitleRow, 'float-titles', '_floatTitleRows');
+
+        const minSizeGroup = new Adw.PreferencesGroup({
+            title: _('Minimum Window Sizes'),
+            description: _('Hard minimum sizes for window classes that do not report them (e.g. steam:1364x810)'),
+        });
+        page.add(minSizeGroup);
+        this._minSizeRows = [];
+
+        const addMinSizeRow = new Adw.ActionRow({
+            title: _('Add Minimum Size'),
+            activatable: true,
+        });
+        const addMinSizeButton = new Gtk.Button({
+            icon_name: 'list-add-symbolic',
+            css_classes: ['suggested-action', 'circular'],
+            can_target: false,
+        });
+        addMinSizeRow.add_suffix(addMinSizeButton);
+        minSizeGroup.add(addMinSizeRow);
+
+        addMinSizeRow.connect('activated', () => {
+            this._showAddMinSizeDialog(window, settings, minSizeGroup, addMinSizeRow);
+        });
+
+        this._rebuildMinSizeList(settings, minSizeGroup, addMinSizeRow);
     }
 
     _showPickChoiceDialog(window, settings, cls, title, onAdd, onDone) {
@@ -1023,6 +1048,101 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             group.add(row);
             this[rowsProperty].push(row);
         }
+    }
+
+    _rebuildMinSizeList(settings, group, addRow) {
+        for (const row of this._minSizeRows)
+            group.remove(row);
+        this._minSizeRows = [];
+
+        const entries = settings.get_strv('min-window-sizes');
+        for (const entry of entries) {
+            const row = new Adw.ActionRow({
+                title: entry,
+                activatable: false,
+            });
+            const removeBtn = new Gtk.Button({
+                icon_name: 'list-remove-symbolic',
+                css_classes: ['flat', 'circular'],
+            });
+            removeBtn.connect('clicked', () => {
+                const current = new Set(settings.get_strv('min-window-sizes'));
+                current.delete(entry);
+                settings.set_strv('min-window-sizes', [...current]);
+                this._rebuildMinSizeList(settings, group, addRow);
+            });
+            row.add_suffix(removeBtn);
+            group.add(row);
+            this._minSizeRows.push(row);
+        }
+    }
+
+    _showAddMinSizeDialog(window, settings, group, addRow) {
+        const dialog = new Adw.Window({
+            modal: true,
+            transient_for: window,
+            title: _('Add Minimum Window Size'),
+            default_width: 400,
+            default_height: 180,
+        });
+
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 12,
+            margin_top: 24,
+            margin_bottom: 24,
+            margin_start: 24,
+            margin_end: 24,
+        });
+
+        const classEntry = new Gtk.Entry({
+            placeholder_text: _('WM_CLASS instance name (e.g. steam)'),
+            hexpand: true,
+        });
+        box.append(classEntry);
+
+        const sizeEntry = new Gtk.Entry({
+            placeholder_text: _('Width x Height (e.g. 1364x810)'),
+            hexpand: true,
+        });
+        box.append(sizeEntry);
+
+        const btnBox = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+            halign: Gtk.Align.END,
+        });
+
+        const cancelBtn = new Gtk.Button({ label: _('Cancel') });
+        cancelBtn.connect('clicked', () => dialog.close());
+        btnBox.append(cancelBtn);
+
+        const addBtn = new Gtk.Button({
+            label: _('Add'),
+            css_classes: ['suggested-action'],
+        });
+        addBtn.connect('clicked', () => {
+            const cls = classEntry.get_text().trim().toLowerCase();
+            const size = sizeEntry.get_text().trim();
+            const m = /^(\d+)x(\d+)$/.exec(size);
+            if (cls.length > 0 && m) {
+                const entry = `${cls}:${m[1]}x${m[2]}`;
+                const current = new Set(settings.get_strv('min-window-sizes'));
+                current.add(entry);
+                settings.set_strv('min-window-sizes', [...current]);
+                this._rebuildMinSizeList(settings, group, addRow);
+            }
+            dialog.close();
+        });
+        btnBox.append(addBtn);
+
+        sizeEntry.connect('activate', () => addBtn.emit('clicked'));
+
+        box.append(btnBox);
+        dialog.set_content(box);
+        dialog.present();
+
+        classEntry.grab_focus();
     }
 
     _showAddFloatDialog(window, settings, group, addRow, settingsKey, placeholder) {

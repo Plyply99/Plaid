@@ -181,6 +181,13 @@
       <description>Exact window titles that should not be tiled (case-sensitive)</description>
     </key>
 
+    <!-- Hard minimum window sizes (class:WxH) -->
+    <key name="min-window-sizes" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Minimum sizes for window classes</summary>
+      <description>Entries in the form "class:WxH" (e.g. steam:1364x810). Used when a window's minimum size is not reported by the compositor, so tiled slots never target narrower sizes than the window can take</description>
+    </key>
+
     <!-- Keybindings: Window Movement -->
     <key name="move-focus-left" type="as">
       <default><![CDATA[['<Super>h']]]></default>
