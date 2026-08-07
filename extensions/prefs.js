@@ -144,11 +144,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     updateStatus.label = _('Plaid is up to date');
                     return;
                 }
-                const dismissed = settings.get_int('release-check-dismissed');
-                if (latest <= dismissed) {
-                    updateStatus.label = `${ver(latest)} is available`;
-                    return;
-                }
                 updateStatus.label = `${ver(latest)} is available`;
                 const dialog = new Adw.AlertDialog({
                     heading: `Plaid ${ver(latest)} is available`,
