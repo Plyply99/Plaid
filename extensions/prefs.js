@@ -2,6 +2,7 @@ import Gio from 'gi://Gio';
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk?version=4.0';
 import Gdk from 'gi://Gdk?version=4.0';
+import Soup from 'gi://Soup';
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 export default class TilingWMPreferences extends ExtensionPreferences {
@@ -76,6 +77,58 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         group.add(tilingPopupRow);
         settings.bind('tiling-popup', tilingPopupRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const updateRow = new Adw.ActionRow({
+            title: _('Check for updates'),
+            subtitle: _('See if a newer Plaid release is available'),
+        });
+        const updateButton = new Gtk.Button({
+            label: _('Check'),
+            valign: Gtk.Align.CENTER,
+        });
+        const updateStatus = new Gtk.Label({
+            label: '',
+            css_classes: ['dim-label'],
+            valign: Gtk.Align.CENTER,
+            wrap: true,
+        });
+        updateRow.add_suffix(updateStatus);
+        updateRow.add_suffix(updateButton);
+        group.add(updateRow);
+
+        const runUpdateCheck = () => {
+            updateButton.sensitive = false;
+            updateStatus.label = _('Checking…');
+            const session = new Soup.Session();
+            const message = Soup.Message.new('GET',
+                'https://api.github.com/repos/Plyply99/Plaid/releases/latest');
+            session.send_and_read_async(message, 0, null, (sess, result) => {
+                let latest = null;
+                let url = null;
+                try {
+                    const bytes = sess.send_and_read_finish(result);
+                    const json = JSON.parse(bytes.get_data());
+                    const tag = json.tag_name || '';
+                    url = json.html_url || '';
+                    const m = String(tag).match(/^v?(\d+)\.(\d+)$/);
+                    if (m) latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
+                } catch (_e) {}
+                updateButton.sensitive = true;
+                if (!latest) {
+                    updateStatus.label = _('Could not reach GitHub — try again later');
+                    return;
+                }
+                const installed = Number(this.metadata?.version) || 0;
+                const ver = (n) => `v${Math.floor(n / 100)}.${n % 100}`;
+                if (latest > installed && installed > 0) {
+                    updateStatus.label = `${ver(latest)} is available — ${url}`;
+                } else {
+                    updateStatus.label = _('Plaid is up to date');
+                }
+            });
+        };
+        updateButton.connect('clicked', runUpdateCheck);
+        settings.bind('release-check-enabled', updateRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
 
         const gapRow = new Adw.SpinRow({
             title: _('Window Gap'),

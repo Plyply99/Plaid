@@ -180,4 +180,45 @@ plaid-settings-help() {
         local type="${rest%%|*}" summary="${rest#*|}"
         printf 'plaid-%-30s %-4s %s\n' "$key" "$type" "$summary"
     done
+    printf '%s\n' "----------------------------------------------------------------------------"
+    printf '%-34s %-4s %s\n' "plaid-update" "cmd" "Check for a newer Plaid release"
+}
+
+plaid-update() {
+    local dir script_url
+    dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local installed
+    installed="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$dir/metadata.json" | head -n1)"
+    if [ -z "$installed" ]; then
+        echo "plaid-update: could not read the installed version (metadata.json missing?)" >&2
+        return 1
+    fi
+    local json tag latest url
+    json="$(curl -sfL --max-time 15 'https://api.github.com/repos/Plyply99/Plaid/releases/latest' 2>/dev/null)" || {
+        echo "plaid-update: could not reach GitHub (offline? rate-limited?)" >&2
+        return 1
+    }
+    tag="$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    url="$(printf '%s' "$json" | sed -n 's/.*"html_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    if [ -z "$tag" ]; then
+        echo "plaid-update: unexpected GitHub response" >&2
+        return 1
+    fi
+    latest="$(printf '%s' "$tag" | sed -n 's/^v\{0,1\}\([0-9][0-9]*\)\.\([0-9][0-9]*\)$/\1\2/p')"
+    local iv lv
+    iv="$(printf '%d' "$installed")"
+    lv="$(printf '%d' "$latest")"
+    if [ -z "$lv" ]; then
+        echo "plaid-update: could not parse the latest version tag ($tag)" >&2
+        return 1
+    fi
+    if [ "$lv" -gt "$iv" ]; then
+        echo "A newer Plaid is available: $tag (you have $installed)"
+        [ -n "$url" ] && echo "Release page: $url"
+        echo "Install: download the zip from the release page, then:"
+        echo "  gnome-extensions install plaid@plyply99.zip"
+        echo "  (log out and back in to apply)"
+    else
+        echo "Plaid is up to date ($installed)."
+    fi
 }

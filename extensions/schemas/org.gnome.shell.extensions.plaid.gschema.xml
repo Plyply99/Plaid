@@ -417,5 +417,12 @@
       <description>Which logo mark the init overlay displays: 'a-tartan', 'b-bsp', 'b-thread', 'b-weave', 'c-weave', or 'all' to show every mark side by side</description>
     </key>
 
+    <!-- Updates -->
+    <key name="release-check-enabled" type="b">
+      <default>true</default>
+      <summary>Check for new Plaid releases</summary>
+      <description>Check GitHub for a newer Plaid release at session start and notify when one is available. Updates are installed manually from the release page.</description>
+    </key>
+
   </schema>
 </schemalist>

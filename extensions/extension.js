@@ -8,6 +8,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
@@ -385,6 +386,11 @@ export default class TilingWMExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
         this._initBackgroundApp();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._checkForUpdates();
+            return GLib.SOURCE_REMOVE;
+        });
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -4203,6 +4209,61 @@ export default class TilingWMExtension extends Extension {
         const layout = this._getWorkspaceLayout(ws);
         this._showPopup(`Workspace ${this._bgAppRealToDisplay(this._wsIndex(ws)) + 1}`,
             `Layout: ${LAYOUT_NAMES[layout] || layout}`);
+    }
+
+    _checkForUpdates() {
+        if (this._destroyed || !this._settings) return;
+        try {
+            if (!this._settings.get_boolean('release-check-enabled')) return;
+        } catch (_e) { return; }
+        try {
+            const Soup = imports.gi.Soup;
+            const session = new Soup.Session();
+            const message = Soup.Message.new('GET',
+                'https://api.github.com/repos/Plyply99/Plaid/releases/latest');
+            session.send_and_read_async(message, 0, null, (sess, result) => {
+                try {
+                    if (this._destroyed) return;
+                    const bytes = sess.send_and_read_finish(result);
+                    const json = JSON.parse(bytes.get_data());
+                    const tag = json.tag_name || '';
+                    const url = json.html_url || '';
+                    const m = String(tag).match(/^v?(\d+)\.(\d+)$/);
+                    if (!m) return;
+                    const latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
+                    const installed = parseInt(this.metadata.version, 10);
+                    if (latest > installed) {
+                        const notif = new MessageTray.Notification({
+                            source: this._notifSource(),
+                            title: `Plaid v${m[1]}.${m[2]} is available`,
+                            body: `You're running v${Math.floor(installed / 100)}.${installed % 100}. Open the release page to install it.`,
+                        });
+                        notif.addAction(_('Open release'), () => {
+                            try {
+                                Gio.AppInfo.launch_default_for_uri(url, null);
+                            } catch (_e) {}
+                        });
+                        notif.connect('activated', () => {
+                            try {
+                                Gio.AppInfo.launch_default_for_uri(url, null);
+                            } catch (_e) {}
+                        });
+                        notif.notify();
+                    }
+                } catch (_e) {}
+            });
+        } catch (_e) {}
+    }
+
+    _notifSource() {
+        if (this._notifSourceObj) return this._notifSourceObj;
+        try {
+            this._notifSourceObj = new MessageTray.Source('Plaid', 'plaid-logo-symbolic');
+            MessageTray.get().add(this._notifSourceObj);
+        } catch (_e) {
+            this._notifSourceObj = null;
+        }
+        return this._notifSourceObj;
     }
 
     _showPopup(title, subtitle = null) {
