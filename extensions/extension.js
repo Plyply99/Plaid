@@ -8,7 +8,6 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import cairo from 'gi://cairo';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { WorkspaceSwitcherPopup, MonitorWorkspaceSwitcherPopup }
     from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
@@ -329,6 +328,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppSettingsChangedId = 0;
         this._backgroundAppEnabledChangedId = 0;
         this._backgroundAppRestartId = 0;
+        this._releaseCheckId = 0;
         this._backgroundAppProc = null;
         this._backgroundAppFirstFrameId = 0;
         this._backgroundAppClone = null;
@@ -386,7 +386,9 @@ export default class TilingWMExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
         this._initBackgroundApp();
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        if (this._releaseCheckId) GLib.source_remove(this._releaseCheckId);
+        this._releaseCheckId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 15000, () => {
+            this._releaseCheckId = 0;
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             this._checkForUpdates();
             return GLib.SOURCE_REMOVE;
@@ -487,6 +489,10 @@ export default class TilingWMExtension extends Extension {
         if (this._backgroundAppRestartId) {
             GLib.source_remove(this._backgroundAppRestartId);
             this._backgroundAppRestartId = 0;
+        }
+        if (this._releaseCheckId) {
+            GLib.source_remove(this._releaseCheckId);
+            this._releaseCheckId = 0;
         }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
@@ -4217,53 +4223,31 @@ export default class TilingWMExtension extends Extension {
             if (!this._settings.get_boolean('release-check-enabled')) return;
         } catch (_e) { return; }
         try {
-            const Soup = imports.gi.Soup;
-            const session = new Soup.Session();
-            const message = Soup.Message.new('GET',
-                'https://api.github.com/repos/Plyply99/Plaid/releases/latest');
-            session.send_and_read_async(message, 0, null, (sess, result) => {
+            const proc = Gio.Subprocess.new(
+                ['/bin/sh', '-c',
+                    'curl -sL --max-time 10 ' +
+                    'https://api.github.com/repos/Plyply99/Plaid/releases/latest'],
+                Gio.SubprocessFlags.STDOUT_PIPE);
+            proc.communicate_utf8_async(null, null, (sub, result) => {
                 try {
                     if (this._destroyed) return;
-                    const bytes = sess.send_and_read_finish(result);
-                    const json = JSON.parse(bytes.get_data());
-                    const tag = json.tag_name || '';
+                    const [, stdout] = sub.communicate_utf8_finish(result);
+                    const json = JSON.parse(stdout || '');
+                    const tag = String(json.tag_name || '');
                     const url = json.html_url || '';
-                    const m = String(tag).match(/^v?(\d+)\.(\d+)$/);
+                    const m = tag.match(/^v?(\d+)\.(\d+)$/);
                     if (!m) return;
                     const latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
                     const installed = parseInt(this.metadata.version, 10);
                     if (latest > installed) {
-                        const notif = new MessageTray.Notification({
-                            source: this._notifSource(),
-                            title: `Plaid v${m[1]}.${m[2]} is available`,
-                            body: `You're running v${Math.floor(installed / 100)}.${installed % 100}. Open the release page to install it.`,
-                        });
-                        notif.addAction(_('Open release'), () => {
-                            try {
-                                Gio.AppInfo.launch_default_for_uri(url, null);
-                            } catch (_e) {}
-                        });
-                        notif.connect('activated', () => {
-                            try {
-                                Gio.AppInfo.launch_default_for_uri(url, null);
-                            } catch (_e) {}
-                        });
-                        notif.notify();
+                        Main.notify(
+                            `Plaid v${m[1]}.${m[2]} is available`,
+                            `You're running v${Math.floor(installed / 100)}.${installed % 100}.` +
+                            (url ? `\n${url}` : ''));
                     }
                 } catch (_e) {}
             });
         } catch (_e) {}
-    }
-
-    _notifSource() {
-        if (this._notifSourceObj) return this._notifSourceObj;
-        try {
-            this._notifSourceObj = new MessageTray.Source('Plaid', 'plaid-logo-symbolic');
-            MessageTray.get().add(this._notifSourceObj);
-        } catch (_e) {
-            this._notifSourceObj = null;
-        }
-        return this._notifSourceObj;
     }
 
     _showPopup(title, subtitle = null) {

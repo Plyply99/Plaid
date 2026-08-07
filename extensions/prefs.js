@@ -2,7 +2,6 @@ import Gio from 'gi://Gio';
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk?version=4.0';
 import Gdk from 'gi://Gdk?version=4.0';
-import Soup from 'gi://Soup';
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 export default class TilingWMPreferences extends ExtensionPreferences {
@@ -99,15 +98,17 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         const runUpdateCheck = () => {
             updateButton.sensitive = false;
             updateStatus.label = _('Checking…');
-            const session = new Soup.Session();
-            const message = Soup.Message.new('GET',
-                'https://api.github.com/repos/Plyply99/Plaid/releases/latest');
-            session.send_and_read_async(message, 0, null, (sess, result) => {
+            const proc = Gio.Subprocess.new(
+                ['/bin/sh', '-c',
+                    'curl -sL --max-time 10 ' +
+                    'https://api.github.com/repos/Plyply99/Plaid/releases/latest'],
+                Gio.SubprocessFlags.STDOUT_PIPE);
+            proc.communicate_utf8_async(null, null, (sub, result) => {
                 let latest = null;
                 let url = null;
                 try {
-                    const bytes = sess.send_and_read_finish(result);
-                    const json = JSON.parse(bytes.get_data());
+                    const [, stdout] = sub.communicate_utf8_finish(result);
+                    const json = JSON.parse(stdout || '');
                     const tag = json.tag_name || '';
                     url = json.html_url || '';
                     const m = String(tag).match(/^v?(\d+)\.(\d+)$/);
