@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk?version=4.0';
 import Gdk from 'gi://Gdk?version=4.0';
@@ -98,16 +99,17 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const launchUpdateTerminal = () => {
             const script = `${this.path}/plaid-terminal-settings.sh`;
+            const cmd = `source "${script}" && plaid-update && exec bash`;
             const terminals = [
-                { bin: 'ghostty', args: ['-e', '/bin/bash', '-c', `source "${script}" && plaid-update && exec bash`] },
-                { bin: 'gnome-terminal', args: ['--', '/bin/bash', '-c', `source "${script}" && plaid-update && exec bash`] },
-                { bin: 'x-terminal-emulator', args: ['-e', '/bin/bash', '-c', `source "${script}" && plaid-update && exec bash`] },
+                ['ghostty', '-e', '/bin/bash', '-c', cmd],
+                ['gnome-terminal', '--', '/bin/bash', '-c', cmd],
+                ['x-terminal-emulator', '-e', '/bin/bash', '-c', cmd],
             ];
-            for (const t of terminals) {
+            for (const argv of terminals) {
                 try {
-                    const app = Gio.AppInfo.create_from_commandline(t.bin, null,
-                        Gio.AppInfoCreateFlags.NONE);
-                    if (app && app.launch(t.args, null)) return;
+                    if (!GLib.find_program_in_path(argv[0])) continue;
+                    new Gio.Subprocess({ argv });
+                    return;
                 } catch (_e) {}
             }
             updateStatus.label = _('No terminal found to run plaid-update');
