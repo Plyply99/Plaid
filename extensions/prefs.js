@@ -97,23 +97,55 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(updateRow);
         settings.bind('release-check-enabled', updateRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const KNOWN_TERMINALS = [
+            'ghostty', 'ptyxis', 'gnome-terminal', 'kgx', 'konsole',
+            'kitty', 'alacritty', 'xfce4-terminal', 'x-terminal-emulator',
+        ];
+
+        const pickTerminal = () => {
+            const termEnv = GLib.getenv('TERMINAL');
+            if (termEnv) {
+                const bin = GLib.find_program_in_path(termEnv);
+                if (bin) return bin;
+            }
+            for (const t of KNOWN_TERMINALS) {
+                const bin = GLib.find_program_in_path(t);
+                if (!bin) continue;
+                try {
+                    const [ok] = GLib.spawn_command_line_sync(`pgrep -x ${t}`);
+                    if (ok) return bin;
+                } catch (_e) {}
+            }
+            for (const t of KNOWN_TERMINALS) {
+                const bin = GLib.find_program_in_path(t);
+                if (bin) return bin;
+            }
+            return null;
+        };
+
+        const buildTerminalArgv = (bin, cmd) => {
+            const name = GLib.path_get_basename(bin);
+            if (name === 'ptyxis' || name === 'gnome-terminal')
+                return [bin, '--', '/bin/bash', '-c', cmd];
+            return [bin, '-e', '/bin/bash', '-c', cmd];
+        };
+
         const launchUpdateTerminal = () => {
             const script = `${this.path}/plaid-terminal-settings.sh`;
             const cmd = `source "${script}" && plaid-update && exec bash`;
-            const terminals = [
-                ['ghostty', '-e', '/bin/bash', '-c', cmd],
-                ['gnome-terminal', '--', '/bin/bash', '-c', cmd],
-                ['x-terminal-emulator', '-e', '/bin/bash', '-c', cmd],
-            ];
-            for (const argv of terminals) {
-                try {
-                    if (!GLib.find_program_in_path(argv[0])) continue;
-                    updateStatus.label = _('Launching plaid-update…');
-                    this._updateTermProc = new Gio.Subprocess({ argv });
-                    return;
-                } catch (_e) {}
+            const bin = pickTerminal();
+            if (!bin) {
+                updateStatus.label = _('No terminal found to run plaid-update');
+                return;
             }
-            updateStatus.label = _('No terminal found to run plaid-update');
+            updateStatus.label = _('Launching plaid-update…');
+            try {
+                this._updateTermProc = new Gio.Subprocess({
+                    argv: buildTerminalArgv(bin, cmd),
+                });
+            } catch (_e) {
+                updateStatus.label = _('Could not launch plaid-update');
+            }
         };
 
         const runUpdateCheck = () => {
