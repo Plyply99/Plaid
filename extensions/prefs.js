@@ -102,49 +102,68 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             'kitty', 'alacritty', 'xfce4-terminal', 'x-terminal-emulator',
         ];
 
-        const pickTerminal = () => {
-            const termEnv = GLib.getenv('TERMINAL');
-            if (termEnv) {
-                const bin = GLib.find_program_in_path(termEnv);
-                if (bin) return bin;
-            }
-            for (const t of KNOWN_TERMINALS) {
-                const bin = GLib.find_program_in_path(t);
-                if (!bin) continue;
-                try {
-                    const [ok] = GLib.spawn_command_line_sync(`pgrep -x ${t}`);
-                    if (ok) return bin;
-                } catch (_e) {}
-            }
-            for (const t of KNOWN_TERMINALS) {
-                const bin = GLib.find_program_in_path(t);
-                if (bin) return bin;
-            }
-            return null;
-        };
-
-        const buildTerminalArgv = (bin, cmd) => {
-            const name = GLib.path_get_basename(bin);
-            const flag = (name === 'ptyxis' || name === 'gnome-terminal') ? '--' : '-e';
-            return [bin, flag, '/bin/bash', '-i', '-c', cmd];
-        };
-
-        const launchUpdateTerminal = () => {
-            const script = `${this.path}/plaid-terminal-settings.sh`;
-            const shell = GLib.getenv('SHELL') || '/bin/bash';
-            const cmd = `source "${script}" && plaid-update; exec ${shell}`;
-            const bin = pickTerminal();
-            if (!bin) {
-                updateStatus.label = _('No terminal found to run plaid-update');
-                return;
-            }
-            updateStatus.label = _('Launching plaid-update…');
+        const readInstalledVersion = () => {
             try {
-                GLib.spawn_async(null, buildTerminalArgv(bin, cmd), null,
-                    GLib.SpawnFlags.SEARCH_PATH, null);
+                const file = Gio.File.new_for_path(`${this.path}/metadata.json`);
+                const [, contents] = file.load_contents(null);
+                const meta = JSON.parse(new TextDecoder().decode(contents));
+                return Number(meta?.version) || 0;
             } catch (_e) {
-                updateStatus.label = _('Could not launch plaid-update');
+                return Number(this.metadata?.version) || 0;
             }
+        };
+
+        const notifyUser = (title, body) => {
+            try {
+                GLib.spawn_async(null,
+                    ['notify-send', '-a', 'Plaid', '-i', 'plaid-logo-symbolic', title, body],
+                    null, GLib.SpawnFlags.SEARCH_PATH, null);
+            } catch (_e) {}
+        };
+
+        const runAwaited = (argv, onDone) => {
+            try {
+                const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
+                proc.wait_check_async(null, (sub, result) => {
+                    try {
+                        sub.wait_check_finish(result);
+                        onDone(null);
+                    } catch (e) {
+                        onDone(e);
+                    }
+                });
+            } catch (e) {
+                onDone(e);
+            }
+        };
+
+        const performUpdate = (assetUrl, latest) => {
+            const ver = (n) => `v${Math.floor(n / 100)}.${n % 100}`;
+            const home = GLib.get_home_dir();
+            const zipPath = `${home}/Downloads/plaid@plyply99.zip`;
+            updateStatus.label = _('Downloading…');
+            runAwaited(['/bin/sh', '-c',
+                `curl -sfL --max-time 60 -o "${zipPath}" "${assetUrl}"`], (err) => {
+                if (err) {
+                    updateStatus.label = _('Download failed');
+                    notifyUser(_('Plaid update failed'),
+                        _('Could not download the update. Check the release page.'));
+                    return;
+                }
+                updateStatus.label = _('Installing…');
+                runAwaited(['gnome-extensions', 'install', zipPath], (err2) => {
+                    if (err2) {
+                        updateStatus.label = _('Install failed');
+                        notifyUser(_('Plaid update failed'),
+                            _('Could not install the update. Check the release page.'));
+                        return;
+                    }
+                    settings.set_int('release-check-dismissed', latest);
+                    updateStatus.label = _('Installed — log out and back in to apply');
+                    notifyUser(`Plaid updated to ${ver(latest)}`,
+                        _('Log out and back in to apply the update.'));
+                });
+            });
         };
 
         const runUpdateCheck = () => {
@@ -158,12 +177,19 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             proc.communicate_utf8_async(null, null, (sub, result) => {
                 let latest = null;
                 let url = null;
+                let assetUrl = null;
                 let tag = null;
                 try {
                     const [, stdout] = sub.communicate_utf8_finish(result);
                     const json = JSON.parse(stdout || '');
                     tag = json.tag_name || '';
                     url = json.html_url || '';
+                    for (const a of (json.assets || [])) {
+                        if (a.name === 'plaid@plyply99.zip') {
+                            assetUrl = a.browser_download_url || null;
+                            break;
+                        }
+                    }
                     const m = String(tag).match(/^v?(\d+)\.(\d+)$/);
                     if (m) latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
                 } catch (_e) {}
@@ -172,10 +198,10 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     updateStatus.label = _('Could not reach GitHub — try again later');
                     return;
                 }
-                const installed = Number(this.metadata?.version) || 0;
+                const installed = readInstalledVersion();
                 const ver = (n) => `v${Math.floor(n / 100)}.${n % 100}`;
                 if (latest <= installed) {
-                    updateStatus.label = _('Plaid is up to date');
+                    updateStatus.label = `${_('Plaid is up to date')} (${ver(installed)})`;
                     return;
                 }
                 updateStatus.label = `${ver(latest)} is available`;
@@ -183,20 +209,26 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     heading: `Plaid ${ver(latest)} is available`,
                     body: _("You're running %s. What would you like to do?").replace('%s', ver(installed)),
                 });
-                dialog.add_response('update', _('Run plaid-update'));
+                dialog.add_response('update', _('Update now'));
                 dialog.add_response('open', _('Open release page'));
                 dialog.add_response('close', _('Close'));
                 dialog.set_default_response('update');
                 dialog.set_close_response('close');
                 dialog.connect('response', (dlg, response) => {
-                    settings.set_int('release-check-dismissed', latest);
                     if (response === 'update') {
-                        window.close();
-                        launchUpdateTerminal();
+                        if (assetUrl) {
+                            performUpdate(assetUrl, latest);
+                        } else {
+                            updateStatus.label = _('Update zip not found on the release');
+                            notifyUser(_('Plaid update failed'),
+                                _('Could not find the update zip. Check the release page.'));
+                        }
                     } else if (response === 'open') {
                         try {
                             Gio.AppInfo.launch_default_for_uri(url, null);
                         } catch (_e) {}
+                    } else if (response === 'close') {
+                        settings.set_int('release-check-dismissed', latest);
                     }
                 });
                 dialog.present(window);
