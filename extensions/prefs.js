@@ -141,6 +141,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             const ver = (n) => `v${Math.floor(n / 100)}.${n % 100}`;
             const home = GLib.get_home_dir();
             const zipPath = `${home}/Downloads/plaid@plyply99.zip`;
+            const uuid = 'plaid@plyply99';
             updateStatus.label = _('Downloading…');
             runAwaited(['/bin/sh', '-c',
                 `curl -sfL --max-time 60 -o "${zipPath}" "${assetUrl}"`], (err) => {
@@ -150,18 +151,23 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                         _('Could not download the update. Check the release page.'));
                     return;
                 }
-                updateStatus.label = _('Installing…');
-                runAwaited(['gnome-extensions', 'install', '--force', zipPath], (err2) => {
-                    if (err2) {
-                        updateStatus.label = _('Install failed');
-                        notifyUser(_('Plaid update failed'),
-                            _('Could not install the update. Check the release page.'));
-                        return;
-                    }
-                    settings.set_int('release-check-dismissed', latest);
-                    updateStatus.label = _('Installed — log out and back in to apply');
-                    notifyUser(`Plaid updated to ${ver(latest)}`,
-                        _('Log out and back in to apply the update.'));
+                updateStatus.label = _('Restarting Plaid…');
+                runAwaited(['gnome-extensions', 'disable', uuid], (errDisable) => {
+                    updateStatus.label = _('Installing…');
+                    runAwaited(['gnome-extensions', 'install', '--force', zipPath], (err2) => {
+                        if (err2) {
+                            updateStatus.label = _('Install failed');
+                            notifyUser(_('Plaid update failed'),
+                                _('Could not install the update. Check the release page.'));
+                            return;
+                        }
+                        runAwaited(['gnome-extensions', 'enable', uuid], () => {
+                            settings.set_int('release-check-dismissed', latest);
+                            updateStatus.label = `${_('Applied')} — ${ver(latest)}`;
+                            notifyUser(`Plaid updated to ${ver(latest)}`,
+                                _('Applied — no restart needed.'));
+                        });
+                    });
                 });
             });
         };
