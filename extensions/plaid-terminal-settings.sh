@@ -157,6 +157,7 @@ _PLAID_TABLE=(
     "dropdown-terminal|as|Toggle drop-down terminal"
     "background-app-enabled|b|Enable background app"
     "background-app|s|Background app command"
+    "background-app-history|as|Recent background app commands"
 )
 
 for _plaid_entry in "${_PLAID_TABLE[@]}"; do

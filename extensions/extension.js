@@ -4776,6 +4776,9 @@ export default class TilingWMExtension extends Extension {
         }
         this._showBackgroundAppInitOverlay();
         this._scheduleBackgroundAppReservation();
+        const current = this._settings.get_string('background-app');
+        if (current)
+            this._recordBackgroundAppHistory(current);
         this._launchBackgroundApp();
     }
 
@@ -5420,6 +5423,7 @@ export default class TilingWMExtension extends Extension {
             this._scheduleBackgroundAppReservation();
         this._scheduleBackgroundAppReleaseWatch();
         this._debugLog(`background app: launching ${command}`);
+        this._recordBackgroundAppHistory(command);
         try {
             this._backgroundAppProc = Gio.Subprocess.new(
                 ['/bin/sh', '-c', `env PLAID_BGAPP=1 ${command}`],
@@ -5429,6 +5433,17 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppProc = null;
             this._debugLog(`background app: spawn failed: ${e.message}`);
         }
+    }
+
+    _recordBackgroundAppHistory(command) {
+        if (!this._settings || !command) return;
+        try {
+            let history = this._settings.get_strv('background-app-history');
+            history = history.filter((c) => c !== command);
+            history.unshift(command);
+            history = history.slice(0, 5);
+            this._settings.set_strv('background-app-history', history);
+        } catch (_e) {}
     }
 
     _matchesBackgroundApp(win) {

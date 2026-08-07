@@ -618,6 +618,69 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             if (!bgAppEntry.has_focus) commitBgAppCommand();
         });
         bgAppEnabledRow.connect('notify::active', () => commitBgAppCommand());
+
+        const historyButton = new Gtk.MenuButton({
+            valign: Gtk.Align.CENTER,
+            icon_name: 'document-open-recent-symbolic',
+            tooltip_text: _('Recent commands'),
+        });
+        const rebuildHistory = () => {
+            const history = [...settings.get_strv('background-app-history')];
+            const current = settings.get_string('background-app').trim();
+            const items = history.filter((c) => c && c !== current);
+            if (current) items.unshift(current);
+
+            const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 4 });
+            box.set_margin_top(8);
+            box.set_margin_bottom(8);
+            box.set_margin_start(8);
+            box.set_margin_end(8);
+
+            if (items.length === 0) {
+                const emptyLabel = new Gtk.Label({
+                    label: _('No recent commands'),
+                    margin_top: 4,
+                    margin_bottom: 4,
+                    margin_start: 12,
+                    margin_end: 12,
+                    opacity: 0.6,
+                });
+                box.append(emptyLabel);
+            } else {
+                for (const cmd of items) {
+                    const btn = new Gtk.Button({
+                        label: cmd,
+                        hexpand: true,
+                        halign: Gtk.Align.FILL,
+                        css_classes: ['flat'],
+                        tooltip_text: cmd,
+                    });
+                    btn.connect('clicked', () => {
+                        bgAppEntry.set_text(cmd);
+                        commitBgAppCommand();
+                        historyButton.popover.popdown();
+                    });
+                    box.append(btn);
+                }
+            }
+
+            if (historyButton.popover) {
+                historyButton.popover.set_child(box);
+            } else {
+                historyButton.popover = new Gtk.Popover({
+                    child: box,
+                    position: Gtk.PositionType.BOTTOM,
+                });
+                historyButton.set_popover(historyButton.popover);
+            }
+            historyButton.sensitive = items.length > 0;
+        };
+        rebuildHistory();
+        historyButton.connect('notify::active', () => {
+            if (historyButton.active) rebuildHistory();
+        });
+        bgAppEntry.connect('notify::text', () => rebuildHistory());
+        bgAppRow.add_suffix(historyButton);
     }
 
     _buildColorRow(settings, key, title) {
