@@ -938,6 +938,7 @@ export default class TilingWMExtension extends Extension {
         if (win.get_transient_for()) return false;
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         if (this._floatingTitleMatches(title)) return false;
+        if (this._isFixedSizeWindow(win)) return false;
         return true;
     }
 
@@ -991,7 +992,16 @@ export default class TilingWMExtension extends Extension {
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return true;
         if (win.is_skip_taskbar()) return true;
         if (win.get_transient_for()) return true;
+        if (this._isFixedSizeWindow(win)) return true;
         return false;
+    }
+
+    _isFixedSizeWindow(win) {
+        const instance = (win.get_wm_class_instance() || '').toLowerCase();
+        if (instance !== 'steamwebhelper') return false;
+        const [mw, mh] = win.get_min_size();
+        const [xw, xh] = win.get_max_size();
+        return mw > 0 && xw > 0 && mw === xw && mh === xh;
     }
 
     _getWorkspaceOrder(workspace) {
@@ -1110,6 +1120,12 @@ export default class TilingWMExtension extends Extension {
             this._onWindowIdentityChanged(win);
         }) });
         sigIds.push({ emitter: win, id: win.connect('notify::gtk-application-id', () => {
+            this._onWindowIdentityChanged(win);
+        }) });
+        sigIds.push({ emitter: win, id: win.connect('notify::title', () => {
+            this._onWindowIdentityChanged(win);
+        }) });
+        sigIds.push({ emitter: win, id: win.connect('notify::window-type', () => {
             this._onWindowIdentityChanged(win);
         }) });
         sigIds.push({ emitter: win, id: win.connect('unmanaged', () => this._removeWindow(win)) });
@@ -2734,7 +2750,14 @@ export default class TilingWMExtension extends Extension {
         if (this._destroyed || !win) return;
         if (!this._isFloating(win)) return;
         const ws = win.get_workspace();
-        if (ws) this._raiseFloatingWindows(ws);
+        if (ws) {
+            const tree = this._bspGetTree(ws);
+            if (tree && this._bspCollectWindows(tree).includes(win)) {
+                this._bspTrees.set(ws, this._bspRemove(tree, win));
+                this._retileWorkspace(ws);
+            }
+            this._raiseFloatingWindows(ws);
+        }
         this._restoreFloatNaturalRect(win);
     }
 
