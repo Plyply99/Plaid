@@ -8,6 +8,8 @@
 
 Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corners, window blur and plenty more.
 
+Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki) — layouts, settings, and troubleshooting.
+
 ## Features
 
 - **Four layouts**: Dwindle (BSP), Master-stack, Centered Master-stack, and
