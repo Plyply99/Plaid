@@ -151,7 +151,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     return;
                 }
                 updateStatus.label = _('Installing…');
-                runAwaited(['gnome-extensions', 'install', zipPath], (err2) => {
+                runAwaited(['gnome-extensions', 'install', '--force', zipPath], (err2) => {
                     if (err2) {
                         updateStatus.label = _('Install failed');
                         notifyUser(_('Plaid update failed'),
