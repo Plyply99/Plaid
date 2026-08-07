@@ -140,9 +140,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             }
             updateStatus.label = _('Launching plaid-update…');
             try {
-                this._updateTermProc = new Gio.Subprocess({
-                    argv: buildTerminalArgv(bin, cmd),
-                });
+                GLib.spawn_async(null, buildTerminalArgv(bin, cmd), null,
+                    GLib.SpawnFlags.SEARCH_PATH, null);
             } catch (_e) {
                 updateStatus.label = _('Could not launch plaid-update');
             }
