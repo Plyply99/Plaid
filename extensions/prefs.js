@@ -125,14 +125,14 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const buildTerminalArgv = (bin, cmd) => {
             const name = GLib.path_get_basename(bin);
-            if (name === 'ptyxis' || name === 'gnome-terminal')
-                return [bin, '--', '/bin/bash', '-c', cmd];
-            return [bin, '-e', '/bin/bash', '-c', cmd];
+            const flag = (name === 'ptyxis' || name === 'gnome-terminal') ? '--' : '-e';
+            return [bin, flag, '/bin/bash', '-i', '-c', cmd];
         };
 
         const launchUpdateTerminal = () => {
             const script = `${this.path}/plaid-terminal-settings.sh`;
-            const cmd = `source "${script}" && plaid-update && exec bash`;
+            const shell = GLib.getenv('SHELL') || '/bin/bash';
+            const cmd = `source "${script}" && plaid-update; exec ${shell}`;
             const bin = pickTerminal();
             if (!bin) {
                 updateStatus.label = _('No terminal found to run plaid-update');
@@ -192,6 +192,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 dialog.connect('response', (dlg, response) => {
                     settings.set_int('release-check-dismissed', latest);
                     if (response === 'update') {
+                        window.close();
                         launchUpdateTerminal();
                     } else if (response === 'open') {
                         try {
