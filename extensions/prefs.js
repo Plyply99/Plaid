@@ -165,7 +165,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                             settings.set_int('release-check-dismissed', latest);
                             updateStatus.label = `${_('Applied')} — ${ver(latest)}`;
                             notifyUser(`Plaid updated to ${ver(latest)}`,
-                                _('Applied — no restart needed.'));
+                                _('Log out and back in to load the update.'));
                         });
                     });
                 });
