@@ -4240,17 +4240,22 @@ export default class TilingWMExtension extends Extension {
                     const latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
                     const installed = parseInt(this.metadata.version, 10);
                     if (latest > installed) {
-                        Main.notify(
+                        this._showPopup(
                             `Plaid v${m[1]}.${m[2]} is available`,
-                            `You're running v${Math.floor(installed / 100)}.${installed % 100}.` +
-                            (url ? `\n${url}` : ''));
+                            `Click to open the release page`,
+                            15000,
+                            () => {
+                                try {
+                                    Gio.AppInfo.launch_default_for_uri(url, null);
+                                } catch (_e) {}
+                            });
                     }
                 } catch (_e) {}
             });
         } catch (_e) {}
     }
 
-    _showPopup(title, subtitle = null) {
+    _showPopup(title, subtitle = null, duration = 3000, onActivate = null) {
         if (this._layoutPopupHideId) {
             GLib.source_remove(this._layoutPopupHideId);
             this._layoutPopupHideId = 0;
@@ -4289,22 +4294,18 @@ export default class TilingWMExtension extends Extension {
             child: box,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
-            reactive: false,
+            reactive: onActivate !== null,
         });
         this._layoutPopup = popup;
         popup.set_position(0, 0);
         popup.set_size(maxX, maxY);
         Main.layoutManager.uiGroup.add_child(popup);
 
-        popup.opacity = 0;
-        popup.ease({
-            opacity: 255,
-            duration: 150,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-        });
-
-        this._layoutPopupHideId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
-            this._layoutPopupHideId = 0;
+        const dismissPopup = () => {
+            if (this._layoutPopupHideId) {
+                GLib.source_remove(this._layoutPopupHideId);
+                this._layoutPopupHideId = 0;
+            }
             if (this._layoutPopup === popup) {
                 popup.ease({
                     opacity: 0,
@@ -4318,6 +4319,27 @@ export default class TilingWMExtension extends Extension {
                     },
                 });
             }
+        };
+        this._layoutPopupDismiss = dismissPopup;
+
+        if (onActivate) {
+            popup.connect('button-press-event', () => {
+                dismissPopup();
+                try { onActivate(); } catch (_e) {}
+                return Clutter.EVENT_STOP;
+            });
+        }
+
+        popup.opacity = 0;
+        popup.ease({
+            opacity: 255,
+            duration: 150,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+
+        this._layoutPopupHideId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, duration, () => {
+            this._layoutPopupHideId = 0;
+            dismissPopup();
             return GLib.SOURCE_REMOVE;
         });
     }
