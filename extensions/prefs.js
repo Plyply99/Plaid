@@ -108,7 +108,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             for (const argv of terminals) {
                 try {
                     if (!GLib.find_program_in_path(argv[0])) continue;
-                    new Gio.Subprocess({ argv });
+                    updateStatus.label = _('Launching plaid-update…');
+                    this._updateTermProc = new Gio.Subprocess({ argv });
                     return;
                 } catch (_e) {}
             }
