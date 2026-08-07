@@ -4239,12 +4239,15 @@ export default class TilingWMExtension extends Extension {
                     if (!m) return;
                     const latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
                     const installed = parseInt(this.metadata.version, 10);
-                    if (latest > installed) {
+                    if (latest > installed && latest > this._settings.get_int('release-check-dismissed')) {
                         this._showPopup(
                             `Plaid v${m[1]}.${m[2]} is available`,
                             `Click to open the release page`,
                             15000,
                             () => {
+                                try {
+                                    this._settings.set_int('release-check-dismissed', latest);
+                                } catch (_e) {}
                                 try {
                                     Gio.AppInfo.launch_default_for_uri(url, null);
                                 } catch (_e) {}

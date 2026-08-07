@@ -424,5 +424,11 @@
       <description>Check GitHub for a newer Plaid release at session start and notify when one is available. Updates are installed manually from the release page.</description>
     </key>
 
+    <key name="release-check-dismissed" type="i">
+      <default>0</default>
+      <summary>Last dismissed release version</summary>
+      <description>The release version the user last dismissed or acknowledged. Update reminders only reappear when a newer release ships.</description>
+    </key>
+
   </schema>
 </schemalist>

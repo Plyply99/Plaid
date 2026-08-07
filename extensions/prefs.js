@@ -77,9 +77,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(tilingPopupRow);
         settings.bind('tiling-popup', tilingPopupRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
-        const updateRow = new Adw.ActionRow({
+        const updateRow = new Adw.SwitchRow({
             title: _('Check for updates'),
-            subtitle: _('See if a newer Plaid release is available'),
+            subtitle: _('Notify when a newer Plaid release is available'),
         });
         const updateButton = new Gtk.Button({
             label: _('Check'),
@@ -94,6 +94,24 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         updateRow.add_suffix(updateStatus);
         updateRow.add_suffix(updateButton);
         group.add(updateRow);
+        settings.bind('release-check-enabled', updateRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const launchUpdateTerminal = () => {
+            const script = `${this.path}/plaid-terminal-settings.sh`;
+            const terminals = [
+                { bin: 'ghostty', args: ['-e', '/bin/bash', '-c', `source "${script}" && plaid-update && exec bash`] },
+                { bin: 'gnome-terminal', args: ['--', '/bin/bash', '-c', `source "${script}" && plaid-update && exec bash`] },
+                { bin: 'x-terminal-emulator', args: ['-e', '/bin/bash', '-c', `source "${script}" && plaid-update && exec bash`] },
+            ];
+            for (const t of terminals) {
+                try {
+                    const app = Gio.AppInfo.create_from_commandline(t.bin, null,
+                        Gio.AppInfoCreateFlags.NONE);
+                    if (app && app.launch(t.args, null)) return;
+                } catch (_e) {}
+            }
+            updateStatus.label = _('No terminal found to run plaid-update');
+        };
 
         const runUpdateCheck = () => {
             updateButton.sensitive = false;
@@ -106,10 +124,11 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             proc.communicate_utf8_async(null, null, (sub, result) => {
                 let latest = null;
                 let url = null;
+                let tag = null;
                 try {
                     const [, stdout] = sub.communicate_utf8_finish(result);
                     const json = JSON.parse(stdout || '');
-                    const tag = json.tag_name || '';
+                    tag = json.tag_name || '';
                     url = json.html_url || '';
                     const m = String(tag).match(/^v?(\d+)\.(\d+)$/);
                     if (m) latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
@@ -121,15 +140,39 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 }
                 const installed = Number(this.metadata?.version) || 0;
                 const ver = (n) => `v${Math.floor(n / 100)}.${n % 100}`;
-                if (latest > installed && installed > 0) {
-                    updateStatus.label = `${ver(latest)} is available — ${url}`;
-                } else {
+                if (latest <= installed) {
                     updateStatus.label = _('Plaid is up to date');
+                    return;
                 }
+                const dismissed = settings.get_int('release-check-dismissed');
+                if (latest <= dismissed) {
+                    updateStatus.label = `${ver(latest)} is available`;
+                    return;
+                }
+                updateStatus.label = `${ver(latest)} is available`;
+                const dialog = new Adw.AlertDialog({
+                    heading: `Plaid ${ver(latest)} is available`,
+                    body: _("You're running %s. What would you like to do?").replace('%s', ver(installed)),
+                });
+                dialog.add_response('update', _('Run plaid-update'));
+                dialog.add_response('open', _('Open release page'));
+                dialog.add_response('close', _('Close'));
+                dialog.set_default_response('update');
+                dialog.set_close_response('close');
+                dialog.connect('response', (dlg, response) => {
+                    settings.set_int('release-check-dismissed', latest);
+                    if (response === 'update') {
+                        launchUpdateTerminal();
+                    } else if (response === 'open') {
+                        try {
+                            Gio.AppInfo.launch_default_for_uri(url, null);
+                        } catch (_e) {}
+                    }
+                });
+                dialog.present(window);
             });
         };
         updateButton.connect('clicked', runUpdateCheck);
-        settings.bind('release-check-enabled', updateRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
 
         const gapRow = new Adw.SpinRow({
             title: _('Window Gap'),
