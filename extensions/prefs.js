@@ -57,6 +57,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         group.add(followRow);
         settings.bind('follow-focus', followRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const pointerFocusRow = new Adw.SwitchRow({
+            title: _('Pointer Focus'),
+            subtitle: _('Focus the topmost window under the mouse (sloppy focus), across all monitors'),
+        });
+        group.add(pointerFocusRow);
+        settings.bind('pointer-focus', pointerFocusRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const mouseResizeRow = new Adw.SwitchRow({
             title: _('Mouse Resize and Swap'),
             subtitle: _('Drag window edges to resize splits, drag title bar to swap windows'),

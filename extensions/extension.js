@@ -329,6 +329,9 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppEnabledChangedId = 0;
         this._backgroundAppRestartId = 0;
         this._releaseCheckId = 0;
+        this._pointerFocusId = 0;
+        this._pointerFocusLastX = -1;
+        this._pointerFocusLastY = -1;
         this._backgroundAppProc = null;
         this._backgroundAppFirstFrameId = 0;
         this._backgroundAppClone = null;
@@ -386,6 +389,7 @@ export default class TilingWMExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
         this._initBackgroundApp();
+        this._initPointerFocus();
         if (this._releaseCheckId) GLib.source_remove(this._releaseCheckId);
         this._releaseCheckId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 15000, () => {
             this._releaseCheckId = 0;
@@ -493,6 +497,11 @@ export default class TilingWMExtension extends Extension {
         if (this._releaseCheckId) {
             GLib.source_remove(this._releaseCheckId);
             this._releaseCheckId = 0;
+        }
+        this._teardownPointerFocus();
+        if (this._pointerFocusEnabledId) {
+            try { this._settings.disconnect(this._pointerFocusEnabledId); } catch (_e) {}
+            this._pointerFocusEnabledId = 0;
         }
         this._dropdownPending = false;
         if (this._dropdownPendingId) {
@@ -4825,6 +4834,107 @@ export default class TilingWMExtension extends Extension {
         try { win.skip_taskbar = false; } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
         this._dropdownWin = null;
+    }
+
+    // --- Pointer Focus (sloppy focus) ---
+
+    _initPointerFocus() {
+        try {
+            this._pointerFocusEnabledId = this._settings.connect(
+                'changed::pointer-focus', () => this._syncPointerFocus());
+        } catch (_e) {
+            this._pointerFocusEnabledId = 0;
+        }
+        this._pointerFocusStageId = 0;
+        this._syncPointerFocus();
+    }
+
+    _syncPointerFocus() {
+        const enabled = this._settings?.get_boolean('pointer-focus') ?? false;
+        if (!enabled) {
+            this._teardownPointerFocus();
+            return;
+        }
+        if (this._pointerFocusStageId) return;
+        try {
+            const stage = global.get_stage();
+            this._pointerFocusStageId = stage.connect('motion-event',
+                () => this._kickPointerFocusTimer());
+        } catch (_e) {
+            this._pointerFocusStageId = 0;
+        }
+    }
+
+    _teardownPointerFocus() {
+        if (this._pointerFocusStageId) {
+            try {
+                global.get_stage().disconnect(this._pointerFocusStageId);
+            } catch (_e) {}
+            this._pointerFocusStageId = 0;
+        }
+        if (this._pointerFocusId) {
+            GLib.source_remove(this._pointerFocusId);
+            this._pointerFocusId = 0;
+        }
+    }
+
+    _kickPointerFocusTimer() {
+        if (this._pointerFocusId) {
+            GLib.source_remove(this._pointerFocusId);
+            this._pointerFocusId = 0;
+        }
+        this._pointerFocusId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            this._pointerFocusId = 0;
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._applyPointerFocus();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _applyPointerFocus() {
+        try {
+            if (Main.overview.visible) return;
+            if (Main.layoutManager.isModal()) return;
+            const [px, py] = global.get_pointer();
+            if (px === this._pointerFocusLastX && py === this._pointerFocusLastY) return;
+            this._pointerFocusLastX = px;
+            this._pointerFocusLastY = py;
+            const candidates = [];
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                for (const win of ws.list_windows()) {
+                    if (!win || !this._canPointerFocusWindow(win)) continue;
+                    if (this._windowContains(win, px, py)) candidates.push(win);
+                }
+            }
+            if (candidates.length === 0) return;
+            const stacked = global.display.sort_windows_by_stacking(candidates);
+            const target = stacked[stacked.length - 1];
+            if (!target) return;
+            if (target === global.display.focus_window) return;
+            if (target === this._dropdownWin || target === this._backgroundAppWin) return;
+            if (this._scratchpadWindows && this._scratchpadWindows.has(target)) return;
+            target.focus(global.get_current_time());
+        } catch (_e) {}
+    }
+
+    _windowContains(win, px, py) {
+        try {
+            const rect = win.get_frame_rect();
+            return px >= rect.x && px < rect.x + rect.width &&
+                py >= rect.y && py < rect.y + rect.height;
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    _canPointerFocusWindow(win) {
+        if (!win) return false;
+        if (win.is_minimized()) return false;
+        try {
+            if (win.is_skip_taskbar() && !this._isFloating(win)) return false;
+        } catch (_e) {}
+        return true;
     }
 
     // --- Background App ---

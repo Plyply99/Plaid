@@ -289,6 +289,12 @@
       <description>When true, the mouse cursor warps to the center of the focused window on keybind navigation and new window creation, but not on mouse clicks</description>
     </key>
 
+    <key name="pointer-focus" type="b">
+      <default>false</default>
+      <summary>Focus window under the mouse (sloppy focus)</summary>
+      <description>When true, Plaid moves focus to the topmost window under the mouse pointer after a short pause. Works across all monitors. Plaid implements this itself so it does not rely on mutter's focus-follows-mouse, which can hang during logout.</description>
+    </key>
+
     <!-- Mouse interaction: edge-resize and title-bar swap -->
     <key name="mouse-resize" type="b">
       <default>true</default>
