@@ -332,7 +332,7 @@ export default class TilingWMExtension extends Extension {
         this._pointerFocusId = 0;
         this._pointerFocusLastX = -1;
         this._pointerFocusLastY = -1;
-        this._pointerFocusStable = false;
+        this._pointerFocusCandSig = '';
         this._backgroundAppProc = null;
         this._backgroundAppFirstFrameId = 0;
         this._backgroundAppClone = null;
@@ -4229,6 +4229,7 @@ export default class TilingWMExtension extends Extension {
 
     _checkForUpdates() {
         if (this._destroyed || !this._settings) return;
+        if (this.path.startsWith('/usr/share/')) return;
         try {
             if (!this._settings.get_boolean('release-check-enabled')) return;
         } catch (_e) { return; }
@@ -4889,7 +4890,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         if (this._pointerFocusId) return;
-        this._pointerFocusId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+        this._pointerFocusId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             this._pointerFocusTick();
             return GLib.SOURCE_CONTINUE;
@@ -4907,17 +4908,10 @@ export default class TilingWMExtension extends Extension {
     _pointerFocusTick() {
         try {
             const [px, py] = global.get_pointer();
-            if (px === this._pointerFocusLastX && py === this._pointerFocusLastY) {
-                this._pointerFocusStable = false;
+            if (px === this._pointerFocusLastX && py === this._pointerFocusLastY)
                 return;
-            }
             this._pointerFocusLastX = px;
             this._pointerFocusLastY = py;
-            if (!this._pointerFocusStable) {
-                this._pointerFocusStable = true;
-                return;
-            }
-            this._pointerFocusStable = false;
             this._applyPointerFocus(px, py);
         } catch (e) {
             this._debugLog(`pointer focus: tick failed: ${e.message}`);
@@ -4945,8 +4939,10 @@ export default class TilingWMExtension extends Extension {
         try {
             const candidates = [];
             let total = 0;
+            const activeWs = global.workspace_manager.get_active_workspace();
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (ws !== activeWs) continue;
                 if (ws === this._backgroundAppParkingWs) continue;
                 for (const win of ws.list_windows()) {
                     total++;
@@ -4957,7 +4953,11 @@ export default class TilingWMExtension extends Extension {
                         candidates.push(win);
                 }
             }
-            this._debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
+            const sig = candidates.map(w => w.get_id()).join(',');
+            if (sig !== this._pointerFocusCandSig) {
+                this._pointerFocusCandSig = sig;
+                this._debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
+            }
             if (candidates.length === 0) return null;
             const stacked = global.display.sort_windows_by_stacking(candidates);
             return stacked[stacked.length - 1];
