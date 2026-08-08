@@ -58,8 +58,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         settings.bind('follow-focus', followRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         const pointerFocusRow = new Adw.SwitchRow({
-            title: _('Pointer Focus'),
-            subtitle: _('Focus the topmost window under the mouse (sloppy focus), across all monitors'),
+            title: _('Focus on Hover'),
+            subtitle: _('Focus the window under the mouse (works across monitors)'),
         });
         group.add(pointerFocusRow);
         settings.bind('pointer-focus', pointerFocusRow, 'active', Gio.SettingsBindFlags.DEFAULT);

@@ -139,7 +139,7 @@ _PLAID_TABLE=(
     "toggle-maximize|as|Toggle maximize (maximize, press again to restore)"
     "center-window|as|Center focused window"
     "follow-focus|b|Move cursor to focused window"
-    "pointer-focus|b|Focus window under the mouse (sloppy focus)"
+    "pointer-focus|b|Focus window under the mouse (focus on hover)"
     "mouse-resize|b|Enable mouse-based resize and swap"
     "workspace-popup|b|Show workspace popup"
     "tiling-popup|b|Show tiling popup"

@@ -332,6 +332,7 @@ export default class TilingWMExtension extends Extension {
         this._pointerFocusId = 0;
         this._pointerFocusLastX = -1;
         this._pointerFocusLastY = -1;
+        this._pointerFocusStable = false;
         this._backgroundAppProc = null;
         this._backgroundAppFirstFrameId = 0;
         this._backgroundAppClone = null;
@@ -4845,7 +4846,6 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._pointerFocusEnabledId = 0;
         }
-        this._pointerFocusStageId = 0;
         this._syncPointerFocus();
     }
 
@@ -4855,64 +4855,49 @@ export default class TilingWMExtension extends Extension {
             this._teardownPointerFocus();
             return;
         }
-        if (this._pointerFocusStageId) return;
-        try {
-            const stage = global.stage;
-            this._pointerFocusStageId = stage.connect('motion-event',
-                () => this._kickPointerFocusTimer());
-            this._debugLog('pointer focus: tracking enabled');
-        } catch (e) {
-            this._pointerFocusStageId = 0;
-            this._debugLog(`pointer focus: tracking failed: ${e.message}`);
-        }
+        if (this._pointerFocusId) return;
+        this._pointerFocusId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            this._pointerFocusTick();
+            return GLib.SOURCE_CONTINUE;
+        });
+        this._debugLog('pointer focus: tracking enabled');
     }
 
     _teardownPointerFocus() {
-        if (this._pointerFocusStageId) {
-            try {
-                global.stage.disconnect(this._pointerFocusStageId);
-            } catch (_e) {}
-            this._pointerFocusStageId = 0;
-        }
         if (this._pointerFocusId) {
             GLib.source_remove(this._pointerFocusId);
             this._pointerFocusId = 0;
         }
     }
 
-    _kickPointerFocusTimer() {
-        if (this._pointerFocusId) {
-            GLib.source_remove(this._pointerFocusId);
-            this._pointerFocusId = 0;
-        }
-        this._pointerFocusId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-            this._pointerFocusId = 0;
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
-            this._applyPointerFocus();
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    _applyPointerFocus() {
+    _pointerFocusTick() {
         try {
-            if (Main.overview.visible) return;
-            if (Main.layoutManager.isModal()) return;
             const [px, py] = global.get_pointer();
-            if (px === this._pointerFocusLastX && py === this._pointerFocusLastY) return;
+            if (px === this._pointerFocusLastX && py === this._pointerFocusLastY) {
+                this._pointerFocusStable = false;
+                return;
+            }
             this._pointerFocusLastX = px;
             this._pointerFocusLastY = py;
-            const candidates = [];
-            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
-                const ws = global.workspace_manager.get_workspace_by_index(i);
-                for (const win of ws.list_windows()) {
-                    if (!win || !this._canPointerFocusWindow(win)) continue;
-                    if (this._windowContains(win, px, py)) candidates.push(win);
-                }
+            if (!this._pointerFocusStable) {
+                this._pointerFocusStable = true;
+                return;
             }
-            if (candidates.length === 0) return;
-            const stacked = global.display.sort_windows_by_stacking(candidates);
-            const target = stacked[stacked.length - 1];
+            this._pointerFocusStable = false;
+            this._applyPointerFocus(px, py);
+        } catch (e) {
+            this._debugLog(`pointer focus: tick failed: ${e.message}`);
+        }
+    }
+
+    _applyPointerFocus(px, py) {
+        try {
+            if (Main.overview.visible) return;
+            if (Main.modalCount > 0) return;
+            const target = this._resolveWindowByScan(px, py);
             if (!target) return;
+            if (!this._canPointerFocusWindow(target)) return;
             if (target === global.display.focus_window) return;
             if (target === this._dropdownWin || target === this._backgroundAppWin) return;
             if (this._scratchpadWindows && this._scratchpadWindows.has(target)) return;
@@ -4923,13 +4908,29 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _windowContains(win, px, py) {
+    _resolveWindowByScan(px, py) {
         try {
-            const rect = win.get_frame_rect();
-            return px >= rect.x && px < rect.x + rect.width &&
-                py >= rect.y && py < rect.y + rect.height;
-        } catch (_e) {
-            return false;
+            const candidates = [];
+            let total = 0;
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (ws === this._backgroundAppParkingWs) continue;
+                for (const win of ws.list_windows()) {
+                    total++;
+                    if (!win || !this._canPointerFocusWindow(win)) continue;
+                    if (win === this._backgroundAppWin || win === this._dropdownWin) continue;
+                    const r = win.get_frame_rect();
+                    if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
+                        candidates.push(win);
+                }
+            }
+            this._debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
+            if (candidates.length === 0) return null;
+            const stacked = global.display.sort_windows_by_stacking(candidates);
+            return stacked[stacked.length - 1];
+        } catch (e) {
+            this._debugLog(`pointer focus: scan failed: ${e.message}`);
+            return null;
         }
     }
 

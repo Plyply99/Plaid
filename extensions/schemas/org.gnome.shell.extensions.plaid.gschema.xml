@@ -291,7 +291,7 @@
 
     <key name="pointer-focus" type="b">
       <default>false</default>
-      <summary>Focus window under the mouse (sloppy focus)</summary>
+      <summary>Focus window under the mouse (focus on hover)</summary>
       <description>When true, Plaid moves focus to the topmost window under the mouse pointer after a short pause. Works across all monitors. Plaid implements this itself so it does not rely on mutter's focus-follows-mouse, which can hang during logout.</description>
     </key>
 
