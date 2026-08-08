@@ -4857,18 +4857,20 @@ export default class TilingWMExtension extends Extension {
         }
         if (this._pointerFocusStageId) return;
         try {
-            const stage = global.get_stage();
+            const stage = global.stage;
             this._pointerFocusStageId = stage.connect('motion-event',
                 () => this._kickPointerFocusTimer());
-        } catch (_e) {
+            this._debugLog('pointer focus: tracking enabled');
+        } catch (e) {
             this._pointerFocusStageId = 0;
+            this._debugLog(`pointer focus: tracking failed: ${e.message}`);
         }
     }
 
     _teardownPointerFocus() {
         if (this._pointerFocusStageId) {
             try {
-                global.get_stage().disconnect(this._pointerFocusStageId);
+                global.stage.disconnect(this._pointerFocusStageId);
             } catch (_e) {}
             this._pointerFocusStageId = 0;
         }
@@ -4914,8 +4916,11 @@ export default class TilingWMExtension extends Extension {
             if (target === global.display.focus_window) return;
             if (target === this._dropdownWin || target === this._backgroundAppWin) return;
             if (this._scratchpadWindows && this._scratchpadWindows.has(target)) return;
+            this._debugLog(`pointer focus: ${target.get_wm_class_instance() || '?'} title=${target.get_title() || '?'}`);
             target.focus(global.get_current_time());
-        } catch (_e) {}
+        } catch (e) {
+            this._debugLog(`pointer focus: apply failed: ${e.message}`);
+        }
     }
 
     _windowContains(win, px, py) {
@@ -4930,7 +4935,7 @@ export default class TilingWMExtension extends Extension {
 
     _canPointerFocusWindow(win) {
         if (!win) return false;
-        if (win.is_minimized()) return false;
+        if (win.minimized) return false;
         try {
             if (win.is_skip_taskbar() && !this._isFloating(win)) return false;
         } catch (_e) {}
