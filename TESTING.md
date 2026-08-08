@@ -141,6 +141,11 @@ bottom; fill the status table; paste the journal excerpts back.
   future project (needs a second monitor to test).
 - **X11**: Plaid is Wayland-only; on an X11 session it loads inert and shows
   a pinned critical notification ("Plaid requires Wayland").
+- **Known upstream issue (not Plaid)**: logging out with Steam running can
+  delay or hang the session on Wayland compositors — suspected XWayland
+  teardown interop with Steam's X11 clients. Affects mutter too (observed in
+  click focus mode). Out of Plaid's scope; evidence in
+  `Projects/mutter-4892-comment.md`.
 
 ## Stacking model
 
