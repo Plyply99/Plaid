@@ -426,14 +426,8 @@
     <!-- Updates -->
     <key name="release-check-enabled" type="b">
       <default>true</default>
-      <summary>Check for new Plaid releases</summary>
-      <description>Check GitHub for a newer Plaid release at session start and notify when one is available. Updates are installed manually from the release page.</description>
-    </key>
-
-    <key name="release-check-dismissed" type="i">
-      <default>0</default>
-      <summary>Last dismissed release version</summary>
-      <description>The release version the user last dismissed or acknowledged. Update reminders only reappear when a newer release ships.</description>
+      <summary>Automatic Plaid updates</summary>
+      <description>Check GitHub for a newer Plaid release at session start and install it automatically. A notification announces the update; it loads on your next login. Turn off to skip checks and notifications.</description>
     </key>
 
   </schema>

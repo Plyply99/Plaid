@@ -4244,28 +4244,61 @@ export default class TilingWMExtension extends Extension {
                     const [, stdout] = sub.communicate_utf8_finish(result);
                     const json = JSON.parse(stdout || '');
                     const tag = String(json.tag_name || '');
-                    const url = json.html_url || '';
                     const m = tag.match(/^v?(\d+)\.(\d+)$/);
                     if (!m) return;
                     const latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
                     const installed = parseInt(this.metadata.version, 10);
-                    if (latest > installed && latest > this._settings.get_int('release-check-dismissed')) {
-                        this._showPopup(
-                            `Plaid v${m[1]}.${m[2]} is available`,
-                            `Click to open the release page`,
-                            15000,
-                            () => {
-                                try {
-                                    this._settings.set_int('release-check-dismissed', latest);
-                                } catch (_e) {}
-                                try {
-                                    Gio.AppInfo.launch_default_for_uri(url, null);
-                                } catch (_e) {}
-                            });
+                    if (latest <= installed) return;
+                    let assetUrl = null;
+                    for (const a of (json.assets || [])) {
+                        if (a.name === 'plaid@plyply99.zip') {
+                            assetUrl = a.browser_download_url || null;
+                            break;
+                        }
                     }
+                    if (!assetUrl) {
+                        Main.notify('Plaid update failed',
+                            'Could not find the update zip. Check the release page.');
+                        return;
+                    }
+                    this._installUpdate(assetUrl, m[1], m[2]);
                 } catch (_e) {}
             });
         } catch (_e) {}
+    }
+
+    _installUpdate(assetUrl, major, minor) {
+        const zipPath = `${GLib.get_home_dir()}/Downloads/plaid@plyply99.zip`;
+        const dl = Gio.Subprocess.new(
+            ['/bin/sh', '-c', `curl -sfL --max-time 60 -o "${zipPath}" "${assetUrl}"`],
+            Gio.SubprocessFlags.NONE);
+        dl.wait_check_async(null, (sub, res) => {
+            try {
+                sub.wait_check_finish(res);
+            } catch (_e) {
+                if (!this._destroyed)
+                    Main.notify('Plaid update failed',
+                        'Could not download the update. Check the release page.');
+                return;
+            }
+            if (this._destroyed) return;
+            const inst = Gio.Subprocess.new(
+                ['gnome-extensions', 'install', '--force', zipPath],
+                Gio.SubprocessFlags.NONE);
+            inst.wait_check_async(null, (sub2, res2) => {
+                try {
+                    sub2.wait_check_finish(res2);
+                } catch (_e) {
+                    if (!this._destroyed)
+                        Main.notify('Plaid update failed',
+                            'Could not install the update. Check the release page.');
+                    return;
+                }
+                if (this._destroyed) return;
+                Main.notify(`Plaid v${major}.${minor} available`,
+                    'Log out and back in to apply.');
+            });
+        });
     }
 
     _showPopup(title, subtitle = null, duration = 3000, onActivate = null) {
