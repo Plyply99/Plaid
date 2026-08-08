@@ -205,6 +205,43 @@ Verification status: all four layouts verified with steam's 1364/306 floors
 (v50.53 → v50.57) — drags hard-stop at both, zero give-up floats, zero
 mismatch churn.
 
+## Focus on Hover (v50.65)
+
+Plaid's own focus-on-hover — the window under the mouse gains focus as you
+move across it. Implemented with a 100ms poll + `Meta.Window.focus()` (no X11
+time roundtrips), a scan-based window resolver, and a two-tick debounce.
+
+Test checklist:
+
+- [ ] Hover ghostty / firefox / emacs — focus follows on arrival
+- [ ] Works with GNOME focus mode set to `click` (the mutter #4892 workaround)
+- [ ] Multi-monitor: hover windows on any monitor, focus follows
+- [ ] Background App on AND off — focus still works (parked window + parking
+      workspace excluded from the resolver)
+- [ ] Drop-down terminal never takes hover focus (intended)
+- [ ] Scratchpad windows never take hover focus
+- [ ] Toggle off — no behavior change; click focus mode unaffected
+- [ ] Journal hygiene: `pointer focus: <win>` only with debug on, no `apply
+      failed` / `tick failed`
+
+## Auto Update (v50.66)
+
+GNOME-style automatic updates: check at login (~15s), silent download +
+install, passive notification, loads on next login.
+
+Test checklist:
+
+- [ ] Login with a newer release available → silent install → notification
+      "Plaid vX.Y available — log out and back in to apply."
+- [ ] Relog → new version loaded, no second notification (no spam)
+- [ ] Auto Update off → no check, no notification on login
+- [ ] Failure paths: offline / rate-limited GitHub → silent (no crash);
+      bad download / install failure → error notification
+- [ ] System-wide install (`/usr/share`) → check skipped entirely (PlaidOS
+      path — updates come via `bootc upgrade`)
+- [ ] Zip lands in `~/Downloads/plaid@plyply99.zip`
+- [ ] Crash check: logout/login after auto-install → 0 SIGABRT, ~9s logouts
+
 ## Test protocol
 
 1. Set config → log out/in.
