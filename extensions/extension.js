@@ -123,35 +123,20 @@ const MASK_SNIPPET_CODE = `
 
 const CornerMaskEffect = GObject.registerClass({
     GTypeName: 'PlaidCornerMaskEffect',
-}, class CornerMaskEffect extends Shell.GLSLEffect {
+}, class CornerMaskEffect extends Clutter.ShaderEffect {
     constructor() {
         super();
         this._radius = 0;
         this._metaWin = null;
-        this._uniformLocations = {
-            bounds: this.get_uniform_location('bounds'),
-            clipRadius: this.get_uniform_location('clipRadius'),
-            pixelStep: this.get_uniform_location('pixelStep'),
-            borderColor1: this.get_uniform_location('borderColor1'),
-            borderColor2: this.get_uniform_location('borderColor2'),
-            borderWidth: this.get_uniform_location('borderWidth'),
-            gradientMode: this.get_uniform_location('gradientMode'),
-            theta: this.get_uniform_location('theta'),
-            borderedAreaBounds: this.get_uniform_location('borderedAreaBounds'),
-            borderedAreaClipRadius: this.get_uniform_location('borderedAreaClipRadius'),
-            ringColor: this.get_uniform_location('ringColor'),
-            ringWidth: this.get_uniform_location('ringWidth'),
-            ringAreaBounds: this.get_uniform_location('ringAreaBounds'),
-            ringAreaClipRadius: this.get_uniform_location('ringAreaClipRadius'),
-            opacity: this.get_uniform_location('opacity'),
-        };
     }
 
-    vfunc_build_pipeline() {
+    vfunc_get_static_snippet() {
         try {
-            this.add_glsl_snippet(SNIPPET_HOOK_FRAGMENT, MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE, false);
+            return Cogl.Snippet.new(SNIPPET_HOOK_FRAGMENT,
+                MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE);
         } catch (e) {
             log(`[plaid] mask snippet failed: ${e.message}`);
+            return null;
         }
     }
 
@@ -167,14 +152,13 @@ const CornerMaskEffect = GObject.registerClass({
                 const bh = frame.height - buffer.height;
                 const w = Math.max(1, actor.width);
                 const h = Math.max(1, actor.height);
-                const loc = this._uniformLocations;
-                this.set_uniform_float(loc.bounds, 4, [
+                this.set_uniform_value('bounds', [
                     offsetX + 1,
                     offsetY + 1,
                     offsetX + actor.width + bw,
                     offsetY + actor.height + bh,
                 ]);
-                this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
+                this.set_uniform_value('pixelStep', [1 / w, 1 / h]);
             }
         } catch (e) {
             log(`[plaid] mask paint sync failed: ${e.message}`);
@@ -184,28 +168,27 @@ const CornerMaskEffect = GObject.registerClass({
 
     updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor) {
         this._radius = radius;
-        const loc = this._uniformLocations;
         try {
             const actor = this.get_actor();
             const w = Math.max(1, actor ? actor.width : 1);
             const h = Math.max(1, actor ? actor.height : 1);
             const inset = Math.max(0, borderWidth);
             const rw = Math.max(0, ringWidth || 0);
-            this.set_uniform_float(loc.bounds, 4, [x1, y1, x2, y2]);
-            this.set_uniform_float(loc.clipRadius, 1, [radius]);
-            this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
-            this.set_uniform_float(loc.borderedAreaBounds, 4, [x1 + inset, y1 + inset, x2 - inset, y2 - inset]);
-            this.set_uniform_float(loc.borderedAreaClipRadius, 1, [Math.max(0, radius - inset)]);
-            this.set_uniform_float(loc.borderWidth, 1, [borderWidth]);
-            this.set_uniform_float(loc.borderColor1, 4, color1);
-            this.set_uniform_float(loc.borderColor2, 4, color2);
-            this.set_uniform_float(loc.gradientMode, 1, [mode]);
-            this.set_uniform_float(loc.theta, 1, [theta]);
-            this.set_uniform_float(loc.opacity, 1, [opacity]);
-            this.set_uniform_float(loc.ringWidth, 1, [rw]);
-            this.set_uniform_float(loc.ringColor, 4, ringColor || [0, 0, 0, 0]);
-            this.set_uniform_float(loc.ringAreaBounds, 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
-            this.set_uniform_float(loc.ringAreaClipRadius, 1, [Math.max(0, radius - inset - rw)]);
+            this.set_uniform_value('bounds', [x1, y1, x2, y2]);
+            this.set_uniform_value('clipRadius', [radius]);
+            this.set_uniform_value('pixelStep', [1 / w, 1 / h]);
+            this.set_uniform_value('borderedAreaBounds', [x1 + inset, y1 + inset, x2 - inset, y2 - inset]);
+            this.set_uniform_value('borderedAreaClipRadius', [Math.max(0, radius - inset)]);
+            this.set_uniform_value('borderWidth', [borderWidth]);
+            this.set_uniform_value('borderColor1', color1);
+            this.set_uniform_value('borderColor2', color2);
+            this.set_uniform_value('gradientMode', [mode]);
+            this.set_uniform_value('theta', [theta]);
+            this.set_uniform_value('opacity', [opacity]);
+            this.set_uniform_value('ringWidth', [rw]);
+            this.set_uniform_value('ringColor', ringColor || [0, 0, 0, 0]);
+            this.set_uniform_value('ringAreaBounds', [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
+            this.set_uniform_value('ringAreaClipRadius', [Math.max(0, radius - inset - rw)]);
         } catch (e) {
             log(`[plaid] mask uniforms failed: ${e.message}`);
             return;
@@ -215,7 +198,7 @@ const CornerMaskEffect = GObject.registerClass({
 
     setTheta(theta) {
         try {
-            this.set_uniform_float(this._uniformLocations.theta, 1, [theta]);
+            this.set_uniform_value('theta', [theta]);
         } catch (_e) {
             return;
         }
@@ -224,7 +207,7 @@ const CornerMaskEffect = GObject.registerClass({
 
     setBorderWidth(width) {
         try {
-            this.set_uniform_float(this._uniformLocations.borderWidth, 1, [width]);
+            this.set_uniform_value('borderWidth', [width]);
         } catch (_e) {
             return;
         }

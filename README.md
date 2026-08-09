@@ -43,7 +43,7 @@ Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki) — layouts
 
 
  
-- **Window blur**: Native shell blur via the bundled gnome-rounded-blur library.
+- **Window blur**: Native shell blur via the bundled Plaid blur library (forked from gnome-rounded-blur).
 
 
 [Plaid-window-blur.webm](https://github.com/user-attachments/assets/297051c7-34fd-46f8-9428-b97ab9c60ae9)
@@ -140,10 +140,12 @@ While running, Plaid disables Gnome edge-tiling and maximize keybindings (restor
 
 ## The bundled blur library
 
-Plaid bundles [gnome-rounded-blur](https://github.com/kancko/gnome-rounded-blur)
-(GPL-3.0-or-later, derived from gnome-shell's ShellBlurEffect) in `extensions/lib/`
-with license and attribution. It provides natively rounded corners for the window
-blur, which the stock `Shell.BlurEffect` cannot do.
+Plaid bundles a [fork of gnome-rounded-blur](https://github.com/Plyply99/Plaid-rounded-blur)
+(GPL-3.0-or-later, derived from gnome-shell's ShellBlurEffect; original by
+[kancko](https://github.com/kancko/gnome-rounded-blur)) in `extensions/lib/`
+with license and attribution. The fork adds a configurable mutter API target
+so the library builds against GNOME 50 or 51. It provides natively rounded
+corners for the window blur, which the stock `Shell.BlurEffect` cannot do.
 
 ## Report bugs / contribute
 
