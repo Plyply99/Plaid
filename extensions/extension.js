@@ -1,5 +1,4 @@
 import Clutter from 'gi://Clutter';
-import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -26,24 +25,25 @@ const BORDER_SEG_STEP = 12;
 const BORDER_CORNER_MIN_SEGS = 8;
 const BORDER_CORNER_SEG_STEP = 4;
 
-const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
 const MASK_EFFECT_NAME = 'plaid-corner-mask';
 const BLUR_EFFECT_NAME = 'plaid-window-blur';
 
-const MASK_SNIPPET_DECLARATIONS = `
-uniform vec4 bounds;
+const MASK_SHADER_SOURCE = `
+uniform sampler2D tex;
+uniform float bounds_x, bounds_y, bounds_z, bounds_w;
+uniform float cornerBounds_x, cornerBounds_y, cornerBounds_z, cornerBounds_w;
 uniform float clipRadius;
-uniform vec2 pixelStep;
-uniform vec4 borderColor1;
-uniform vec4 borderColor2;
+uniform float pixelStep_x, pixelStep_y;
+uniform float borderColor1_r, borderColor1_g, borderColor1_b, borderColor1_a;
+uniform float borderColor2_r, borderColor2_g, borderColor2_b, borderColor2_a;
 uniform float borderWidth;
 uniform float gradientMode;
 uniform float theta;
-uniform vec4 borderedAreaBounds;
+uniform float borderedAreaBounds_x, borderedAreaBounds_y, borderedAreaBounds_z, borderedAreaBounds_w;
 uniform float borderedAreaClipRadius;
-uniform vec4 ringColor;
+uniform float ringColor_r, ringColor_g, ringColor_b, ringColor_a;
 uniform float ringWidth;
-uniform vec4 ringAreaBounds;
+uniform float ringAreaBounds_x, ringAreaBounds_y, ringAreaBounds_z, ringAreaBounds_w;
 uniform float ringAreaClipRadius;
 uniform float opacity;
 
@@ -59,20 +59,20 @@ float circleBounds(vec2 p, vec2 center, float clipRadius) {
     return outerRadius - sqrt(distSquared);
 }
 
-float getPointOpacity(vec2 p, vec4 bounds, float clipRadius) {
+float getPointOpacity(vec2 p, vec4 bounds, vec4 cornerBounds, float clipRadius) {
     if (p.x < bounds.x || p.x > bounds.z || p.y < bounds.y || p.y > bounds.w)
         return 0.0;
     vec2 center;
-    float centerLeft = bounds.x + clipRadius;
-    float centerRight = bounds.z - clipRadius;
+    float centerLeft = cornerBounds.x + clipRadius;
+    float centerRight = cornerBounds.z - clipRadius;
     if (p.x < centerLeft)
         center.x = centerLeft;
     else if (p.x > centerRight)
         center.x = centerRight;
     else
         return 1.0;
-    float centerTop = bounds.y + clipRadius;
-    float centerBottom = bounds.w - clipRadius;
+    float centerTop = cornerBounds.y + clipRadius;
+    float centerBottom = cornerBounds.w - clipRadius;
     if (p.y < centerTop)
         center.y = centerTop;
     else if (p.y > centerBottom)
@@ -94,32 +94,45 @@ float gradientPos(vec2 p, vec4 bounds) {
     float t = mod(ang, 6.28318530718) / 6.28318530718;
     return t < 0.5 ? t * 2.0 : (1.0 - t) * 2.0;
 }
-`;
 
-const MASK_SNIPPET_CODE = `
-    vec2 p = cogl_tex_coord0_in.xy / pixelStep;
+void main(void) {
+    vec4 bounds = vec4(bounds_x, bounds_y, bounds_z, bounds_w);
+    vec4 cornerBounds = vec4(cornerBounds_x, cornerBounds_y, cornerBounds_z, cornerBounds_w);
+    vec2 pixelStep = vec2(pixelStep_x, pixelStep_y);
+    vec4 borderColor1 = vec4(borderColor1_r, borderColor1_g, borderColor1_b, borderColor1_a);
+    vec4 borderColor2 = vec4(borderColor2_r, borderColor2_g, borderColor2_b, borderColor2_a);
+    vec4 borderedAreaBounds = vec4(borderedAreaBounds_x, borderedAreaBounds_y, borderedAreaBounds_z, borderedAreaBounds_w);
+    vec4 ringColor = vec4(ringColor_r, ringColor_g, ringColor_b, ringColor_a);
+    vec4 ringAreaBounds = vec4(ringAreaBounds_x, ringAreaBounds_y, ringAreaBounds_z, ringAreaBounds_w);
 
-    float pointAlpha = getPointOpacity(p, bounds, clipRadius);
+    vec4 c = texture2D(tex, cogl_tex_coord_in[0].xy);
+    vec2 p = cogl_tex_coord_in[0].xy / pixelStep;
 
-    cogl_color_out *= pointAlpha;
+    float pointAlpha = getPointOpacity(p, bounds, cornerBounds, clipRadius);
 
-    cogl_color_out *= opacity;
+    c *= pointAlpha;
+
+    c *= opacity;
 
     if (borderWidth > 0.5) {
-        float borderedAreaAlpha = getPointOpacity(p, borderedAreaBounds, borderedAreaClipRadius);
+        float borderedAreaAlpha = getPointOpacity(p, borderedAreaBounds, cornerBounds, borderedAreaClipRadius);
         float borderAlpha = clamp(abs(pointAlpha - borderedAreaAlpha), 0.0, 1.0);
         if (borderAlpha > 0.0) {
             vec3 gradColor = mix(borderColor1.rgb, borderColor2.rgb, gradientPos(p, bounds));
-            cogl_color_out = mix(cogl_color_out, vec4(gradColor, 1.0), borderAlpha * borderColor1.a);
+            c = mix(c, vec4(gradColor, 1.0), borderAlpha * borderColor1.a);
         }
         if (ringWidth > 0.5) {
-            float ringAreaAlpha = getPointOpacity(p, ringAreaBounds, ringAreaClipRadius);
+            float ringAreaAlpha = getPointOpacity(p, ringAreaBounds, cornerBounds, ringAreaClipRadius);
             float ringAlpha = clamp(borderedAreaAlpha - ringAreaAlpha, 0.0, 1.0);
             if (ringAlpha > 0.0)
-                cogl_color_out = mix(cogl_color_out, vec4(ringColor.rgb, 1.0), ringAlpha * ringColor.a);
+                c = mix(c, vec4(ringColor.rgb, 1.0), ringAlpha * ringColor.a);
         }
     }
+
+    cogl_color_out = c;
+}
 `;
+
 
 const CornerMaskEffect = GObject.registerClass({
     GTypeName: 'PlaidCornerMaskEffect',
@@ -128,16 +141,87 @@ const CornerMaskEffect = GObject.registerClass({
         super();
         this._radius = 0;
         this._metaWin = null;
+        try {
+            this.set_shader_source(MASK_SHADER_SOURCE);
+        } catch (e) {
+            log(`[plaid] mask shader failed: ${e.message}`);
+        }
     }
 
-    vfunc_get_static_snippet() {
+    _setUniform(name, value) {
         try {
-            return Cogl.Snippet.new(SNIPPET_HOOK_FRAGMENT,
-                MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE);
+            this.set_uniform_value(name, value + 1e-6);
         } catch (e) {
-            log(`[plaid] mask snippet failed: ${e.message}`);
-            return null;
+            log(`[plaid] mask uniform '${name}' failed: ${e.message}`);
         }
+    }
+
+    _volOrigin() {
+        try {
+            if (this.get_texture) {
+                const tex = this.get_texture();
+                if (tex) {
+                    const tw = tex.get_width();
+                    const th = tex.get_height();
+                    if (tw > 0 && th > 0) {
+                        this._volCache = [0, 0, tw, th];
+                        return this._volCache;
+                    }
+                }
+            }
+        } catch (_e) {}
+        if (this._volCache) return this._volCache;
+        return this._refreshVolOrigin();
+    }
+
+    _refreshVolOrigin() {
+        let actor = null;
+        try {
+            actor = this.get_actor();
+            let ox = 0;
+            let oy = 0;
+            if (actor && actor.get_paint_volume) {
+                const vol = actor.get_paint_volume();
+                if (vol) {
+                    const o = vol.get_origin();
+                    ox = o.x || 0;
+                    oy = o.y || 0;
+                } else if (!this._volNullLogged) {
+                    this._volNullLogged = true;
+                    log('[plaid] vol probe: get_paint_volume() returned null');
+                }            }
+            if (this.get_texture) {
+                try {
+                    const tex = this.get_texture();
+                    if (tex) {
+                        const tw = tex.get_width();
+                        const th = tex.get_height();
+                        if (tw > 0 && th > 0) {
+                            this._volCache = [ox, oy, tw, th];
+                            return this._volCache;
+                        }
+                    }
+                } catch (_e) {}
+            }
+            if (this.get_target_size) {
+                const [ok, fw, fh] = this.get_target_size();
+                if (ok && fw > 0 && fh > 0) {
+                    this._volCache = [ox, oy, fw, fh];
+                    return this._volCache;
+                }
+            }
+            const vol = actor && actor.get_paint_volume ? actor.get_paint_volume() : null;
+            if (vol) {
+                const vw = vol.get_width();
+                const vh = vol.get_height();
+                if (vw > 0 && vh > 0) {
+                    this._volCache = [ox, oy, vw, vh];
+                    return this._volCache;
+                }
+            }
+        } catch (_e) {}
+        this._volCache = [0, 0, actor ? actor.width : 1, actor ? actor.height : 1];
+        return this._volCache;
     }
 
     vfunc_paint_target(node, paintContext) {
@@ -152,13 +236,18 @@ const CornerMaskEffect = GObject.registerClass({
                 const bh = frame.height - buffer.height;
                 const w = Math.max(1, actor.width);
                 const h = Math.max(1, actor.height);
-                this.set_uniform_value('bounds', [
-                    offsetX + 1,
-                    offsetY + 1,
-                    offsetX + actor.width + bw,
-                    offsetY + actor.height + bh,
-                ]);
-                this.set_uniform_value('pixelStep', [1 / w, 1 / h]);
+                const [, , vw, vh] = this._volOrigin();
+                const bw2 = this._borderWidth || 0;
+                this._setUniform('bounds_x', offsetX + 1 - bw2 + 2);
+                this._setUniform('bounds_y', offsetY + 1 - bw2 + 2);
+                this._setUniform('bounds_z', offsetX + actor.width + bw + bw2 + 1);
+                this._setUniform('bounds_w', offsetY + actor.height + bh + bw2 + 1);
+                this._setUniform('cornerBounds_x', offsetX + 3);
+                this._setUniform('cornerBounds_y', offsetY + 3);
+                this._setUniform('cornerBounds_z', offsetX + actor.width + bw + 1);
+                this._setUniform('cornerBounds_w', offsetY + actor.height + bh + 1);
+                this._setUniform('pixelStep_x', 1 / vw);
+                this._setUniform('pixelStep_y', 1 / vh);
             }
         } catch (e) {
             log(`[plaid] mask paint sync failed: ${e.message}`);
@@ -168,27 +257,55 @@ const CornerMaskEffect = GObject.registerClass({
 
     updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor) {
         this._radius = radius;
+        this._borderWidth = Math.max(0, borderWidth);
+        let w = 1;
+        let h = 1;
         try {
             const actor = this.get_actor();
-            const w = Math.max(1, actor ? actor.width : 1);
-            const h = Math.max(1, actor ? actor.height : 1);
+            w = Math.max(1, actor ? actor.width : 1);
+            h = Math.max(1, actor ? actor.height : 1);
             const inset = Math.max(0, borderWidth);
             const rw = Math.max(0, ringWidth || 0);
-            this.set_uniform_value('bounds', [x1, y1, x2, y2]);
-            this.set_uniform_value('clipRadius', [radius]);
-            this.set_uniform_value('pixelStep', [1 / w, 1 / h]);
-            this.set_uniform_value('borderedAreaBounds', [x1 + inset, y1 + inset, x2 - inset, y2 - inset]);
-            this.set_uniform_value('borderedAreaClipRadius', [Math.max(0, radius - inset)]);
-            this.set_uniform_value('borderWidth', [borderWidth]);
-            this.set_uniform_value('borderColor1', color1);
-            this.set_uniform_value('borderColor2', color2);
-            this.set_uniform_value('gradientMode', [mode]);
-            this.set_uniform_value('theta', [theta]);
-            this.set_uniform_value('opacity', [opacity]);
-            this.set_uniform_value('ringWidth', [rw]);
-            this.set_uniform_value('ringColor', ringColor || [0, 0, 0, 0]);
-            this.set_uniform_value('ringAreaBounds', [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
-            this.set_uniform_value('ringAreaClipRadius', [Math.max(0, radius - inset - rw)]);
+            const ring = ringColor || [0, 0, 0, 0];
+            const [,, vw, vh] = this._refreshVolOrigin();
+            this._setUniform('bounds_x', x1 + 2);
+            this._setUniform('bounds_y', y1 + 2);
+            this._setUniform('bounds_z', x2 + 2);
+            this._setUniform('bounds_w', y2 + 2);
+            this._setUniform('cornerBounds_x', x1 + borderWidth + 2);
+            this._setUniform('cornerBounds_y', y1 + borderWidth + 2);
+            this._setUniform('cornerBounds_z', x2 - borderWidth + 2);
+            this._setUniform('cornerBounds_w', y2 - borderWidth + 2);
+            this._setUniform('clipRadius', radius);
+            this._setUniform('pixelStep_x', 1 / vw);
+            this._setUniform('pixelStep_y', 1 / vh);
+            this._setUniform('borderedAreaBounds_x', x1 + inset + 2);
+            this._setUniform('borderedAreaBounds_y', y1 + inset + 2);
+            this._setUniform('borderedAreaBounds_z', x2 - inset + 2);
+            this._setUniform('borderedAreaBounds_w', y2 - inset + 2);
+            this._setUniform('borderedAreaClipRadius', Math.max(0, radius - inset));
+            this._setUniform('borderWidth', 0);
+            this._setUniform('borderColor1_r', color1[0]);
+            this._setUniform('borderColor1_g', color1[1]);
+            this._setUniform('borderColor1_b', color1[2]);
+            this._setUniform('borderColor1_a', color1[3]);
+            this._setUniform('borderColor2_r', color2[0]);
+            this._setUniform('borderColor2_g', color2[1]);
+            this._setUniform('borderColor2_b', color2[2]);
+            this._setUniform('borderColor2_a', color2[3]);
+            this._setUniform('gradientMode', mode);
+            this._setUniform('theta', theta);
+            this._setUniform('opacity', opacity);
+            this._setUniform('ringWidth', rw);
+            this._setUniform('ringColor_r', ring[0]);
+            this._setUniform('ringColor_g', ring[1]);
+            this._setUniform('ringColor_b', ring[2]);
+            this._setUniform('ringColor_a', ring[3]);
+            this._setUniform('ringAreaBounds_x', x1 + inset + rw + 2);
+            this._setUniform('ringAreaBounds_y', y1 + inset + rw + 2);
+            this._setUniform('ringAreaBounds_z', x2 - inset - rw + 2);
+            this._setUniform('ringAreaBounds_w', y2 - inset - rw + 2);
+            this._setUniform('ringAreaClipRadius', Math.max(0, radius - inset - rw));
         } catch (e) {
             log(`[plaid] mask uniforms failed: ${e.message}`);
             return;
@@ -198,7 +315,7 @@ const CornerMaskEffect = GObject.registerClass({
 
     setTheta(theta) {
         try {
-            this.set_uniform_value('theta', [theta]);
+            this._setUniform('theta', theta);
         } catch (_e) {
             return;
         }
@@ -207,7 +324,7 @@ const CornerMaskEffect = GObject.registerClass({
 
     setBorderWidth(width) {
         try {
-            this.set_uniform_value('borderWidth', [width]);
+            this._setUniform('borderWidth', width);
         } catch (_e) {
             return;
         }
@@ -215,7 +332,6 @@ const CornerMaskEffect = GObject.registerClass({
     }
 
 });
-
 export default class TilingWMExtension extends Extension {
     enable() {
         try {
@@ -2840,16 +2956,16 @@ export default class TilingWMExtension extends Extension {
 
             if (roundedCorners && borderRadius > 0) {
                 this._ensureWindowMask(win, actor, borderRadius + 1);
-                // Scratch windows fall through to their special border even
-                // with rounded corners (normal windows stay mask-only).
-                if (!(this._scratchpadWindows && this._scratchpadWindows.has(win)))
-                    continue;
             }
 
             const isFocused = win === focusWindow;
             if (bordersEnabled && this._ensureWindowBorder(win, actor, frame, isFocused))
                 continue;
         }
+
+        if (this._settings.get_boolean('gradient-borders') &&
+            this._settings.get_int('border-animation-speed') > 0)
+            this._startBorderAnimation();
 
         if (!roundedCorners || borderRadius <= 0) {
             try { this._removeAllMasks(); } catch (_e) {}
@@ -3356,25 +3472,31 @@ export default class TilingWMExtension extends Extension {
         const offsetY = frame.y - buffer.y;
         const bw = frame.width - buffer.width;
         const bh = frame.height - buffer.height;
-        const x1 = offsetX + 1;
-        const y1 = offsetY + 1;
-        const x2 = offsetX + actor.width + bw;
-        const y2 = offsetY + actor.height + bh;
+
+        let borderWidth = 0;
+        if (this._settings) {
+            const isFocused = win === global.display.focus_window;
+            const widthKey = isFocused ? 'active-border-width' : 'inactive-border-width';
+            borderWidth = (this._grabWindow === win)
+                ? 0
+                : (this._settings.get_boolean('borders-enabled')
+                    ? this._settings.get_int(widthKey)
+                    : 0);
+        }
+
+        const x1 = offsetX + 1 - borderWidth;
+        const y1 = offsetY + 1 - borderWidth;
+        const x2 = offsetX + actor.width + bw - 1 + borderWidth;
+        const y2 = offsetY + actor.height + bh - 1 + borderWidth;
 
         if (!this._settings) {
-            effect.updateMask(x1, y1, x2, y2, radius, 0, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, [0, 0, 0, 0]);
+            effect.updateMask(x1, y1, x2, y2, radius, borderWidth, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, [0, 0, 0, 0]);
             return;
         }
 
         const isFocused = win === global.display.focus_window;
-        const widthKey = isFocused ? 'active-border-width' : 'inactive-border-width';
         const color1Key = isFocused ? 'active-border-color' : 'inactive-border-color';
         const color2Key = isFocused ? 'active-border-color-2' : 'inactive-border-color-2';
-        const borderWidth = (this._grabWindow === win)
-            ? 0
-            : (this._settings.get_boolean('borders-enabled')
-                ? this._settings.get_int(widthKey)
-                : 0);
         const toRgba = (hex) => {
             const c = this._hexToRgb(hex);
             return [c.r, c.g, c.b, 1];
@@ -3413,13 +3535,9 @@ export default class TilingWMExtension extends Extension {
             ringWidth = Math.max(2, this._settings.get_int('active-border-width'));
             const ringHex = (this._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
             ringColor = toRgba(ringHex);
-            if (!effect._ringLogged) {
-                effect._ringLogged = true;
-                log(`[plaid] scratch ring: shader ring enabled width=${ringWidth} color=${ringHex}`);
-            }
         }
 
-        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor);
+        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, 0, ringColor);
     }
 
     _teardownMaskEffect(win, effect) {
