@@ -164,3 +164,9 @@ requests are welcome: [github.com/Plyply99/Plaid/issues](https://github.com/Plyp
 
 ## Plaid is built for those who Love Gnome and love a tiling workflow, with LOTS of bling.
 ## Welcome, to Plaid.
+
+---
+
+## Stars over time
+
+![Plaid stars](https://raw.githubusercontent.com/Plyply99/Plaid/main/.github/stars.svg)
