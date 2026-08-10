@@ -4947,7 +4947,7 @@ export default class TilingWMExtension extends Extension {
                 for (const win of ws.list_windows()) {
                     total++;
                     if (!win || !this._canPointerFocusWindow(win)) continue;
-                    if (win === this._backgroundAppWin || win === this._dropdownWin) continue;
+                    if (win === this._backgroundAppWin) continue;
                     const r = win.get_frame_rect();
                     if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
                         candidates.push(win);
