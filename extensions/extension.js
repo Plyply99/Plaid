@@ -5211,8 +5211,8 @@ export default class TilingWMExtension extends Extension {
 
     _ensureTerminalSettingsProfile() {
         // Install the terminal settings source line into the user's shell
-        // profile based on $SHELL. Bash is auto-injected; other shells get a
-        // click-to-dismiss notice with the manual instruction.
+        // profile based on $SHELL. Bash and fish are auto-injected; other
+        // shells get a click-to-dismiss notice with the manual instruction.
         try {
             const scriptPath = `${this.path}/plaid-terminal-settings.sh`;
             const shell = (GLib.getenv('SHELL') || '').toLowerCase();
@@ -5227,6 +5227,17 @@ export default class TilingWMExtension extends Extension {
                 }
                 return;
             }
+            if (base === 'fish') {
+                const fishScript = `${this.path}/plaid-terminal-settings.fish`;
+                const block = `\n# --- Plaid: terminal settings ---\nif test -f '${fishScript}'\n    source '${fishScript}'\nend\n# --- end Plaid ---\n`;
+                const written = this._appendToShellProfile(`${GLib.get_home_dir()}/.config/fish/config.fish`, block);
+                if (written) {
+                    log('[plaid] terminal settings: fish profile updated');
+                    this._plaidSetupNoticeTerminal = true;
+                    this._scheduleSetupPopupCheck();
+                }
+                return;
+            }
             if (this._plaidTerminalProfileNotified) return;
             this._plaidTerminalProfileNotified = true;
             if (base === 'zsh') {
@@ -5235,7 +5246,7 @@ export default class TilingWMExtension extends Extension {
                     'Click to dismiss');
             } else {
                 this._showWarningPopup('Plaid Terminal Settings',
-                    `Plaid's terminal settings support bash and zsh. Your shell (${base}) needs manual setup — see the README.`,
+                    `Plaid's terminal settings support bash, zsh and fish. Your shell (${base}) needs manual setup — see the wiki → Terminal Settings.`,
                     'Click to dismiss');
             }
         } catch (e) {
