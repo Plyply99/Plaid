@@ -4926,7 +4926,7 @@ export default class TilingWMExtension extends Extension {
             if (!target) return;
             if (!this._canPointerFocusWindow(target)) return;
             if (target === global.display.focus_window) return;
-            if (target === this._dropdownWin || target === this._backgroundAppWin) return;
+            if (target === this._backgroundAppWin) return;
             if (this._scratchpadWindows && this._scratchpadWindows.has(target)) return;
             this._debugLog(`pointer focus: ${target.get_wm_class_instance() || '?'} title=${target.get_title() || '?'}`);
             target.focus(global.get_current_time());
