@@ -98,26 +98,7 @@ float gradientPos(vec2 p, vec4 bounds) {
 const MASK_SNIPPET_CODE = `
     vec2 p = cogl_tex_coord0_in.xy / pixelStep;
 
-    float pointAlpha = getPointOpacity(p, bounds, clipRadius);
-
-    cogl_color_out *= pointAlpha;
-
-    cogl_color_out *= opacity;
-
-    if (borderWidth > 0.5) {
-        float borderedAreaAlpha = getPointOpacity(p, borderedAreaBounds, borderedAreaClipRadius);
-        float borderAlpha = clamp(abs(pointAlpha - borderedAreaAlpha), 0.0, 1.0);
-        if (borderAlpha > 0.0) {
-            vec3 gradColor = mix(borderColor1.rgb, borderColor2.rgb, gradientPos(p, bounds));
-            cogl_color_out = mix(cogl_color_out, vec4(gradColor, 1.0), borderAlpha * borderColor1.a);
-        }
-        if (ringWidth > 0.5) {
-            float ringAreaAlpha = getPointOpacity(p, ringAreaBounds, ringAreaClipRadius);
-            float ringAlpha = clamp(borderedAreaAlpha - ringAreaAlpha, 0.0, 1.0);
-            if (ringAlpha > 0.0)
-                cogl_color_out = mix(cogl_color_out, vec4(ringColor.rgb, 1.0), ringAlpha * ringColor.a);
-        }
-    }
+    cogl_color_out *= 0.3;
 `;
 
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
@@ -3214,6 +3195,12 @@ export default class TilingWMExtension extends Extension {
                 setUniform('ringColor', 4, ringColor || [0, 0, 0, 0]);
                 setUniform('ringAreaBounds', 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
                 setUniform('ringAreaClipRadius', 1, [Math.max(0, radius - inset - rw)]);
+                if (!effect._uniformLogged) {
+                    effect._uniformLogged = true;
+                    log(`[plaid] mask uniform dump: bounds=[${x1},${y1},${x2},${y2}] clipRadius=${radius} ` +
+                        `pixelStep=[${(1 / w).toFixed(4)},${(1 / h).toFixed(4)}] borderWidth=${borderWidth} ` +
+                        `opacity=${opacity} actor=${w}x${h}`);
+                }
             } catch (e) {
                 log(`[plaid] mask uniforms failed: ${e.message}`);
                 return;
