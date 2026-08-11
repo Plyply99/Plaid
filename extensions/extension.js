@@ -3214,7 +3214,7 @@ export default class TilingWMExtension extends Extension {
                 setUniform('ringColor', 4, ringColor || [0, 0, 0, 0]);
                 setUniform('ringAreaBounds', 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
                 setUniform('ringAreaClipRadius', 1, [Math.max(0, radius - inset - rw)]);
-                if (!effect._uniformLogged) {
+                if (!effect._uniformLogged && this._settings && this._settings.get_boolean('debug')) {
                     effect._uniformLogged = true;
                     let texInfo = 'none';
                     let volInfo = 'none';
@@ -3432,9 +3432,13 @@ export default class TilingWMExtension extends Extension {
             ringWidth = Math.max(2, this._settings.get_int('active-border-width'));
             const ringHex = (this._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
             ringColor = toRgba(ringHex);
+            if (!effect._ringLogged) {
+                effect._ringLogged = true;
+                this._debugLog(`scratch ring: shader ring enabled width=${ringWidth} color=${ringHex}`);
+            }
         }
 
-        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, 0, ringColor);
+        effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor);
     }
 
     _teardownMaskEffect(win, effect) {
