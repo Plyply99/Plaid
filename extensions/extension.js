@@ -2922,11 +2922,9 @@ export default class TilingWMExtension extends Extension {
     _doUpdateBorders() {
         if (!this._settings) return;
         try { this._removeAllBorders(); } catch (_e) {}
-        if (!this._settings.get_boolean('enabled')) {
-            try { this._removeAllMasks(); } catch (_e) {}
-            try { this._removeAllBlurs(); } catch (_e) {}
-            return;
-        }
+
+        // Flair (borders, rounded corners, blur) renders from its own
+        // settings and stays even when tiling is toggled off.
 
         const focusWindow = global.display.focus_window;
 
@@ -3925,9 +3923,9 @@ export default class TilingWMExtension extends Extension {
                 Shell.ActionMode.NORMAL,
                 fn
             );
+            log(`[plaid] keybind: ${key} ${ok ? 'registered' : 'grab FAILED (conflict or invalid binding)'}`);
             if (!ok) {
                 failures++;
-                log(`[plaid] keybind: ${key} grab FAILED (conflict or invalid binding)`);
             }
         }
         if (failures > 0)
@@ -4244,12 +4242,11 @@ export default class TilingWMExtension extends Extension {
             });
             this._checkDynamicWorkspaces();
             if (this._settings.get_boolean('tiling-popup'))
-                this._showPopup('Plaid Enabled');
+                this._showPopup('Tiling Enabled');
         } else {
-            this._removeAllBorders();
             this._restoreSavedPositions();
             if (this._settings.get_boolean('tiling-popup'))
-                this._showPopup('Plaid Disabled');
+                this._showPopup('Tiling Disabled');
         }
     }
 
@@ -5027,7 +5024,7 @@ export default class TilingWMExtension extends Extension {
             if (!target) return;
             if (!this._canPointerFocusWindow(target)) return;
             if (target === global.display.focus_window) return;
-            if (target === this._dropdownWin || target === this._backgroundAppWin) return;
+            if (target === this._backgroundAppWin) return;
             if (this._scratchpadWindows && this._scratchpadWindows.has(target)) return;
             this._debugLog(`pointer focus: ${target.get_wm_class_instance() || '?'} title=${target.get_title() || '?'}`);
             target.focus(global.get_current_time());
@@ -5048,7 +5045,7 @@ export default class TilingWMExtension extends Extension {
                 for (const win of ws.list_windows()) {
                     total++;
                     if (!win || !this._canPointerFocusWindow(win)) continue;
-                    if (win === this._backgroundAppWin || win === this._dropdownWin) continue;
+                    if (win === this._backgroundAppWin) continue;
                     const r = win.get_frame_rect();
                     if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
                         candidates.push(win);
@@ -5312,8 +5309,8 @@ export default class TilingWMExtension extends Extension {
 
     _ensureTerminalSettingsProfile() {
         // Install the terminal settings source line into the user's shell
-        // profile based on $SHELL. Bash is auto-injected; other shells get a
-        // click-to-dismiss notice with the manual instruction.
+        // profile based on $SHELL. Bash and fish are auto-injected; other
+        // shells get a click-to-dismiss notice with the manual instruction.
         try {
             const scriptPath = `${this.path}/plaid-terminal-settings.sh`;
             const shell = (GLib.getenv('SHELL') || '').toLowerCase();
@@ -5328,6 +5325,17 @@ export default class TilingWMExtension extends Extension {
                 }
                 return;
             }
+            if (base === 'fish') {
+                const fishScript = `${this.path}/plaid-terminal-settings.fish`;
+                const block = `\n# --- Plaid: terminal settings ---\nif test -f '${fishScript}'\n    source '${fishScript}'\nend\n# --- end Plaid ---\n`;
+                const written = this._appendToShellProfile(`${GLib.get_home_dir()}/.config/fish/config.fish`, block);
+                if (written) {
+                    log('[plaid] terminal settings: fish profile updated');
+                    this._plaidSetupNoticeTerminal = true;
+                    this._scheduleSetupPopupCheck();
+                }
+                return;
+            }
             if (this._plaidTerminalProfileNotified) return;
             this._plaidTerminalProfileNotified = true;
             if (base === 'zsh') {
@@ -5336,7 +5344,7 @@ export default class TilingWMExtension extends Extension {
                     'Click to dismiss');
             } else {
                 this._showWarningPopup('Plaid Terminal Settings',
-                    `Plaid's terminal settings support bash and zsh. Your shell (${base}) needs manual setup — see the README.`,
+                    `Plaid's terminal settings support bash, zsh and fish. Your shell (${base}) needs manual setup — see the wiki → Terminal Settings.`,
                     'Click to dismiss');
             }
         } catch (e) {
