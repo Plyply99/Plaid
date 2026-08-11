@@ -2823,11 +2823,9 @@ export default class TilingWMExtension extends Extension {
     _doUpdateBorders() {
         if (!this._settings) return;
         try { this._removeAllBorders(); } catch (_e) {}
-        if (!this._settings.get_boolean('enabled')) {
-            try { this._removeAllMasks(); } catch (_e) {}
-            try { this._removeAllBlurs(); } catch (_e) {}
-            return;
-        }
+
+        // Flair (borders, rounded corners, blur) renders from its own
+        // settings and stays even when tiling is toggled off.
 
         const focusWindow = global.display.focus_window;
 
@@ -3824,9 +3822,9 @@ export default class TilingWMExtension extends Extension {
                 Shell.ActionMode.NORMAL,
                 fn
             );
+            log(`[plaid] keybind: ${key} ${ok ? 'registered' : 'grab FAILED (conflict or invalid binding)'}`);
             if (!ok) {
                 failures++;
-                log(`[plaid] keybind: ${key} grab FAILED (conflict or invalid binding)`);
             }
         }
         if (failures > 0)
@@ -4143,12 +4141,11 @@ export default class TilingWMExtension extends Extension {
             });
             this._checkDynamicWorkspaces();
             if (this._settings.get_boolean('tiling-popup'))
-                this._showPopup('Plaid Enabled');
+                this._showPopup('Tiling Enabled');
         } else {
-            this._removeAllBorders();
             this._restoreSavedPositions();
             if (this._settings.get_boolean('tiling-popup'))
-                this._showPopup('Plaid Disabled');
+                this._showPopup('Tiling Disabled');
         }
     }
 
