@@ -237,11 +237,10 @@ const CornerMaskEffect = GObject.registerClass({
                 const w = Math.max(1, actor.width);
                 const h = Math.max(1, actor.height);
                 const [, , vw, vh] = this._volOrigin();
-                const bw2 = this._borderWidth || 0;
-                this._setUniform('bounds_x', offsetX + 1 - bw2 + 2);
-                this._setUniform('bounds_y', offsetY + 1 - bw2 + 2);
-                this._setUniform('bounds_z', offsetX + actor.width + bw + bw2 + 1);
-                this._setUniform('bounds_w', offsetY + actor.height + bh + bw2 + 1);
+                this._setUniform('bounds_x', offsetX + 1 + 2);
+                this._setUniform('bounds_y', offsetY + 1 + 2);
+                this._setUniform('bounds_z', offsetX + actor.width + bw + 1);
+                this._setUniform('bounds_w', offsetY + actor.height + bh + 1);
                 this._setUniform('cornerBounds_x', offsetX + 3);
                 this._setUniform('cornerBounds_y', offsetY + 3);
                 this._setUniform('cornerBounds_z', offsetX + actor.width + bw + 1);
@@ -284,7 +283,7 @@ const CornerMaskEffect = GObject.registerClass({
             this._setUniform('borderedAreaBounds_z', x2 - inset + 2);
             this._setUniform('borderedAreaBounds_w', y2 - inset + 2);
             this._setUniform('borderedAreaClipRadius', Math.max(0, radius - inset));
-            this._setUniform('borderWidth', 0);
+            this._setUniform('borderWidth', borderWidth);
             this._setUniform('borderColor1_r', color1[0]);
             this._setUniform('borderColor1_g', color1[1]);
             this._setUniform('borderColor1_b', color1[2]);
@@ -2954,6 +2953,10 @@ export default class TilingWMExtension extends Extension {
 
             if (roundedCorners && borderRadius > 0) {
                 this._ensureWindowMask(win, actor, borderRadius + 1);
+                // Scratch windows fall through to their special border even
+                // with rounded corners (normal windows stay mask-only).
+                if (!(this._scratchpadWindows && this._scratchpadWindows.has(win)))
+                    continue;
             }
 
             const isFocused = win === focusWindow;
@@ -3482,10 +3485,10 @@ export default class TilingWMExtension extends Extension {
                     : 0);
         }
 
-        const x1 = offsetX + 1 - borderWidth;
-        const y1 = offsetY + 1 - borderWidth;
-        const x2 = offsetX + actor.width + bw - 1 + borderWidth;
-        const y2 = offsetY + actor.height + bh - 1 + borderWidth;
+        const x1 = offsetX + 1;
+        const y1 = offsetY + 1;
+        const x2 = offsetX + actor.width + bw;
+        const y2 = offsetY + actor.height + bh;
 
         if (!this._settings) {
             effect.updateMask(x1, y1, x2, y2, radius, borderWidth, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, [0, 0, 0, 0]);
