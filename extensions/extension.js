@@ -3256,6 +3256,11 @@ export default class TilingWMExtension extends Extension {
             try {
                 effect.set_uniform_float('theta', 1, 1, [theta]);
                 effect.queue_repaint();
+                const actor = effect.get_actor();
+                if (actor) {
+                    try { actor.invalidate_paint_volume(); } catch (_e) {}
+                    try { actor.queue_redraw(); } catch (_e) {}
+                }
             } catch (_e) {}
         };
 
@@ -3263,6 +3268,11 @@ export default class TilingWMExtension extends Extension {
             try {
                 effect.set_uniform_float('borderWidth', 1, 1, [width]);
                 effect.queue_repaint();
+                const actor = effect.get_actor();
+                if (actor) {
+                    try { actor.invalidate_paint_volume(); } catch (_e) {}
+                    try { actor.queue_redraw(); } catch (_e) {}
+                }
             } catch (_e) {}
         };
 
