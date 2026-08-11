@@ -98,7 +98,26 @@ float gradientPos(vec2 p, vec4 bounds) {
 const MASK_SNIPPET_CODE = `
     vec2 p = cogl_tex_coord0_in.xy / pixelStep;
 
-    cogl_color_out = vec4(p.x / 1000.0, p.y / 1000.0, 0.0, 1.0);
+    float pointAlpha = getPointOpacity(p, bounds, clipRadius);
+
+    cogl_color_out *= pointAlpha;
+
+    cogl_color_out *= opacity;
+
+    if (borderWidth > 0.5) {
+        float borderedAreaAlpha = getPointOpacity(p, borderedAreaBounds, borderedAreaClipRadius);
+        float borderAlpha = clamp(abs(pointAlpha - borderedAreaAlpha), 0.0, 1.0);
+        if (borderAlpha > 0.0) {
+            vec3 gradColor = mix(borderColor1.rgb, borderColor2.rgb, gradientPos(p, bounds));
+            cogl_color_out = mix(cogl_color_out, vec4(gradColor, 1.0), borderAlpha * borderColor1.a);
+        }
+        if (ringWidth > 0.5) {
+            float ringAreaAlpha = getPointOpacity(p, ringAreaBounds, ringAreaClipRadius);
+            float ringAlpha = clamp(borderedAreaAlpha - ringAreaAlpha, 0.0, 1.0);
+            if (ringAlpha > 0.0)
+                cogl_color_out = mix(cogl_color_out, vec4(ringColor.rgb, 1.0), ringAlpha * ringColor.a);
+        }
+    }
 `;
 
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
