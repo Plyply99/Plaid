@@ -318,6 +318,12 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = new Map();
         this._lastFocusedPerWorkspace = new Map();
         this._savedRects = new Map();
+        this._workspaceLayoutsSaveId = 0;
+        // Persisted per-workspace layouts/ratios are slot rules parsed at
+        // enable and consulted at use time — timing-independent (no workspace
+        // objects exist yet at this point, which is fine: the rules key on
+        // indices, not objects).
+        this._loadPersistedLayoutRules();
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
@@ -484,6 +490,8 @@ export default class TilingWMExtension extends Extension {
             // move every tiled window. Resume instead — tracking maps were
             // rebuilt by _addWindow above, so interactions work, but geometry
             // stays exactly where the user left it.
+            // Persisted per-ws layouts/ratios are slot rules parsed at enable
+            // and consulted at use time by the getters — no load needed here.
             if (!resumeLockCycle)
                 this._retileAll();
             this._checkDynamicWorkspaces();
@@ -576,6 +584,13 @@ export default class TilingWMExtension extends Extension {
         if (isLocked)
             _lockCycle = true;
         this._debugLog(`disable: mode=${mode} isLocked=${isLocked} lockCycle=${_lockCycle}`);
+        // Flush any pending per-ws layout/ratio persistence (insurance — the
+        // debounced save may not have fired before the teardown).
+        if (this._workspaceLayoutsSaveId) {
+            GLib.source_remove(this._workspaceLayoutsSaveId);
+            this._workspaceLayoutsSaveId = 0;
+        }
+        try { this._savePersistedLayouts(); } catch (_e) {}
         // Lock cycle: stash the exact tiling state so the unlock re-enable can
         // restore it instead of rebuilding trees from the stack order (which
         // would shuffle windows on the first new-window retile).
@@ -917,6 +932,7 @@ export default class TilingWMExtension extends Extension {
                     this._bspTrees.delete(workspace);
                     this._workspaceLayouts.delete(workspace);
                     this._lastFocusedPerWorkspace.delete(workspace);
+                    this._scheduleSaveLayouts();
                 }
             }
         }));
@@ -991,6 +1007,7 @@ export default class TilingWMExtension extends Extension {
             if (activeWs)
                 this._workspaceLayouts.set(activeWs, this._currentDefaultLayout);
             this._retileWorkspace(activeWs);
+            this._scheduleSaveLayouts();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::dwindle-ratio', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::master-ratio', () => this._retileAll()));
@@ -1205,7 +1222,109 @@ export default class TilingWMExtension extends Extension {
     }
 
     _getWorkspaceLayout(workspace) {
-        return this._workspaceLayouts.get(workspace) || this._settings.get_string('layout');
+        const live = this._workspaceLayouts.get(workspace);
+        if (live) return live;
+        // Remembered rule for this slot (persisted across logins).
+        if (this._persistedLayoutByIndex && this._persistedLayoutByIndex.size > 0) {
+            const rule = this._persistedLayoutByIndex.get(this._wsIndex(workspace));
+            if (rule) return rule;
+        }
+        return this._settings.get_string('layout');
+    }
+
+    // --- Per-workspace layout/ratio persistence (across logins) ---
+
+    _scheduleSaveLayouts() {
+        if (this._workspaceLayoutsSaveId) return;
+        this._workspaceLayoutsSaveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            this._workspaceLayoutsSaveId = 0;
+            if (this._destroyed || !this._settings) return GLib.SOURCE_REMOVE;
+            this._savePersistedLayouts();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _savePersistedLayouts() {
+        try {
+            const layouts = [];
+            const masterRatios = [];
+            const stackRatios = [];
+            const n = global.workspace_manager.get_n_workspaces();
+            for (let i = 1; i < n; i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!ws) continue;
+                // "The layout last used is the persistent one" — store the
+                // effective layout of every real workspace (the parking ws at
+                // index 0 is never stored).
+                layouts.push(`${i}:${this._getWorkspaceLayout(ws)}`);
+                const mr = this._masterRatios.get(ws);
+                if (mr !== undefined)
+                    masterRatios.push(`${i}:${mr}`);
+                const sr = this._stackRatios.get(ws);
+                if (sr && sr.size > 0) {
+                    const idx = [];
+                    for (const [k, v] of sr)
+                        idx.push(`${k}:${v}`);
+                    stackRatios.push(`${i}:${idx.join(',')}`);
+                }
+            }
+            this._settings.set_strv('workspace-layouts', layouts);
+            this._settings.set_strv('workspace-master-ratios', masterRatios);
+            this._settings.set_strv('workspace-stack-ratios', stackRatios);
+            this._debugLog(`persisted layouts: ${layouts.length} ws, ${masterRatios.length} master, ${stackRatios.length} stack`);
+        } catch (e) {
+            log(`[plaid] persist layouts failed: ${e.message}`);
+        }
+    }
+
+    _loadPersistedLayoutRules() {
+        // Persisted layouts/ratios are RULES keyed by workspace slot (index):
+        // "whatever workspace occupies slot N uses layout Y". Rules are parsed
+        // once at enable and consulted by the getters at use time — no binding
+        // to workspace objects (which churn during login restores) and no
+        // load timing to get wrong. Rules for slots beyond the current
+        // workspace count persist and apply when those slots spawn.
+        this._persistedLayoutByIndex = new Map();
+        this._persistedMasterByIndex = new Map();
+        this._persistedStackByIndex = new Map();
+        try {
+            const layouts = this._settings.get_strv('workspace-layouts') || [];
+            for (const entry of layouts) {
+                const [idxStr, layout] = entry.split(':');
+                const idx = parseInt(idxStr, 10);
+                if (idx <= 0 || !Number.isInteger(idx)) continue;
+                if (!['dwindle', 'master-stack', 'centered-master-stack', 'floating'].includes(layout)) continue;
+                this._persistedLayoutByIndex.set(idx, layout);
+            }
+            const masterEntries = this._settings.get_strv('workspace-master-ratios') || [];
+            for (const entry of masterEntries) {
+                const [idxStr, ratioStr] = entry.split(':');
+                const idx = parseInt(idxStr, 10);
+                const ratio = parseFloat(ratioStr);
+                if (idx <= 0 || !Number.isInteger(idx) || !Number.isFinite(ratio)) continue;
+                if (ratio < 0.05 || ratio > 0.95) continue;
+                this._persistedMasterByIndex.set(idx, ratio);
+            }
+            const stackEntries = this._settings.get_strv('workspace-stack-ratios') || [];
+            for (const entry of stackEntries) {
+                const [idxStr, weightsStr] = entry.split(':');
+                const idx = parseInt(idxStr, 10);
+                if (idx <= 0 || !Number.isInteger(idx)) continue;
+                const map = new Map();
+                for (const part of (weightsStr || '').split(',')) {
+                    const [kStr, vStr] = part.split(':');
+                    const k = parseInt(kStr, 10);
+                    const v = parseFloat(vStr);
+                    if (k >= 0 && Number.isFinite(v) && v > 0)
+                        map.set(k, v);
+                }
+                if (map.size > 0)
+                    this._persistedStackByIndex.set(idx, map);
+            }
+            this._debugLog(`persisted rules: ${this._persistedLayoutByIndex.size} layouts, ${this._persistedMasterByIndex.size} master, ${this._persistedStackByIndex.size} stack`);
+        } catch (e) {
+            log(`[plaid] load persisted layout rules failed: ${e.message}`);
+        }
     }
 
     _markPendingWindowInvisible(win, actor) {
@@ -1582,6 +1701,10 @@ export default class TilingWMExtension extends Extension {
         this._raiseFloatingWindows(workspace);
         for (const win of tiledWindows)
             this._newWindowSet.delete(win);
+        // Retiles are the common denominator for layout/ratio mutations —
+        // persist (debounced) so the last-used per-ws layout and ratios
+        // survive logins.
+        this._scheduleSaveLayouts();
     }
 
     // --- Animation ---
@@ -1778,6 +1901,7 @@ export default class TilingWMExtension extends Extension {
                 return;
             }
             log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
+            this._scheduleSaveLayouts();
         } catch (_e) {}
     }
 
@@ -1973,6 +2097,7 @@ export default class TilingWMExtension extends Extension {
                 this._debugLog(`anim: done ws=${this._wsIndex(workspace)} queued=${this._queuedAnimWorkspaces.size}`);
                 for (const w of tiledWindows) this._newWindowSet.delete(w);
                 this._animStates = null;
+                this._scheduleSaveLayouts();
                 this._scheduleBorders();
                 this._raiseFloatingWindows(workspace);
                 if (this._queuedAnimWorkspaces.size > 0) {
@@ -2082,14 +2207,29 @@ export default class TilingWMExtension extends Extension {
     // --- Master-Stack Helpers ---
 
     _getMasterRatio(ws) {
-        if (!this._masterRatios.has(ws))
-            this._masterRatios.set(ws, 0.5);
+        if (!this._masterRatios.has(ws)) {
+            let ratio = 0.5;
+            if (this._persistedMasterByIndex) {
+                const rule = this._persistedMasterByIndex.get(this._wsIndex(ws));
+                if (rule !== undefined) ratio = rule;
+            }
+            this._masterRatios.set(ws, ratio);
+        }
         return this._masterRatios.get(ws);
     }
 
     _getStackRatios(ws) {
-        if (!this._stackRatios.has(ws))
-            this._stackRatios.set(ws, new Map());
+        if (!this._stackRatios.has(ws)) {
+            const map = new Map();
+            if (this._persistedStackByIndex) {
+                const rule = this._persistedStackByIndex.get(this._wsIndex(ws));
+                if (rule) {
+                    for (const [k, v] of rule)
+                        map.set(k, v);
+                }
+            }
+            this._stackRatios.set(ws, map);
+        }
         return this._stackRatios.get(ws);
     }
 
@@ -2127,6 +2267,7 @@ export default class TilingWMExtension extends Extension {
             clamped = Math.max(lo, Math.min(hi, ratio));
         }
         this._masterRatios.set(ws, clamped);
+        this._scheduleSaveLayouts();
     }
 
     _retileMasterStack(workspace, tiledWindows, skipWindow = null) {
@@ -2415,6 +2556,7 @@ export default class TilingWMExtension extends Extension {
             const currentWeight = stackRatios.has(stackIdx) ? stackRatios.get(stackIdx) : 1.0;
             const newWeight = Math.max(0.1, currentWeight + delta * 0.005);
             stackRatios.set(stackIdx, newWeight);
+            this._scheduleSaveLayouts();
         }
     }
 
@@ -4526,6 +4668,7 @@ export default class TilingWMExtension extends Extension {
             this._workspaceLayouts.set(ws, next);
             this._retileWorkspace(ws);
             this._showPopup(`Layout: ${LAYOUT_NAMES[next] || next}`);
+            this._scheduleSaveLayouts();
         }
     }
 
@@ -7362,6 +7505,7 @@ export default class TilingWMExtension extends Extension {
                                     initialWeight + (dy * this._grabHeightSign) / totalStackH * numStack);
                                 const stackRatios = this._getStackRatios(ws);
                                 stackRatios.set(idx - 1, newWeight);
+                                this._scheduleSaveLayouts();
                             }
                         }
                     }

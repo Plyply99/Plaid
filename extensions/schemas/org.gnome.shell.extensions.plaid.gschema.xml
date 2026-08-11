@@ -49,6 +49,24 @@
       <description>dwindle, master-stack, centered-master-stack, or floating</description>
     </key>
 
+    <key name="workspace-layouts" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered layouts per workspace</summary>
+      <description>Entries of the form "INDEX:LAYOUT" (e.g. "1:master-stack") recording the last-used layout of each workspace, restored at login.</description>
+    </key>
+
+    <key name="workspace-master-ratios" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered master ratios per workspace</summary>
+      <description>Entries of the form "INDEX:RATIO" (e.g. "1:0.65") recording the last-used master-stack ratio of each workspace.</description>
+    </key>
+
+    <key name="workspace-stack-ratios" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered stack ratios per workspace</summary>
+      <description>Entries of the form "INDEX:SLOT:WEIGHT,SLOT:WEIGHT" (e.g. "1:0:1.0,1:0.8") recording the last-used per-window stack weights of each workspace.</description>
+    </key>
+
     <key name="dwindle-ratio" type="d">
       <default>0.618</default>
       <summary>Dwindle split ratio</summary>
