@@ -3185,7 +3185,7 @@ export default class TilingWMExtension extends Extension {
 
         const setUniform = (name, nComponents, values) => {
             try {
-                effect.set_uniform_float(name, nComponents, 1, values);
+                effect.set_uniform_float(name, nComponents, values);
             } catch (e) {
                 log(`[plaid] mask uniform '${name}' failed: ${e.message}`);
             }
