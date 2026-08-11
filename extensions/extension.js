@@ -98,7 +98,7 @@ float gradientPos(vec2 p, vec4 bounds) {
 const MASK_SNIPPET_CODE = `
     vec2 p = cogl_tex_coord0_in.xy / pixelStep;
 
-    cogl_color_out *= 0.3;
+    cogl_color_out = vec4(p.x / 1000.0, p.y / 1000.0, 0.0, 1.0);
 `;
 
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
@@ -3197,9 +3197,34 @@ export default class TilingWMExtension extends Extension {
                 setUniform('ringAreaClipRadius', 1, [Math.max(0, radius - inset - rw)]);
                 if (!effect._uniformLogged) {
                     effect._uniformLogged = true;
+                    let texInfo = 'none';
+                    let volInfo = 'none';
+                    let fr = 'none';
+                    let bu = 'none';
+                    try {
+                        const tex = effect.get_texture();
+                        if (tex)
+                            texInfo = `${tex.get_width()}x${tex.get_height()}`;
+                    } catch (_e) {}
+                    try {
+                        const vol = actor ? actor.get_paint_volume() : null;
+                        if (vol) {
+                            const o = vol.get_origin();
+                            volInfo = `origin=(${o.x},${o.y}) ${vol.get_width()}x${vol.get_height()}`;
+                        }
+                    } catch (_e) {}
+                    try {
+                        const f = effect._metaWin ? effect._metaWin.get_frame_rect() : null;
+                        if (f) fr = `(${f.x},${f.y},${f.width},${f.height})`;
+                    } catch (_e) {}
+                    try {
+                        const b = effect._metaWin ? effect._metaWin.get_buffer_rect() : null;
+                        if (b) bu = `(${b.x},${b.y},${b.width},${b.height})`;
+                    } catch (_e) {}
+                    log(`[plaid] mask pspace dump: actor=${w}x${h} texture=${texInfo} vol=${volInfo} frame=${fr} buffer=${bu}`);
                     log(`[plaid] mask uniform dump: bounds=[${x1},${y1},${x2},${y2}] clipRadius=${radius} ` +
                         `pixelStep=[${(1 / w).toFixed(4)},${(1 / h).toFixed(4)}] borderWidth=${borderWidth} ` +
-                        `opacity=${opacity} actor=${w}x${h}`);
+                        `opacity=${opacity}`);
                 }
             } catch (e) {
                 log(`[plaid] mask uniforms failed: ${e.message}`);
