@@ -334,6 +334,7 @@ export default class TilingWMExtension extends Extension {
         this._landingGivenUp = new Set();
         this._pendingWarp = new Set();
         this._lastMonitorsGeom = null;
+        this._pinnedAdjustCounts = new Map();
         this._stackDiagnostics = new Set();
         this._toggleFloatWindows = new Set();
         this._keyboardFocusChange = false;
@@ -753,6 +754,7 @@ export default class TilingWMExtension extends Extension {
         this._landingGivenUp = null;
         this._pendingWarp = null;
         this._lastMonitorsGeom = null;
+        this._pinnedAdjustCounts = null;
         this._stackDiagnostics = null;
         this._maximizeToggleRects = null;
     }
@@ -927,10 +929,10 @@ export default class TilingWMExtension extends Extension {
                 }
                 if (!valid) {
                     this._workspaceOrders.delete(workspace);
-                    this._masterRatios.delete(workspace);
-                    this._stackRatios.delete(workspace);
+                    this._masterRatios.delete(this._wsIndex(workspace));
+                    this._stackRatios.delete(this._wsIndex(workspace));
                     this._bspTrees.delete(workspace);
-                    this._workspaceLayouts.delete(workspace);
+                    this._workspaceLayouts.delete(this._wsIndex(workspace));
                     this._lastFocusedPerWorkspace.delete(workspace);
                     this._scheduleSaveLayouts();
                 }
@@ -1000,12 +1002,12 @@ export default class TilingWMExtension extends Extension {
             this._currentDefaultLayout = this._settings.get_string('layout');
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
-                if (!this._workspaceLayouts.has(ws))
-                    this._workspaceLayouts.set(ws, oldDefault);
+                if (!this._workspaceLayouts.has(i))
+                    this._workspaceLayouts.set(i, oldDefault);
             }
             const activeWs = global.workspace_manager.get_active_workspace();
             if (activeWs)
-                this._workspaceLayouts.set(activeWs, this._currentDefaultLayout);
+                this._workspaceLayouts.set(this._wsIndex(activeWs), this._currentDefaultLayout);
             this._retileWorkspace(activeWs);
             this._scheduleSaveLayouts();
         }));
@@ -1222,11 +1224,16 @@ export default class TilingWMExtension extends Extension {
     }
 
     _getWorkspaceLayout(workspace) {
-        const live = this._workspaceLayouts.get(workspace);
+        // Live overrides, remembered slot rules, and the default all live in
+        // the SAME index space — the lookup is deterministic per workspace
+        // index, so a recreated workspace (dynamic-workspace churn) resolves
+        // identically every time. Object-keyed live entries caused layout
+        // flip-flops when workspaces were removed and recreated.
+        const idx = this._wsIndex(workspace);
+        const live = this._workspaceLayouts.get(idx);
         if (live) return live;
-        // Remembered rule for this slot (persisted across logins).
         if (this._persistedLayoutByIndex && this._persistedLayoutByIndex.size > 0) {
-            const rule = this._persistedLayoutByIndex.get(this._wsIndex(workspace));
+            const rule = this._persistedLayoutByIndex.get(idx);
             if (rule) return rule;
         }
         return this._settings.get_string('layout');
@@ -1257,10 +1264,10 @@ export default class TilingWMExtension extends Extension {
                 // effective layout of every real workspace (the parking ws at
                 // index 0 is never stored).
                 layouts.push(`${i}:${this._getWorkspaceLayout(ws)}`);
-                const mr = this._masterRatios.get(ws);
+                const mr = this._masterRatios.get(i);
                 if (mr !== undefined)
                     masterRatios.push(`${i}:${mr}`);
-                const sr = this._stackRatios.get(ws);
+                const sr = this._stackRatios.get(i);
                 if (sr && sr.size > 0) {
                     const idx = [];
                     for (const [k, v] of sr)
@@ -1853,6 +1860,23 @@ export default class TilingWMExtension extends Extension {
     }
 
     _adjustPinnedTree(win, ws) {
+        // Convergence guard: when min-size constraints can't fit the
+        // partition, re-splitting just flips the layout back and forth
+        // (steam 1364x810 + friends 306x540 + several windows). Bound the
+        // adjustments per workspace so the layout settles on a stable
+        // partition instead of oscillating forever.
+        const idx = this._wsIndex(ws);
+        const now = Date.now();
+        let rec = this._pinnedAdjustCounts.get(idx);
+        if (!rec || now - rec.since > 2000) {
+            rec = { count: 0, since: now };
+            this._pinnedAdjustCounts.set(idx, rec);
+        }
+        rec.count++;
+        if (rec.count > 4) {
+            this._debugLog(`pinned adjust: ws=${idx} gave up after ${rec.count} adjustments`);
+            return;
+        }
         try {
             if (!win || !ws) return;
             const layout = this._getWorkspaceLayout(ws);
@@ -1877,7 +1901,7 @@ export default class TilingWMExtension extends Extension {
                     const basis = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
                     if (basis > 0) {
                         const ratio = this._getMasterRatio(ws);
-                        this._masterRatios.set(ws, Math.min(0.95, Math.max(ratio, f.width / basis)));
+                        this._masterRatios.set(this._wsIndex(ws), Math.min(0.95, Math.max(ratio, f.width / basis)));
                     }
                 } else {
                     const idx = tiled.indexOf(win) - 1;
@@ -2207,30 +2231,32 @@ export default class TilingWMExtension extends Extension {
     // --- Master-Stack Helpers ---
 
     _getMasterRatio(ws) {
-        if (!this._masterRatios.has(ws)) {
+        const idx = this._wsIndex(ws);
+        if (!this._masterRatios.has(idx)) {
             let ratio = 0.5;
             if (this._persistedMasterByIndex) {
-                const rule = this._persistedMasterByIndex.get(this._wsIndex(ws));
+                const rule = this._persistedMasterByIndex.get(idx);
                 if (rule !== undefined) ratio = rule;
             }
-            this._masterRatios.set(ws, ratio);
+            this._masterRatios.set(idx, ratio);
         }
-        return this._masterRatios.get(ws);
+        return this._masterRatios.get(idx);
     }
 
     _getStackRatios(ws) {
-        if (!this._stackRatios.has(ws)) {
+        const idx = this._wsIndex(ws);
+        if (!this._stackRatios.has(idx)) {
             const map = new Map();
             if (this._persistedStackByIndex) {
-                const rule = this._persistedStackByIndex.get(this._wsIndex(ws));
+                const rule = this._persistedStackByIndex.get(idx);
                 if (rule) {
                     for (const [k, v] of rule)
                         map.set(k, v);
                 }
             }
-            this._stackRatios.set(ws, map);
+            this._stackRatios.set(idx, map);
         }
-        return this._stackRatios.get(ws);
+        return this._stackRatios.get(idx);
     }
 
     _clampMasterStackRatios(ws, tiledWindows, areaW, gap, centered) {
@@ -2266,7 +2292,7 @@ export default class TilingWMExtension extends Extension {
         } else {
             clamped = Math.max(lo, Math.min(hi, ratio));
         }
-        this._masterRatios.set(ws, clamped);
+        this._masterRatios.set(this._wsIndex(ws), clamped);
         this._scheduleSaveLayouts();
     }
 
@@ -2399,7 +2425,7 @@ export default class TilingWMExtension extends Extension {
                 masterX = frame.x;
                 masterW = frame.width;
                 const effectiveRatio = masterW / (areaW - gap * 2);
-                this._masterRatios.set(workspace, Math.max(0.15, Math.min(0.85, effectiveRatio)));
+                this._masterRatios.set(this._wsIndex(workspace), Math.max(0.15, Math.min(0.85, effectiveRatio)));
             } else {
                 const masterRatio = this._getMasterRatio(workspace);
                 masterW = Math.floor((areaW - gap * 2) * masterRatio);
@@ -2546,7 +2572,7 @@ export default class TilingWMExtension extends Extension {
             const maxMaster = masterDenom - numStack * 100;
             if (maxMaster >= minMaster) {
                 const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-                this._masterRatios.set(workspace, clamped / masterDenom);
+                this._masterRatios.set(this._wsIndex(workspace), clamped / masterDenom);
             }
         } else {
             const idx = tiledWindows.indexOf(focused);
@@ -4665,7 +4691,7 @@ export default class TilingWMExtension extends Extension {
         const idx = layouts.indexOf(current);
         const next = layouts[(idx + 1) % layouts.length];
         if (next !== current) {
-            this._workspaceLayouts.set(ws, next);
+            this._workspaceLayouts.set(this._wsIndex(ws), next);
             this._retileWorkspace(ws);
             this._showPopup(`Layout: ${LAYOUT_NAMES[next] || next}`);
             this._scheduleSaveLayouts();
@@ -7458,7 +7484,7 @@ export default class TilingWMExtension extends Extension {
                             }
                             if (hi <= lo) { lo = 0.5; hi = 0.5; }
                             if (Number.isFinite(newRatio))
-                                this._masterRatios.set(ws, Math.max(lo, Math.min(hi, newRatio)));
+                                this._masterRatios.set(this._wsIndex(ws), Math.max(lo, Math.min(hi, newRatio)));
                         }
                     }
                     if (this._grabHeightSign !== 0) {
