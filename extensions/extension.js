@@ -36,6 +36,13 @@ const BLUR_EFFECT_NAME = 'plaid-window-blur';
 // lock/unlock re-enable cycle but resets on the next login.
 let _splashShownThisShell = false;
 
+// True once the extension has been enabled at least once in this shell
+// process. A manual disable/enable (or any re-enable that isn't a fresh
+// login) must register pre-existing windows as a resume — running the
+// new-window choreography on them force-shows other-workspace windows
+// (the actor.visible reveal overrides the workspace manager's hiding).
+let _enabledThisShell = false;
+
 // Set when the session enters the lock screen. The shell disables extensions
 // on lock and re-enables them on unlock; this module-level flag survives that
 // cycle so disable()/enable() can behave like a resume instead of a teardown:
@@ -268,6 +275,7 @@ const CornerMaskEffect = GObject.registerClass({
 
 export default class TilingWMExtension extends Extension {
     enable() {
+        _enabledThisShell = true;
         try {
             if (Meta.is_wayland_compositor && !Meta.is_wayland_compositor()) {
                 this._notifyCritical('Plaid', 'Plaid requires Wayland — the extension is disabled on X11.');
@@ -456,14 +464,19 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
             const resumeLockCycle = _lockCycle;
-            if (resumeLockCycle && _stashedTiling)
+            // Any re-enable within this shell (lock cycle OR manual toggle)
+            // must register pre-existing windows as a resume — running the
+            // new-window choreography on them force-shows other-workspace
+            // windows via the actor.visible reveal.
+            const resumeLike = _lockCycle || _enabledThisShell;
+            if (resumeLike && _stashedTiling)
                 this._restoreTilingState();
             const bgCommand = this._settings.get_string('background-app');
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 for (const win of ws.list_windows()) {
                     if (this._shouldManage(win)) {
-                        this._addWindow(win, resumeLockCycle);
+                        this._addWindow(win, resumeLike);
                         // On a lock-cycle resume windows must stay exactly as
                         // they are — never re-gap a maximized window either.
                         if (!resumeLockCycle)
@@ -592,10 +605,12 @@ export default class TilingWMExtension extends Extension {
             this._workspaceLayoutsSaveId = 0;
         }
         try { this._savePersistedLayouts(); } catch (_e) {}
-        // Lock cycle: stash the exact tiling state so the unlock re-enable can
-        // restore it instead of rebuilding trees from the stack order (which
-        // would shuffle windows on the first new-window retile).
-        if (_lockCycle && !_stashedTiling) {
+        // Stash the exact tiling state on any in-shell disable (lock cycle OR
+        // manual toggle) so the re-enable restores it instead of rebuilding
+        // trees from the stack order — which would shuffle windows on the
+        // retile. The module dies at a real logout, so stashing there is
+        // harmless; a fresh login starts with a fresh module (no stash).
+        if (!_stashedTiling) {
             _stashedTiling = {
                 bspTrees: this._bspTrees,
                 workspaceLayouts: this._workspaceLayouts,
