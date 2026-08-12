@@ -303,6 +303,7 @@ export default class TilingWMExtension extends Extension {
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._floatingTitlePatterns = this._compileTitlePatterns(this._floatingTitles);
+        this._floatProcessCache = new Map();
         this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
         if (this._minSizeOverrides.size > 0)
             log(`[plaid] min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
@@ -728,6 +729,7 @@ export default class TilingWMExtension extends Extension {
         this._floatingClasses = null;
         this._floatingTitles = null;
         this._floatingTitlePatterns = null;
+        this._floatProcessCache = null;
         this._minSizeOverrides = null;
         this._toggleFloatWindows = null;
         this._floatMaxRects = null;
@@ -992,6 +994,8 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(this._settings, this._settings.connect('changed::float-windows', () => {
             this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
+            if (this._floatProcessCache)
+                this._floatProcessCache.clear();
             this._reapplyFloatRules();
             this._retileAll();
         }));
@@ -1164,6 +1168,11 @@ export default class TilingWMExtension extends Extension {
         // late-identity backstop cover the remaining cases.
         if (this._isExtensionsAppWindow(win))
             return false;
+        // Float-listed apps whose wm-class hasn't resolved yet (flatpaks
+        // especially) must not be registered as tiled — the process cmdline
+        // is available immediately (cached per PID).
+        if (this._isFloatProcessWindow(win))
+            return false;
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         if (this._floatingTitleMatches(title)) return false;
         if (this._isFixedSizeWindow(win)) return false;
@@ -1216,12 +1225,49 @@ export default class TilingWMExtension extends Extension {
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return true;
         const title = win.get_title();
         if (this._floatingTitleMatches(title)) return true;
+        // Process-based fallback: at window-created the wm-class may not be
+        // resolved yet (flatpak apps especially), so a float-listed app would
+        // be registered as tiled and churn the retile pipeline at launch.
+        // The process cmdline is available immediately — and the verdict is
+        // cached per PID (process-lifetime stable).
+        if (this._isFloatProcessWindow(win)) return true;
         if (win.is_fullscreen()) return true;
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return true;
         if (win.is_skip_taskbar()) return true;
         if (win.get_transient_for()) return true;
         if (this._isFixedSizeWindow(win)) return true;
         return false;
+    }
+
+    _isFloatProcessWindow(win) {
+        if (!win) return false;
+        let pid = 0;
+        try { pid = win.get_pid(); } catch (_e) {}
+        if (pid <= 0) return false;
+        if (this._floatProcessCache) {
+            const cached = this._floatProcessCache.get(pid);
+            if (cached !== undefined) return cached;
+        }
+        let verdict = false;
+        try {
+            const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
+            if (data) {
+                const cmd = new TextDecoder().decode(data).replace(/\0/g, ' ').toLowerCase();
+                for (const token of this._floatingClasses) {
+                    if (!token || token.length < 3) continue;
+                    if (cmd.includes(token)) {
+                        verdict = true;
+                        break;
+                    }
+                }
+            }
+        } catch (_e) {}
+        if (this._floatProcessCache) {
+            if (this._floatProcessCache.size >= 256)
+                this._floatProcessCache.clear();
+            this._floatProcessCache.set(pid, verdict);
+        }
+        return verdict;
     }
 
     _isFixedSizeWindow(win) {
@@ -3271,6 +3317,21 @@ export default class TilingWMExtension extends Extension {
             this._raiseFloatingWindows(ws);
         }
         this._restoreFloatNaturalRect(win);
+        // Reveal: the window can be pending-hidden from the tiled
+        // choreography (actor.visible=false + mask uniform 0) when its
+        // identity resolved late to floating — nothing else reveals it, so
+        // it would sit invisible until the 2.5s safety timer. Reveal now.
+        try {
+            if (this._pendingWarp) this._pendingWarp.delete(win);
+            const a = win.get_compositor_private();
+            if (a) {
+                a.visible = true;
+                a.set_opacity(255);
+            }
+            const effect = this._windowMasks && this._windowMasks.get(win);
+            if (effect && effect.setOpacityUniform)
+                effect.setOpacityUniform(1);
+        } catch (_e) {}
     }
 
     _restoreFloatNaturalRect(win) {
