@@ -148,130 +148,11 @@ const MASK_SNIPPET_CODE = `
 `;
 
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
-const CornerMaskEffect = GObject.registerClass({
-    GTypeName: 'PlaidCornerMaskEffect',
-}, class CornerMaskEffect extends Shell.GLSLEffect {
-    constructor() {
-        super();
-        this._radius = 0;
-        this._metaWin = null;
-        this._uniformLocations = {
-            bounds: this.get_uniform_location('bounds'),
-            clipRadius: this.get_uniform_location('clipRadius'),
-            pixelStep: this.get_uniform_location('pixelStep'),
-            borderColor1: this.get_uniform_location('borderColor1'),
-            borderColor2: this.get_uniform_location('borderColor2'),
-            borderWidth: this.get_uniform_location('borderWidth'),
-            gradientMode: this.get_uniform_location('gradientMode'),
-            theta: this.get_uniform_location('theta'),
-            borderedAreaBounds: this.get_uniform_location('borderedAreaBounds'),
-            borderedAreaClipRadius: this.get_uniform_location('borderedAreaClipRadius'),
-            ringColor: this.get_uniform_location('ringColor'),
-            ringWidth: this.get_uniform_location('ringWidth'),
-            ringAreaBounds: this.get_uniform_location('ringAreaBounds'),
-            ringAreaClipRadius: this.get_uniform_location('ringAreaClipRadius'),
-            opacity: this.get_uniform_location('opacity'),
-        };
-    }
 
-    vfunc_build_pipeline() {
-        try {
-            this.add_glsl_snippet(SNIPPET_HOOK_FRAGMENT, MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE, false);
-        } catch (e) {
-            log(`[plaid] mask snippet failed: ${e.message}`);
-        }
-    }
-
-    vfunc_paint_target(node, paintContext) {
-        try {
-            const actor = this.get_actor();
-            if (actor && this._metaWin && this._metaWin.get_frame_rect) {
-                const buffer = this._metaWin.get_buffer_rect();
-                const frame = this._metaWin.get_frame_rect();
-                const offsetX = frame.x - buffer.x;
-                const offsetY = frame.y - buffer.y;
-                const bw = frame.width - buffer.width;
-                const bh = frame.height - buffer.height;
-                const w = Math.max(1, actor.width);
-                const h = Math.max(1, actor.height);
-                const loc = this._uniformLocations;
-                this.set_uniform_float(loc.bounds, 4, [
-                    offsetX + 1,
-                    offsetY + 1,
-                    offsetX + actor.width + bw,
-                    offsetY + actor.height + bh,
-                ]);
-                this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
-            }
-        } catch (e) {
-            log(`[plaid] mask paint sync failed: ${e.message}`);
-        }
-        super.vfunc_paint_target(node, paintContext);
-    }
-
-    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor) {
-        this._radius = radius;
-        const loc = this._uniformLocations;
-        try {
-            const actor = this.get_actor();
-            const w = Math.max(1, actor ? actor.width : 1);
-            const h = Math.max(1, actor ? actor.height : 1);
-            const inset = Math.max(0, borderWidth);
-            const rw = Math.max(0, ringWidth || 0);
-            this.set_uniform_float(loc.bounds, 4, [x1, y1, x2, y2]);
-            this.set_uniform_float(loc.clipRadius, 1, [radius]);
-            this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
-            this.set_uniform_float(loc.borderedAreaBounds, 4, [x1 + inset, y1 + inset, x2 - inset, y2 - inset]);
-            this.set_uniform_float(loc.borderedAreaClipRadius, 1, [Math.max(0, radius - inset)]);
-            this.set_uniform_float(loc.borderWidth, 1, [borderWidth]);
-            this.set_uniform_float(loc.borderColor1, 4, color1);
-            this.set_uniform_float(loc.borderColor2, 4, color2);
-            this.set_uniform_float(loc.gradientMode, 1, [mode]);
-            this.set_uniform_float(loc.theta, 1, [theta]);
-            this.set_uniform_float(loc.opacity, 1, [opacity]);
-            this.set_uniform_float(loc.ringWidth, 1, [rw]);
-            this.set_uniform_float(loc.ringColor, 4, ringColor || [0, 0, 0, 0]);
-            this.set_uniform_float(loc.ringAreaBounds, 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
-            this.set_uniform_float(loc.ringAreaClipRadius, 1, [Math.max(0, radius - inset - rw)]);
-        } catch (e) {
-            log(`[plaid] mask uniforms failed: ${e.message}`);
-            return;
-        }
-        this.queue_repaint();
-    }
-
-    setTheta(theta) {
-        try {
-            this.set_uniform_float(this._uniformLocations.theta, 1, [theta]);
-        } catch (_e) {
-            return;
-        }
-        this.queue_repaint();
-    }
-
-    setBorderWidth(width) {
-        try {
-            this.set_uniform_float(this._uniformLocations.borderWidth, 1, [width]);
-        } catch (_e) {
-            return;
-        }
-        this.queue_repaint();
-    }
-
-    // The offscreen mask pipeline renders the actor at full opacity
-    // (Clutter's offscreen paint hardcodes 255), so actor.set_opacity(0) does
-    // not hide rounded-corner windows. The shader's own 'opacity' uniform is
-    // the effective visibility control — this drives it.
-    setOpacityUniform(v) {
-        try {
-            this.set_uniform_float(this._uniformLocations.opacity, 1, [v]);
-        } catch (_e) {
-            return;
-        }
-        this.queue_repaint();
-    }
-
-});
+// The GNOME 50 mask class must never be registered on GNOME 51 (its vfuncs
+// no longer exist there), so registration is lazy — and it must register
+// exactly once per process, so the result is cached.
+let CornerMaskEffectClass = null;
 
 export default class TilingWMExtension extends Extension {
     enable() {
@@ -3703,22 +3584,24 @@ export default class TilingWMExtension extends Extension {
     _startBorderAnimation() {
         if (this._borderAnimId) return;
         try {
-            const stSettings = St.Settings.get();
-            if (!stSettings.enable_animations) return;
             if (!this._settings.get_boolean('gradient-borders')) return;
             if (this._settings.get_int('border-animation-speed') <= 0) return;
         } catch (e) {
             log(`[plaid] _startBorderAnimation failed: ${e.message}`);
             return;
         }
+        log('[plaid] border animation: start');
         this._borderAnimId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
             try {
-                const stSettings = St.Settings.get();
-                if (this._destroyed || !stSettings.enable_animations ||
+                if (this._destroyed ||
                     !this._settings.get_boolean('gradient-borders') ||
-                    this._settings.get_int('border-animation-speed') <= 0 || this._grabOp) {
+                    this._settings.get_int('border-animation-speed') <= 0) {
+                    log('[plaid] border animation: stop (settings)');
                     this._stopBorderAnimation();
                     return GLib.SOURCE_REMOVE;
+                }
+                if (this._grabOp) {
+                    return GLib.SOURCE_CONTINUE;
                 }
             } catch (e) {
                 log(`[plaid] border animation tick failed: ${e.message}`);
@@ -3836,7 +3719,133 @@ export default class TilingWMExtension extends Extension {
         // GLSL and the update/geometry logic are shared.
         if (!(Clutter.ShaderEffect && Clutter.ShaderEffect.new_with_snippet)) {
             try {
-                return new CornerMaskEffect();
+            if (!CornerMaskEffectClass) {
+                CornerMaskEffectClass = GObject.registerClass({
+                    GTypeName: 'PlaidCornerMaskEffect',
+                }, class CornerMaskEffect extends Shell.GLSLEffect {
+                    constructor() {
+                        super();
+                        this._radius = 0;
+                        this._metaWin = null;
+                        this._uniformLocations = {
+                            bounds: this.get_uniform_location('bounds'),
+                            clipRadius: this.get_uniform_location('clipRadius'),
+                            pixelStep: this.get_uniform_location('pixelStep'),
+                            borderColor1: this.get_uniform_location('borderColor1'),
+                            borderColor2: this.get_uniform_location('borderColor2'),
+                            borderWidth: this.get_uniform_location('borderWidth'),
+                            gradientMode: this.get_uniform_location('gradientMode'),
+                            theta: this.get_uniform_location('theta'),
+                            borderedAreaBounds: this.get_uniform_location('borderedAreaBounds'),
+                            borderedAreaClipRadius: this.get_uniform_location('borderedAreaClipRadius'),
+                            ringColor: this.get_uniform_location('ringColor'),
+                            ringWidth: this.get_uniform_location('ringWidth'),
+                            ringAreaBounds: this.get_uniform_location('ringAreaBounds'),
+                            ringAreaClipRadius: this.get_uniform_location('ringAreaClipRadius'),
+                            opacity: this.get_uniform_location('opacity'),
+                        };
+                    }
+
+                    vfunc_build_pipeline() {
+                        try {
+                            this.add_glsl_snippet(SNIPPET_HOOK_FRAGMENT, MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE, false);
+                        } catch (e) {
+                            log(`[plaid] mask snippet failed: ${e.message}`);
+                        }
+                    }
+
+                    vfunc_paint_target(node, paintContext) {
+                        try {
+                            const actor = this.get_actor();
+                            if (actor && this._metaWin && this._metaWin.get_frame_rect) {
+                                const buffer = this._metaWin.get_buffer_rect();
+                                const frame = this._metaWin.get_frame_rect();
+                                const offsetX = frame.x - buffer.x;
+                                const offsetY = frame.y - buffer.y;
+                                const bw = frame.width - buffer.width;
+                                const bh = frame.height - buffer.height;
+                                const w = Math.max(1, actor.width);
+                                const h = Math.max(1, actor.height);
+                                const loc = this._uniformLocations;
+                                this.set_uniform_float(loc.bounds, 4, [
+                                    offsetX + 1,
+                                    offsetY + 1,
+                                    offsetX + actor.width + bw,
+                                    offsetY + actor.height + bh,
+                                ]);
+                                this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
+                            }
+                        } catch (e) {
+                            log(`[plaid] mask paint sync failed: ${e.message}`);
+                        }
+                        super.vfunc_paint_target(node, paintContext);
+                    }
+
+                    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor) {
+                        this._radius = radius;
+                        const loc = this._uniformLocations;
+                        try {
+                            const actor = this.get_actor();
+                            const w = Math.max(1, actor ? actor.width : 1);
+                            const h = Math.max(1, actor ? actor.height : 1);
+                            const inset = Math.max(0, borderWidth);
+                            const rw = Math.max(0, ringWidth || 0);
+                            this.set_uniform_float(loc.bounds, 4, [x1, y1, x2, y2]);
+                            this.set_uniform_float(loc.clipRadius, 1, [radius]);
+                            this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
+                            this.set_uniform_float(loc.borderedAreaBounds, 4, [x1 + inset, y1 + inset, x2 - inset, y2 - inset]);
+                            this.set_uniform_float(loc.borderedAreaClipRadius, 1, [Math.max(0, radius - inset)]);
+                            this.set_uniform_float(loc.borderWidth, 1, [borderWidth]);
+                            this.set_uniform_float(loc.borderColor1, 4, color1);
+                            this.set_uniform_float(loc.borderColor2, 4, color2);
+                            this.set_uniform_float(loc.gradientMode, 1, [mode]);
+                            this.set_uniform_float(loc.theta, 1, [theta]);
+                            this.set_uniform_float(loc.opacity, 1, [opacity]);
+                            this.set_uniform_float(loc.ringWidth, 1, [rw]);
+                            this.set_uniform_float(loc.ringColor, 4, ringColor || [0, 0, 0, 0]);
+                            this.set_uniform_float(loc.ringAreaBounds, 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
+                            this.set_uniform_float(loc.ringAreaClipRadius, 1, [Math.max(0, radius - inset - rw)]);
+                        } catch (e) {
+                            log(`[plaid] mask uniforms failed: ${e.message}`);
+                            return;
+                        }
+                        this.queue_repaint();
+                    }
+
+                    setTheta(theta) {
+                        try {
+                            this.set_uniform_float(this._uniformLocations.theta, 1, [theta]);
+                        } catch (_e) {
+                            return;
+                        }
+                        this.queue_repaint();
+                    }
+
+                    setBorderWidth(width) {
+                        try {
+                            this.set_uniform_float(this._uniformLocations.borderWidth, 1, [width]);
+                        } catch (_e) {
+                            return;
+                        }
+                        this.queue_repaint();
+                    }
+
+                    // The offscreen mask pipeline renders the actor at full opacity
+                    // (Clutter's offscreen paint hardcodes 255), so actor.set_opacity(0) does
+                    // not hide rounded-corner windows. The shader's own 'opacity' uniform is
+                    // the effective visibility control — this drives it.
+                    setOpacityUniform(v) {
+                        try {
+                            this.set_uniform_float(this._uniformLocations.opacity, 1, [v]);
+                        } catch (_e) {
+                            return;
+                        }
+                    this.queue_repaint();
+                    }
+
+                });
+            }
+            return new CornerMaskEffectClass();
             } catch (e) {
                 log(`[plaid] mask shader failed: ${e.message}`);
                 return null;
@@ -3926,29 +3935,24 @@ export default class TilingWMExtension extends Extension {
                 return;
             }
             try { effect.queue_repaint(); } catch (_e) {}
+            try { global.stage.queue_redraw(); } catch (_e) {}
         };
 
         effect.setTheta = (theta) => {
             try {
-                effect.set_uniform_float('theta', 1, 1, [theta]);
-                effect.queue_repaint();
-                const actor = effect.get_actor();
-                if (actor) {
-                    try { actor.invalidate_paint_volume(); } catch (_e) {}
-                    try { actor.queue_redraw(); } catch (_e) {}
-                }
+                effect.set_uniform_float('theta', 1, [theta]);
+                if (effect.invalidate)
+                    effect.invalidate();
+                try { global.stage.queue_redraw(); } catch (_e) {}
             } catch (_e) {}
         };
 
         effect.setBorderWidth = (width) => {
             try {
-                effect.set_uniform_float('borderWidth', 1, 1, [width]);
-                effect.queue_repaint();
-                const actor = effect.get_actor();
-                if (actor) {
-                    try { actor.invalidate_paint_volume(); } catch (_e) {}
-                    try { actor.queue_redraw(); } catch (_e) {}
-                }
+                effect.set_uniform_float('borderWidth', 1, [width]);
+                if (effect.invalidate)
+                    effect.invalidate();
+                try { global.stage.queue_redraw(); } catch (_e) {}
             } catch (_e) {}
         };
 
@@ -7577,6 +7581,7 @@ export default class TilingWMExtension extends Extension {
         this._grabOp = null;
         this._grabWindow = null;
         this._grabInitialStackRatios = null;
+        this._startBorderAnimation();
     }
 
     _isResizeGrab(grabOp) {
