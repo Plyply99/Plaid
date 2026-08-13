@@ -3828,6 +3828,20 @@ export default class TilingWMExtension extends Extension {
     }
 
     _createMaskEffect() {
+        // Dual-compat wrapper: GNOME 51 removed Shell.GLSLEffect and
+        // set_shader_source — the mask is a base Clutter.ShaderEffect built
+        // via new_with_snippet (name-based uniforms). GNOME 50's Clutter
+        // lacks new_with_snippet/set_uniform_float — the Shell.GLSLEffect
+        // subclass with location-based uniforms is used there. The snippet
+        // GLSL and the update/geometry logic are shared.
+        if (!(Clutter.ShaderEffect && Clutter.ShaderEffect.new_with_snippet)) {
+            try {
+                return new CornerMaskEffect();
+            } catch (e) {
+                log(`[plaid] mask shader failed: ${e.message}`);
+                return null;
+            }
+        }
         let snippet = null;
         try {
             snippet = Cogl.Snippet.new(SNIPPET_HOOK_FRAGMENT, MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE);
