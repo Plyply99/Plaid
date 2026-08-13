@@ -180,7 +180,12 @@ export default class TilingWMExtension extends Extension {
         }
         this._destroyed = false;
         this._settings = this.getSettings();
-        this._ensureBlurModule();
+        try {
+            this._ensureBlurModule().catch(e =>
+                log(`[plaid] blur probe: crashed: ${e.message}`));
+        } catch (e) {
+            log(`[plaid] blur probe: sync crash: ${e.message}`);
+        }
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._floatingTitlePatterns = this._compileTitlePatterns(this._floatingTitles);
@@ -4171,46 +4176,102 @@ export default class TilingWMExtension extends Extension {
         this._blurModule = null;
         this._blurModulePromise = (async () => {
             const [libPath] = GLib.filename_from_uri(import.meta.url);
-            const libDir = GLib.path_get_dirname(libPath) + '/lib';
+            const baseLib = GLib.path_get_dirname(libPath) + '/lib';
+            // The bundled blur lib is mutter-ABI-targeted (DT_NEEDED soname):
+            // blur50 = mutter 18/50-era, blur51 = mutter 51 (rawhide). Pick by
+            // the same fork condition the mask uses (new_with_snippet exists
+            // on 51 only) — imports.misc.config is unavailable in the
+            // extension's ESM context.
+            const modernShader = !!(Clutter.ShaderEffect && Clutter.ShaderEffect.new_with_snippet);
+            const candidates = modernShader ? ['blur51'] : ['blur50'];
+
+            // The host's gjs (1.88-era) can only on-demand-load the Blur
+            // namespace from the base lib dir, not from a subdir (observed:
+            // base loads, lib/blur50 throws "Value is not a string, cannot
+            // convert to UTF-8"). Sync the selected ABI pair to the base so
+            // the load always happens from the proven location. Failure is
+            // tolerated — the probe falls back to the subdirs.
             try {
-                const Repo = imports.gi.GIRepository;
-                const repo = Repo.Repository.dup_default();
-                this._debugLog(`blur lib dir=${libDir}`);
-                repo.prepend_search_path(libDir);
-                repo.prepend_library_path(libDir);
+                const srcDir = baseLib + '/' + candidates[0];
+                for (const f of ['Blur-1.0.typelib', 'libblur-effect-1.0.so.1']) {
+                    const src = srcDir + '/' + f;
+                    const dst = baseLib + '/' + f;
+                    if (!GLib.file_test(src, GLib.FileTest.EXISTS)) continue;
+                    try {
+                        GLib.file_copy(src, dst, GLib.FileCopyFlags.OVERWRITE, null, null);
+                    } catch (_e) {
+                        GLib.file_set_contents(dst, GLib.file_get_contents(src)[1]);
+                    }
+                    if (f.endsWith('.so.1'))
+                        GLib.chmod(dst, 0o755);
+                }
+                log(`[plaid] blur base pair synced: ${candidates[0]}`);
             } catch (e) {
-                log(`[plaid] blur lib paths failed: ${e.message}`);
+                log(`[plaid] blur base sync failed: ${e.message}`);
             }
 
-            const tryImport = async (label, fn) => {
+            const tryImport = async (label, dir, fn) => {
                 try {
+                    const Repo = imports.gi.GIRepository;
+                    const repo = Repo.Repository.dup_default();
+                    repo.prepend_search_path(dir);
+                    repo.prepend_library_path(dir);
                     const mod = await fn();
                     this._blurModule = mod;
                     this._debugLog(`using bundled gnome-rounded-blur (${label})`);
                     return true;
                 } catch (e) {
-                    this._debugLog(`blur import (${label}) failed: ${e.message}`);
+                    log(`[plaid] blur probe: ${label} failed: ${e.message}`);
                     return false;
                 }
             };
-            let ok = await tryImport('legacy', () => imports.gi.Blur);
+            // Raw imports only — NO load-time class validation: accessing
+            // the namespace's class properties in the shell's gjs can throw
+            // ("Value is not a string, cannot convert to UTF-8") even when
+            // the module itself loads. The class is validated at the attach
+            // (the constructor call there falls back to Shell.BlurEffect).
+            const loadModule = () => imports.gi.Blur;
+            let ok = false;
+            let loadedDir = baseLib + '/' + candidates[0];
+            // Base first — the synced pair lives at the proven location.
+            ok = await tryImport('base', baseLib, () => loadModule());
+            if (!ok) {
+                for (const sub of candidates) {
+                    const dir = baseLib + '/' + sub;
+                    ok = await tryImport(sub, dir, () => loadModule());
+                    if (ok) {
+                        loadedDir = dir;
+                        break;
+                    }
+                }
+            }
             if (!ok)
-                ok = await tryImport('esm', () => import('gi://Blur'));
+                ok = await tryImport('legacy', baseLib, () => loadModule());
 
-            // Provision whenever the conf is missing — the session
-            // environment may still carry the library paths from a previous
-            // setup (inherited), which would make the import succeed and
-            // skip the old provisioning. The conf must exist so the NEXT
-            // session activates it — otherwise the user needs two reboots.
+            // Keep the environment.d conf pointing at the base lib — the
+            // synced ABI pair lives there. A stale conf (an old base path, or
+            // a previous shell's dir) poisons non-shell processes. ANY conf
+            // write — missing or stale — needs a relog to activate (the env
+            // is fixed per session), so the setup notice fires on every write.
+            const wantDir = baseLib;
             try {
                 const confDir = GLib.get_home_dir() + '/.config/environment.d';
                 const confFile = confDir + '/plaid-blur.conf';
-                if (!GLib.file_test(confFile, GLib.FileTest.EXISTS)) {
+                const wantContent =
+                    `GI_TYPELIB_PATH=${wantDir}\n` +
+                    `LD_LIBRARY_PATH=${wantDir}\n`;
+                let stale = !GLib.file_test(confFile, GLib.FileTest.EXISTS);
+                if (!stale) {
+                    try {
+                        const [okRead, cur] = GLib.file_get_contents(confFile);
+                        stale = !okRead || cur.toString() !== wantContent;
+                    } catch (_e) {
+                        stale = true;
+                    }
+                }
+                if (stale) {
                     GLib.mkdir_with_parents(confDir, 0o755);
-                    const content =
-                        `GI_TYPELIB_PATH=${libDir}\n` +
-                        `LD_LIBRARY_PATH=${libDir}\n`;
-                    GLib.file_set_contents(confFile, content);
+                    GLib.file_set_contents(confFile, wantContent);
                     log('[plaid] blur library provisioned - relogin to activate');
                     this._plaidSetupNoticeBlur = true;
                     this._scheduleSetupPopupCheck();
@@ -4228,6 +4289,18 @@ export default class TilingWMExtension extends Extension {
             return this._blurModule;
         })();
         return this._blurModulePromise;
+    }
+
+    _syncBlurCornerRadius(blur) {
+        // The blur rect is square by default and shows through the window's
+        // corner cuts — round it to match the mask's clip radius
+        // (border-radius + 1). Builds without the property no-op safely.
+        try {
+            const radius = this._settings.get_boolean('rounded-corners')
+                ? this._settings.get_int('border-radius') + 1
+                : 0;
+            blur.corner_radius = radius;
+        } catch (_e) {}
     }
 
     _ensureWindowBlur(win, actor) {
@@ -4260,6 +4333,8 @@ export default class TilingWMExtension extends Extension {
                     log(`[plaid] window blur heal failed: ${e.message}`);
                     return;
                 }
+            } else {
+                this._syncBlurCornerRadius(blur);
             }
         }
 
@@ -4269,7 +4344,20 @@ export default class TilingWMExtension extends Extension {
                 return;
             }
             try {
-                const effectClass = this._blurModule ? this._blurModule.BlurEffect : Shell.BlurEffect;
+                // Resolve the class defensively: property access on a freshly
+                // loaded namespace can throw in the shell's gjs even when the
+                // module loaded — fall back to Shell.BlurEffect rather than
+                // losing the blur entirely.
+                let effectClass = Shell.BlurEffect;
+                if (this._blurModule) {
+                    try {
+                        effectClass = this._blurModule.BlurEffect ||
+                            this._blurModule.GbBlurEffect || Shell.BlurEffect;
+                    } catch (e) {
+                        log(`[plaid] bundled blur class failed: ${e.message}, using Shell.BlurEffect`);
+                        effectClass = Shell.BlurEffect;
+                    }
+                }
                 blur = new effectClass();
                 blur._bindings = [];
                 const sibling = new St.Widget({
@@ -4295,6 +4383,7 @@ export default class TilingWMExtension extends Extension {
                 blur._sibling = sibling;
                 blur._sourceActor = actor;
                 this._windowBlurs.set(win, blur);
+                this._syncBlurCornerRadius(blur);
                 try {
                     blur._actorDestroyId = actor.connect('destroy', () => this._removeBlur(win));
                 } catch (_e) {}
@@ -5705,13 +5794,13 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             const lines = [];
             if (this._plaidSetupNoticeBlur)
-                lines.push('• Window blur is on frosted glass until the next boot — the blur library was provisioned.');
+                lines.push('• The blur library was provisioned — log out and back in to activate it.');
             if (this._plaidSetupNoticeTerminal)
                 lines.push("• Plaid's terminal settings were added to ~/.bashrc — available in new terminals.");
             this._plaidSetupNoticeBlur = false;
             this._plaidSetupNoticeTerminal = false;
             if (lines.length > 0)
-                this._showWarningPopup('Plaid setup complete. Reboot to take effect', lines.join('\n'), 'Click to dismiss');
+                this._showWarningPopup('Plaid setup complete. Log out and back in to take effect', lines.join('\n'), 'Click to dismiss');
             return GLib.SOURCE_REMOVE;
         });
     }
