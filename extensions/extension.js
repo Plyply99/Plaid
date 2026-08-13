@@ -29,6 +29,31 @@ const BORDER_CORNER_SEG_STEP = 4;
 const MASK_EFFECT_NAME = 'plaid-corner-mask';
 const BLUR_EFFECT_NAME = 'plaid-window-blur';
 
+// The GNOME Shell re-enables extensions after every screen unlock, which
+// re-runs enable(). The login splash is a brand moment for real logins only
+// (fresh shell process = fresh module), so a module-level flag survives the
+// lock/unlock re-enable cycle but resets on the next login.
+let _splashShownThisShell = false;
+
+// True once the extension has been enabled at least once in this shell
+// process. A manual disable/enable (or any re-enable that isn't a fresh
+// login) must register pre-existing windows as a resume — running the
+// new-window choreography on them force-shows other-workspace windows
+// (the actor.visible reveal overrides the workspace manager's hiding).
+let _enabledThisShell = false;
+
+// Set when the session enters the lock screen. The shell disables extensions
+// on lock and re-enables them on unlock; this module-level flag survives that
+// cycle so disable()/enable() can behave like a resume instead of a teardown:
+// keep the bg-app alive and leave tiled windows exactly where they are.
+let _lockCycle = false;
+let _lockModeId = 0;
+
+// Tiling state stashed at the lock-cycle disable and restored at the unlock
+// re-enable, so windows keep their exact arrangement across the cycle. The
+// window/workspace objects survive the lock, so the maps stay valid.
+let _stashedTiling = null;
+
 const MASK_SNIPPET_DECLARATIONS = `
 uniform vec4 bounds;
 uniform float clipRadius;
@@ -102,8 +127,6 @@ const MASK_SNIPPET_CODE = `
 
     cogl_color_out *= pointAlpha;
 
-    cogl_color_out *= opacity;
-
     if (borderWidth > 0.5) {
         float borderedAreaAlpha = getPointOpacity(p, borderedAreaBounds, borderedAreaClipRadius);
         float borderAlpha = clamp(abs(pointAlpha - borderedAreaAlpha), 0.0, 1.0);
@@ -118,12 +141,141 @@ const MASK_SNIPPET_CODE = `
                 cogl_color_out = mix(cogl_color_out, vec4(ringColor.rgb, 1.0), ringAlpha * ringColor.a);
         }
     }
+
+    // Opacity applies to the final output — content, border, and ring alike —
+    // so a hidden window (opacity 0) shows nothing, including its Flair.
+    cogl_color_out *= opacity;
 `;
 
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
+const CornerMaskEffect = GObject.registerClass({
+    GTypeName: 'PlaidCornerMaskEffect',
+}, class CornerMaskEffect extends Shell.GLSLEffect {
+    constructor() {
+        super();
+        this._radius = 0;
+        this._metaWin = null;
+        this._uniformLocations = {
+            bounds: this.get_uniform_location('bounds'),
+            clipRadius: this.get_uniform_location('clipRadius'),
+            pixelStep: this.get_uniform_location('pixelStep'),
+            borderColor1: this.get_uniform_location('borderColor1'),
+            borderColor2: this.get_uniform_location('borderColor2'),
+            borderWidth: this.get_uniform_location('borderWidth'),
+            gradientMode: this.get_uniform_location('gradientMode'),
+            theta: this.get_uniform_location('theta'),
+            borderedAreaBounds: this.get_uniform_location('borderedAreaBounds'),
+            borderedAreaClipRadius: this.get_uniform_location('borderedAreaClipRadius'),
+            ringColor: this.get_uniform_location('ringColor'),
+            ringWidth: this.get_uniform_location('ringWidth'),
+            ringAreaBounds: this.get_uniform_location('ringAreaBounds'),
+            ringAreaClipRadius: this.get_uniform_location('ringAreaClipRadius'),
+            opacity: this.get_uniform_location('opacity'),
+        };
+    }
+
+    vfunc_build_pipeline() {
+        try {
+            this.add_glsl_snippet(SNIPPET_HOOK_FRAGMENT, MASK_SNIPPET_DECLARATIONS, MASK_SNIPPET_CODE, false);
+        } catch (e) {
+            log(`[plaid] mask snippet failed: ${e.message}`);
+        }
+    }
+
+    vfunc_paint_target(node, paintContext) {
+        try {
+            const actor = this.get_actor();
+            if (actor && this._metaWin && this._metaWin.get_frame_rect) {
+                const buffer = this._metaWin.get_buffer_rect();
+                const frame = this._metaWin.get_frame_rect();
+                const offsetX = frame.x - buffer.x;
+                const offsetY = frame.y - buffer.y;
+                const bw = frame.width - buffer.width;
+                const bh = frame.height - buffer.height;
+                const w = Math.max(1, actor.width);
+                const h = Math.max(1, actor.height);
+                const loc = this._uniformLocations;
+                this.set_uniform_float(loc.bounds, 4, [
+                    offsetX + 1,
+                    offsetY + 1,
+                    offsetX + actor.width + bw,
+                    offsetY + actor.height + bh,
+                ]);
+                this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
+            }
+        } catch (e) {
+            log(`[plaid] mask paint sync failed: ${e.message}`);
+        }
+        super.vfunc_paint_target(node, paintContext);
+    }
+
+    updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor) {
+        this._radius = radius;
+        const loc = this._uniformLocations;
+        try {
+            const actor = this.get_actor();
+            const w = Math.max(1, actor ? actor.width : 1);
+            const h = Math.max(1, actor ? actor.height : 1);
+            const inset = Math.max(0, borderWidth);
+            const rw = Math.max(0, ringWidth || 0);
+            this.set_uniform_float(loc.bounds, 4, [x1, y1, x2, y2]);
+            this.set_uniform_float(loc.clipRadius, 1, [radius]);
+            this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
+            this.set_uniform_float(loc.borderedAreaBounds, 4, [x1 + inset, y1 + inset, x2 - inset, y2 - inset]);
+            this.set_uniform_float(loc.borderedAreaClipRadius, 1, [Math.max(0, radius - inset)]);
+            this.set_uniform_float(loc.borderWidth, 1, [borderWidth]);
+            this.set_uniform_float(loc.borderColor1, 4, color1);
+            this.set_uniform_float(loc.borderColor2, 4, color2);
+            this.set_uniform_float(loc.gradientMode, 1, [mode]);
+            this.set_uniform_float(loc.theta, 1, [theta]);
+            this.set_uniform_float(loc.opacity, 1, [opacity]);
+            this.set_uniform_float(loc.ringWidth, 1, [rw]);
+            this.set_uniform_float(loc.ringColor, 4, ringColor || [0, 0, 0, 0]);
+            this.set_uniform_float(loc.ringAreaBounds, 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
+            this.set_uniform_float(loc.ringAreaClipRadius, 1, [Math.max(0, radius - inset - rw)]);
+        } catch (e) {
+            log(`[plaid] mask uniforms failed: ${e.message}`);
+            return;
+        }
+        this.queue_repaint();
+    }
+
+    setTheta(theta) {
+        try {
+            this.set_uniform_float(this._uniformLocations.theta, 1, [theta]);
+        } catch (_e) {
+            return;
+        }
+        this.queue_repaint();
+    }
+
+    setBorderWidth(width) {
+        try {
+            this.set_uniform_float(this._uniformLocations.borderWidth, 1, [width]);
+        } catch (_e) {
+            return;
+        }
+        this.queue_repaint();
+    }
+
+    // The offscreen mask pipeline renders the actor at full opacity
+    // (Clutter's offscreen paint hardcodes 255), so actor.set_opacity(0) does
+    // not hide rounded-corner windows. The shader's own 'opacity' uniform is
+    // the effective visibility control — this drives it.
+    setOpacityUniform(v) {
+        try {
+            this.set_uniform_float(this._uniformLocations.opacity, 1, [v]);
+        } catch (_e) {
+            return;
+        }
+        this.queue_repaint();
+    }
+
+});
 
 export default class TilingWMExtension extends Extension {
     enable() {
+        _enabledThisShell = true;
         try {
             if (Meta.is_wayland_compositor && !Meta.is_wayland_compositor()) {
                 this._notifyCritical('Plaid', 'Plaid requires Wayland — the extension is disabled on X11.');
@@ -131,12 +283,27 @@ export default class TilingWMExtension extends Extension {
                 return;
             }
         } catch (_e) {}
+        // Track lock-screen cycles: the shell disables extensions on lock and
+        // re-enables them on unlock. The module-level flag lets disable()/
+        // enable() resume instead of teardown-and-restart. Belt-and-suspenders:
+        // the mode signal fires synchronously at the push, while disable()
+        // also checks Main.sessionMode.isLocked directly.
+        if (!_lockModeId && Main.sessionMode) {
+            try {
+                _lockModeId = Main.sessionMode.connect('updated', (sm) => {
+                    if (sm.currentMode === 'lock' || sm.currentMode === 'unlock-dialog')
+                        _lockCycle = true;
+                    this._debugLog(`session mode: ${sm.currentMode} lockCycle=${_lockCycle}`);
+                });
+            } catch (_e) {}
+        }
         this._destroyed = false;
         this._settings = this.getSettings();
         this._ensureBlurModule();
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._floatingTitlePatterns = this._compileTitlePatterns(this._floatingTitles);
+        this._floatProcessCache = new Map();
         this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
         if (this._minSizeOverrides.size > 0)
             log(`[plaid] min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
@@ -160,6 +327,12 @@ export default class TilingWMExtension extends Extension {
         this._bspTrees = new Map();
         this._lastFocusedPerWorkspace = new Map();
         this._savedRects = new Map();
+        this._workspaceLayoutsSaveId = 0;
+        // Persisted per-workspace layouts/ratios are slot rules parsed at
+        // enable and consulted at use time — timing-independent (no workspace
+        // objects exist yet at this point, which is fine: the rules key on
+        // indices, not objects).
+        this._loadPersistedLayoutRules();
         this._signals = [];
         this._pendingRetileIds = new Map();
         this._pendingBorderId = 0;
@@ -170,6 +343,7 @@ export default class TilingWMExtension extends Extension {
         this._landingGivenUp = new Set();
         this._pendingWarp = new Set();
         this._lastMonitorsGeom = null;
+        this._pinnedAdjustCounts = new Map();
         this._stackDiagnostics = new Set();
         this._toggleFloatWindows = new Set();
         this._keyboardFocusChange = false;
@@ -290,24 +464,113 @@ export default class TilingWMExtension extends Extension {
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
+            const resumeLockCycle = _lockCycle;
+            // Any re-enable within this shell (lock cycle OR manual toggle)
+            // must register pre-existing windows as a resume — running the
+            // new-window choreography on them force-shows other-workspace
+            // windows via the actor.visible reveal.
+            const resumeLike = _lockCycle || _enabledThisShell;
+            if (resumeLike && _stashedTiling)
+                this._restoreTilingState();
+            const bgCommand = this._settings.get_string('background-app');
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 for (const win of ws.list_windows()) {
                     if (this._shouldManage(win)) {
-                        this._addWindow(win);
-                        this._convertMaximizedToGaps(win);
+                        this._addWindow(win, resumeLike);
+                        // On a lock-cycle resume windows must stay exactly as
+                        // they are — never re-gap a maximized window either.
+                        if (!resumeLockCycle)
+                            this._convertMaximizedToGaps(win);
                     } else if (this._isFloating(win)) {
                         this._raiseFloatingWindows(ws);
                         this._restoreFloatNaturalRect(win);
-                        this._convertMaximizedToGaps(win);
+                        if (!resumeLockCycle)
+                            this._convertMaximizedToGaps(win);
                         this._connectFloatHooks(win);
+                    } else if (bgCommand && !this._backgroundAppWin &&
+                        this._isMarkerProcess(win, 'PLAID_BGAPP=1', bgCommand)) {
+                        // A surviving bg-app window (e.g. after a lock cycle)
+                        // is never managed — claim it back into the pipeline
+                        // (de-register, park, clone) instead of leaving it
+                        // orphaned or relaunching a duplicate.
+                        this._debugLog('background app: idle-pass re-claim of surviving window');
+                        this._adoptFoundWindow(win);
                     }
                 }
             }
-            this._retileAll();
+            // Unlock re-enables must not re-arrange windows: the shell tears
+            // the extension down on lock and starts a fresh instance on
+            // unlock, so a retile would rebuild the layout from defaults and
+            // move every tiled window. Resume instead — tracking maps were
+            // rebuilt by _addWindow above, so interactions work, but geometry
+            // stays exactly where the user left it.
+            // Persisted per-ws layouts/ratios are slot rules parsed at enable
+            // and consulted at use time by the getters — no load needed here.
+            if (!resumeLockCycle)
+                this._retileAll();
             this._checkDynamicWorkspaces();
+            _lockCycle = false;
             return false;
         });
+    }
+
+    _restoreTilingState() {
+        const s = _stashedTiling;
+        _stashedTiling = null;
+        if (!s) return;
+        try {
+            const alive = (win) => {
+                try {
+                    return !!(win && win.get_compositor_private());
+                } catch (_e) {
+                    return false;
+                }
+            };
+            // Prune windows that died while locked.
+            for (const [win] of s.windowWorkspaces) {
+                if (!alive(win)) {
+                    s.windowWorkspaces.delete(win);
+                    s.windowWSIndices.delete(win);
+                }
+            }
+            for (const [win] of s.windowWSIndices) {
+                if (!alive(win))
+                    s.windowWSIndices.delete(win);
+            }
+            for (const [ws, order] of s.workspaceOrders) {
+                if (!order) continue;
+                s.workspaceOrders.set(ws, order.filter(alive));
+            }
+            for (const [ws, tree] of s.bspTrees) {
+                if (!tree) continue;
+                let t = tree;
+                for (const w of this._bspCollectWindows(tree)) {
+                    if (!alive(w))
+                        t = this._bspRemove(t, w);
+                }
+                s.bspTrees.set(ws, t);
+            }
+            // Restore the exact pre-lock state.
+            this._bspTrees = s.bspTrees;
+            this._workspaceLayouts = s.workspaceLayouts;
+            this._masterRatios = s.masterRatios;
+            this._stackRatios = s.stackRatios;
+            this._workspaceOrders = s.workspaceOrders;
+            this._windowWorkspaces = s.windowWorkspaces;
+            this._windowWSIndices = s.windowWSIndices;
+            this._lastFocusedPerWorkspace = s.lastFocusedPerWorkspace;
+            if (s.lastRealFocusedWindow && alive(s.lastRealFocusedWindow))
+                this._lastRealFocusedWindow = s.lastRealFocusedWindow;
+            this._debugLog(`tiling state restored (windows=${this._windowWorkspaces.size} trees=${this._bspTrees.size})`);
+        } catch (e) {
+            log(`[plaid] tiling state restore failed: ${e.message}`);
+            // Fall back to a clean rebuild if anything went wrong.
+            this._bspTrees = new Map();
+            this._workspaceOrders = new Map();
+            this._windowWorkspaces = new Map();
+            this._windowWSIndices = new Map();
+        }
     }
 
     _currentTime() {
@@ -326,6 +589,42 @@ export default class TilingWMExtension extends Extension {
     }
 
     disable() {
+        // Lock-screen cycles: the shell switches to the lock mode and disables
+        // extensions not whitelisted for it, then re-enables them on unlock.
+        // isLocked is already true when this runs, so the module-level flag is
+        // set in time for the teardown below to keep the bg-app alive and for
+        // the upcoming re-enable to resume instead of relaunching.
+        const mode = Main.sessionMode ? Main.sessionMode.currentMode : '?';
+        const isLocked = !!(Main.sessionMode && Main.sessionMode.isLocked);
+        if (isLocked)
+            _lockCycle = true;
+        this._debugLog(`disable: mode=${mode} isLocked=${isLocked} lockCycle=${_lockCycle}`);
+        // Flush any pending per-ws layout/ratio persistence (insurance — the
+        // debounced save may not have fired before the teardown).
+        if (this._workspaceLayoutsSaveId) {
+            GLib.source_remove(this._workspaceLayoutsSaveId);
+            this._workspaceLayoutsSaveId = 0;
+        }
+        try { this._savePersistedLayouts(); } catch (_e) {}
+        // Stash the exact tiling state on any in-shell disable (lock cycle OR
+        // manual toggle) so the re-enable restores it instead of rebuilding
+        // trees from the stack order — which would shuffle windows on the
+        // retile. The module dies at a real logout, so stashing there is
+        // harmless; a fresh login starts with a fresh module (no stash).
+        if (!_stashedTiling) {
+            _stashedTiling = {
+                bspTrees: this._bspTrees,
+                workspaceLayouts: this._workspaceLayouts,
+                masterRatios: this._masterRatios,
+                stackRatios: this._stackRatios,
+                workspaceOrders: this._workspaceOrders,
+                windowWorkspaces: this._windowWorkspaces,
+                windowWSIndices: this._windowWSIndices,
+                lastFocusedPerWorkspace: this._lastFocusedPerWorkspace,
+                lastRealFocusedWindow: this._lastRealFocusedWindow,
+            };
+            this._debugLog(`disable: tiling state stashed (trees=${this._bspTrees ? this._bspTrees.size : 0})`);
+        }
         this._destroyed = true;
         if (this._pickFocusId) {
             try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
@@ -430,6 +729,7 @@ export default class TilingWMExtension extends Extension {
         this._floatingClasses = null;
         this._floatingTitles = null;
         this._floatingTitlePatterns = null;
+        this._floatProcessCache = null;
         this._minSizeOverrides = null;
         this._toggleFloatWindows = null;
         this._floatMaxRects = null;
@@ -471,6 +771,7 @@ export default class TilingWMExtension extends Extension {
         this._landingGivenUp = null;
         this._pendingWarp = null;
         this._lastMonitorsGeom = null;
+        this._pinnedAdjustCounts = null;
         this._stackDiagnostics = null;
         this._maximizeToggleRects = null;
     }
@@ -645,11 +946,12 @@ export default class TilingWMExtension extends Extension {
                 }
                 if (!valid) {
                     this._workspaceOrders.delete(workspace);
-                    this._masterRatios.delete(workspace);
-                    this._stackRatios.delete(workspace);
+                    this._masterRatios.delete(this._wsIndex(workspace));
+                    this._stackRatios.delete(this._wsIndex(workspace));
                     this._bspTrees.delete(workspace);
-                    this._workspaceLayouts.delete(workspace);
+                    this._workspaceLayouts.delete(this._wsIndex(workspace));
                     this._lastFocusedPerWorkspace.delete(workspace);
+                    this._scheduleSaveLayouts();
                 }
             }
         }));
@@ -692,6 +994,8 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(this._settings, this._settings.connect('changed::float-windows', () => {
             this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
+            if (this._floatProcessCache)
+                this._floatProcessCache.clear();
             this._reapplyFloatRules();
             this._retileAll();
         }));
@@ -717,13 +1021,14 @@ export default class TilingWMExtension extends Extension {
             this._currentDefaultLayout = this._settings.get_string('layout');
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
-                if (!this._workspaceLayouts.has(ws))
-                    this._workspaceLayouts.set(ws, oldDefault);
+                if (!this._workspaceLayouts.has(i))
+                    this._workspaceLayouts.set(i, oldDefault);
             }
             const activeWs = global.workspace_manager.get_active_workspace();
             if (activeWs)
-                this._workspaceLayouts.set(activeWs, this._currentDefaultLayout);
+                this._workspaceLayouts.set(this._wsIndex(activeWs), this._currentDefaultLayout);
             this._retileWorkspace(activeWs);
+            this._scheduleSaveLayouts();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::dwindle-ratio', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::master-ratio', () => this._retileAll()));
@@ -842,11 +1147,32 @@ export default class TilingWMExtension extends Extension {
         if (this._dropdownWin === win ||
             (this._dropdownWaiters && this._dropdownWaiters.has(win))) return false;
         if (this._backgroundAppWin === win) return false;
+        // The bg-app window must never be tiled — even mid-cycle when the new
+        // instance hasn't claimed it yet (its skip_taskbar state does not
+        // reliably survive a lock cycle). The PLAID_BGAPP env marker on the
+        // process identifies it precisely — never the class/token, so user
+        // windows of the same app (ghostty) are never excluded.
+        try {
+            if (this._isBgAppProcessWindow(win))
+                return false;
+        } catch (_e) {}
         const wms = win.get_wm_class_instance();
         const title = win.get_title();
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
         if (win.is_skip_taskbar()) return false;
         if (win.get_transient_for()) return false;
+        // The GNOME Extensions app (and its Plaid prefs window) is a settings
+        // dialog — keep it out of the tiler so opening prefs never re-arranges
+        // the workspace. The process cmdline match works at add time (before
+        // the wm-class/GTK app id resolve); the class/app-id checks and the
+        // late-identity backstop cover the remaining cases.
+        if (this._isExtensionsAppWindow(win))
+            return false;
+        // Float-listed apps whose wm-class hasn't resolved yet (flatpaks
+        // especially) must not be registered as tiled — the process cmdline
+        // is available immediately (cached per PID).
+        if (this._isFloatProcessWindow(win))
+            return false;
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
         if (this._floatingTitleMatches(title)) return false;
         if (this._isFixedSizeWindow(win)) return false;
@@ -899,12 +1225,49 @@ export default class TilingWMExtension extends Extension {
         if (wms && this._floatingClasses.has(wms.toLowerCase())) return true;
         const title = win.get_title();
         if (this._floatingTitleMatches(title)) return true;
+        // Process-based fallback: at window-created the wm-class may not be
+        // resolved yet (flatpak apps especially), so a float-listed app would
+        // be registered as tiled and churn the retile pipeline at launch.
+        // The process cmdline is available immediately — and the verdict is
+        // cached per PID (process-lifetime stable).
+        if (this._isFloatProcessWindow(win)) return true;
         if (win.is_fullscreen()) return true;
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return true;
         if (win.is_skip_taskbar()) return true;
         if (win.get_transient_for()) return true;
         if (this._isFixedSizeWindow(win)) return true;
         return false;
+    }
+
+    _isFloatProcessWindow(win) {
+        if (!win) return false;
+        let pid = 0;
+        try { pid = win.get_pid(); } catch (_e) {}
+        if (pid <= 0) return false;
+        if (this._floatProcessCache) {
+            const cached = this._floatProcessCache.get(pid);
+            if (cached !== undefined) return cached;
+        }
+        let verdict = false;
+        try {
+            const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
+            if (data) {
+                const cmd = new TextDecoder().decode(data).replace(/\0/g, ' ').toLowerCase();
+                for (const token of this._floatingClasses) {
+                    if (!token || token.length < 3) continue;
+                    if (cmd.includes(token)) {
+                        verdict = true;
+                        break;
+                    }
+                }
+            }
+        } catch (_e) {}
+        if (this._floatProcessCache) {
+            if (this._floatProcessCache.size >= 256)
+                this._floatProcessCache.clear();
+            this._floatProcessCache.set(pid, verdict);
+        }
+        return verdict;
     }
 
     _isFixedSizeWindow(win) {
@@ -922,24 +1285,158 @@ export default class TilingWMExtension extends Extension {
     }
 
     _getWorkspaceLayout(workspace) {
-        return this._workspaceLayouts.get(workspace) || this._settings.get_string('layout');
+        // Live overrides, remembered slot rules, and the default all live in
+        // the SAME index space — the lookup is deterministic per workspace
+        // index, so a recreated workspace (dynamic-workspace churn) resolves
+        // identically every time. Object-keyed live entries caused layout
+        // flip-flops when workspaces were removed and recreated.
+        const idx = this._wsIndex(workspace);
+        const live = this._workspaceLayouts.get(idx);
+        if (live) return live;
+        if (this._persistedLayoutByIndex && this._persistedLayoutByIndex.size > 0) {
+            const rule = this._persistedLayoutByIndex.get(idx);
+            if (rule) return rule;
+        }
+        return this._settings.get_string('layout');
+    }
+
+    // --- Per-workspace layout/ratio persistence (across logins) ---
+
+    _scheduleSaveLayouts() {
+        if (this._workspaceLayoutsSaveId) return;
+        this._workspaceLayoutsSaveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            this._workspaceLayoutsSaveId = 0;
+            if (this._destroyed || !this._settings) return GLib.SOURCE_REMOVE;
+            this._savePersistedLayouts();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _savePersistedLayouts() {
+        try {
+            const layouts = [];
+            const masterRatios = [];
+            const stackRatios = [];
+            const n = global.workspace_manager.get_n_workspaces();
+            for (let i = 1; i < n; i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!ws) continue;
+                // "The layout last used is the persistent one" — store the
+                // effective layout of every real workspace (the parking ws at
+                // index 0 is never stored).
+                layouts.push(`${i}:${this._getWorkspaceLayout(ws)}`);
+                const mr = this._masterRatios.get(i);
+                if (mr !== undefined)
+                    masterRatios.push(`${i}:${mr}`);
+                const sr = this._stackRatios.get(i);
+                if (sr && sr.size > 0) {
+                    const idx = [];
+                    for (const [k, v] of sr)
+                        idx.push(`${k}:${v}`);
+                    stackRatios.push(`${i}:${idx.join(',')}`);
+                }
+            }
+            this._settings.set_strv('workspace-layouts', layouts);
+            this._settings.set_strv('workspace-master-ratios', masterRatios);
+            this._settings.set_strv('workspace-stack-ratios', stackRatios);
+            this._debugLog(`persisted layouts: ${layouts.length} ws, ${masterRatios.length} master, ${stackRatios.length} stack`);
+        } catch (e) {
+            log(`[plaid] persist layouts failed: ${e.message}`);
+        }
+    }
+
+    _loadPersistedLayoutRules() {
+        // Persisted layouts/ratios are RULES keyed by workspace slot (index):
+        // "whatever workspace occupies slot N uses layout Y". Rules are parsed
+        // once at enable and consulted by the getters at use time — no binding
+        // to workspace objects (which churn during login restores) and no
+        // load timing to get wrong. Rules for slots beyond the current
+        // workspace count persist and apply when those slots spawn.
+        this._persistedLayoutByIndex = new Map();
+        this._persistedMasterByIndex = new Map();
+        this._persistedStackByIndex = new Map();
+        try {
+            const layouts = this._settings.get_strv('workspace-layouts') || [];
+            for (const entry of layouts) {
+                const [idxStr, layout] = entry.split(':');
+                const idx = parseInt(idxStr, 10);
+                if (idx <= 0 || !Number.isInteger(idx)) continue;
+                if (!['dwindle', 'master-stack', 'centered-master-stack', 'floating'].includes(layout)) continue;
+                this._persistedLayoutByIndex.set(idx, layout);
+            }
+            const masterEntries = this._settings.get_strv('workspace-master-ratios') || [];
+            for (const entry of masterEntries) {
+                const [idxStr, ratioStr] = entry.split(':');
+                const idx = parseInt(idxStr, 10);
+                const ratio = parseFloat(ratioStr);
+                if (idx <= 0 || !Number.isInteger(idx) || !Number.isFinite(ratio)) continue;
+                if (ratio < 0.05 || ratio > 0.95) continue;
+                this._persistedMasterByIndex.set(idx, ratio);
+            }
+            const stackEntries = this._settings.get_strv('workspace-stack-ratios') || [];
+            for (const entry of stackEntries) {
+                const [idxStr, weightsStr] = entry.split(':');
+                const idx = parseInt(idxStr, 10);
+                if (idx <= 0 || !Number.isInteger(idx)) continue;
+                const map = new Map();
+                for (const part of (weightsStr || '').split(',')) {
+                    const [kStr, vStr] = part.split(':');
+                    const k = parseInt(kStr, 10);
+                    const v = parseFloat(vStr);
+                    if (k >= 0 && Number.isFinite(v) && v > 0)
+                        map.set(k, v);
+                }
+                if (map.size > 0)
+                    this._persistedStackByIndex.set(idx, map);
+            }
+            this._debugLog(`persisted rules: ${this._persistedLayoutByIndex.size} layouts, ${this._persistedMasterByIndex.size} master, ${this._persistedStackByIndex.size} stack`);
+        } catch (e) {
+            log(`[plaid] load persisted layout rules failed: ${e.message}`);
+        }
     }
 
     _markPendingWindowInvisible(win, actor) {
-        if (this._destroyed || !win || !actor) return;
-        if (!this._settings || !this._settings.get_boolean('enabled')) return;
+        if (this._destroyed || !win || !actor) {
+            this._debugLog(`hide skip: ${this._destroyed ? 'destroyed' : 'null actor'} class=${win ? (win.get_wm_class_instance() || '?') : '?'}`);
+            return;
+        }
+        if (!this._settings || !this._settings.get_boolean('enabled')) {
+            this._debugLog('hide skip: disabled');
+            return;
+        }
         if (this._isFloating(win)) {
             if (this._settings.get_boolean('follow-focus') &&
                 win.get_window_type() === Meta.WindowType.NORMAL)
                 this._cursorWarpDeferred(win);
+            this._debugLog('hide skip: floating');
             return;
         }
-        if (this._getAnimationTime() <= 0) return;
-        if (!this._pendingWarp || !this._newWindowSet) return;
-        if (!this._newWindowSet.has(win)) return;
+        if (this._getAnimationTime() <= 0) {
+            this._debugLog('hide skip: anim-time 0');
+            return;
+        }
+        if (!this._pendingWarp || !this._newWindowSet) {
+            this._debugLog('hide skip: maps null');
+            return;
+        }
+        if (!this._newWindowSet.has(win)) {
+            this._debugLog('hide skip: not in newWindowSet');
+            return;
+        }
         try {
+            // An invisible actor is never painted — even by the offscreen mask
+            // pipeline — so this hide cannot be bypassed by any effect. The
+            // actor opacity + mask uniform stay as belt-and-suspenders for the
+            // non-mask and partial-cover paths.
+            actor.visible = false;
             actor.set_opacity(0);
             this._pendingWarp.add(win);
+            try {
+                const effect = this._windowMasks && this._windowMasks.get(win);
+                if (effect && effect.setOpacityUniform)
+                    effect.setOpacityUniform(0);
+            } catch (_e) {}
+            this._debugLog(`hide applied: ${win.get_wm_class_instance() || '?'}`);
         } catch (_e) {}
         if (!win._plaidInvisibleTimer) {
             win._plaidInvisibleTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
@@ -948,19 +1445,33 @@ export default class TilingWMExtension extends Extension {
                 if (this._pendingWarp) this._pendingWarp.delete(win);
                 try {
                     const a = win.get_compositor_private();
-                    if (a) a.set_opacity(255);
+                    if (a) {
+                        a.visible = true;
+                        a.set_opacity(255);
+                    }
+                } catch (_e) {}
+                try {
+                    const effect = this._windowMasks && this._windowMasks.get(win);
+                    if (effect && effect.setOpacityUniform)
+                        effect.setOpacityUniform(1);
                 } catch (_e) {}
                 return GLib.SOURCE_REMOVE;
             });
         }
     }
 
-    _addWindow(win) {
+    _addWindow(win, resume = false) {
         if (!this._settings) return;
         if (this._windowWorkspaces.has(win)) return;
         this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
-        this._newWindowSet.add(win);
-        try { this._markPendingWindowInvisible(win, win.get_compositor_private()); } catch (_e) {}
+        // Lock-cycle resumes register windows that are already on screen and
+        // tiled — the new-window fade-in (opacity 0 → landing audit → fade
+        // back) would make every window vanish and reappear at unlock and
+        // break focus. Only real new windows go through it.
+        if (!resume) {
+            this._newWindowSet.add(win);
+            try { this._markPendingWindowInvisible(win, win.get_compositor_private()); } catch (_e) {}
+        }
         const ws = win.get_workspace();
         this._windowWorkspaces.set(win, ws);
         this._windowWSIndices.set(win, this._wsIndex(ws));
@@ -976,6 +1487,39 @@ export default class TilingWMExtension extends Extension {
                 if (layout === 'dwindle')
                     this._bspInsertForWorkspace(ws, win);
             }
+        }
+        if (!resume) {
+            // The new window must be invisible AND at its slot before the
+            // compositor paints its first frame — otherwise it flashes at
+            // GNOME's center spawn point. Two synchronous guarantees:
+            // 1) attach the mask now (the borders update can lag behind the
+            //    retile pipeline) and drive its opacity uniform to 0 — the
+            //    actor opacity is ignored by the offscreen mask, but the
+            //    uniform is the shader's real visibility control.
+            // 2) place the window at its slot now that it is registered in
+            //    the order (the retile later finds it already landed).
+            try {
+                const actorNow = win.get_compositor_private();
+                if (actorNow && this._settings.get_boolean('rounded-corners') &&
+                    this._settings.get_int('border-radius') > 0) {
+                    this._ensureWindowMask(win, actorNow,
+                        this._settings.get_int('border-radius') + 1);
+                    const effect = this._windowMasks && this._windowMasks.get(win);
+                    if (effect && effect.setOpacityUniform)
+                        effect.setOpacityUniform(0);
+                }
+            } catch (_e) {}
+            try {
+                const wsNow = win.get_workspace();
+                if (wsNow && !this._isFloating(win)) {
+                    const slot = this._windowSlotRect(win, wsNow,
+                        this._getWorkspaceLayout(wsNow),
+                        wsNow.get_work_area_for_monitor(global.display.get_primary_monitor()),
+                        this._settings.get_int('gap'));
+                    if (slot && win.get_compositor_private())
+                        win.move_resize_frame(true, slot.x, slot.y, slot.w, slot.h);
+                }
+            } catch (_e) {}
         }
     }
 
@@ -1225,6 +1769,10 @@ export default class TilingWMExtension extends Extension {
         this._raiseFloatingWindows(workspace);
         for (const win of tiledWindows)
             this._newWindowSet.delete(win);
+        // Retiles are the common denominator for layout/ratio mutations —
+        // persist (debounced) so the last-used per-ws layout and ratios
+        // survive logins.
+        this._scheduleSaveLayouts();
     }
 
     // --- Animation ---
@@ -1245,6 +1793,7 @@ export default class TilingWMExtension extends Extension {
                 try {
                     const a = win.get_compositor_private();
                     if (a) {
+                        a.visible = true;
                         a.set_opacity(255);
                         a.remove_all_transitions();
                     }
@@ -1266,6 +1815,18 @@ export default class TilingWMExtension extends Extension {
         const fadeDuration = Math.min(duration, 80);
         const fadeIn = () => {
             if (this._destroyed) return;
+            try {
+                const f = s.win.get_frame_rect();
+                this._debugLog(`place: fading frame=(${Math.round(f.x)},${Math.round(f.y)},${Math.round(f.width)},${Math.round(f.height)}) ` +
+                    `target=(${Math.round(s.targetX)},${Math.round(s.targetY)},${Math.round(s.targetW)},${Math.round(s.targetH)})`);
+            } catch (_e) {}
+            try {
+                const actor = s.win.get_compositor_private();
+                if (actor) {
+                    actor.visible = true;
+                    actor.set_opacity(255);
+                }
+            } catch (_e) {}
             this._scheduleBorders();
             let faded = false;
             const finishFade = () => {
@@ -1285,6 +1846,7 @@ export default class TilingWMExtension extends Extension {
             } catch (_e) {}
             finishFade();
         };
+        let tries = 0;
         const attempt = () => {
             if (this._destroyed) return;
             try {
@@ -1294,11 +1856,35 @@ export default class TilingWMExtension extends Extension {
                 }
                 s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
             } catch (_e) {}
+            try {
+                const f = s.win.get_frame_rect();
+                this._debugLog(`place: moved frame=(${Math.round(f.x)},${Math.round(f.y)},${Math.round(f.width)},${Math.round(f.height)}) ` +
+                    `target=(${Math.round(s.targetX)},${Math.round(s.targetY)},${Math.round(s.targetW)},${Math.round(s.targetH)})`);
+            } catch (_e) {}
             if (this._verifyAnimationLanding(s, 'new', true)) {
+                this._debugLog(`place: attempt ${tries} verified — fading at target`);
                 fadeIn();
             } else if (this._landingGivenUp && this._landingGivenUp.has(s.win)) {
+                this._debugLog('place: given-up set — fading');
                 fadeIn();
             } else {
+                // Bounded: the pure landing verify never populates the
+                // given-up set, so an endless retry here would wedge the whole
+                // animation pipeline (_animating stays true, later retiles
+                // queue forever, new windows sit hidden until the reveal
+                // timer pops them at the center). Give up after ~1.5s and
+                // finish at the target regardless.
+                tries++;
+                this._debugLog(`place: attempt ${tries} mismatch`);
+                if (tries > 15) {
+                    this._debugLog('anim: new-window placement gave up after retries — finishing at target');
+                    try {
+                        if (s.win && s.win.get_compositor_private())
+                            s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
+                    } catch (_e) {}
+                    fadeIn();
+                    return;
+                }
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, attempt);
             }
         };
@@ -1335,6 +1921,23 @@ export default class TilingWMExtension extends Extension {
     }
 
     _adjustPinnedTree(win, ws) {
+        // Convergence guard: when min-size constraints can't fit the
+        // partition, re-splitting just flips the layout back and forth
+        // (steam 1364x810 + friends 306x540 + several windows). Bound the
+        // adjustments per workspace so the layout settles on a stable
+        // partition instead of oscillating forever.
+        const idx = this._wsIndex(ws);
+        const now = Date.now();
+        let rec = this._pinnedAdjustCounts.get(idx);
+        if (!rec || now - rec.since > 2000) {
+            rec = { count: 0, since: now };
+            this._pinnedAdjustCounts.set(idx, rec);
+        }
+        rec.count++;
+        if (rec.count > 4) {
+            this._debugLog(`pinned adjust: ws=${idx} gave up after ${rec.count} adjustments`);
+            return;
+        }
         try {
             if (!win || !ws) return;
             const layout = this._getWorkspaceLayout(ws);
@@ -1359,7 +1962,7 @@ export default class TilingWMExtension extends Extension {
                     const basis = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
                     if (basis > 0) {
                         const ratio = this._getMasterRatio(ws);
-                        this._masterRatios.set(ws, Math.min(0.95, Math.max(ratio, f.width / basis)));
+                        this._masterRatios.set(this._wsIndex(ws), Math.min(0.95, Math.max(ratio, f.width / basis)));
                     }
                 } else {
                     const idx = tiled.indexOf(win) - 1;
@@ -1383,6 +1986,7 @@ export default class TilingWMExtension extends Extension {
                 return;
             }
             log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
+            this._scheduleSaveLayouts();
         } catch (_e) {}
     }
 
@@ -1544,6 +2148,7 @@ export default class TilingWMExtension extends Extension {
             this._retileMasterStack(workspace, tiledWindows);
 
         if (this._animTargets.size === 0) {
+            this._debugLog('anim: no targets (bail)');
             this._animTargets = null;
             for (const win of tiledWindows) this._newWindowSet.delete(win);
             this._scheduleBorders();
@@ -1561,6 +2166,7 @@ export default class TilingWMExtension extends Extension {
             const frame = win.get_frame_rect();
             const actor = win.get_compositor_private();
             const isNew = this._newWindowSet.has(win);
+            this._debugLog(`anim: start ws=${this._wsIndex(workspace)} win=${win.get_wm_class_instance() || '?'} new=${isNew} target=(${Math.round(target.x)},${Math.round(target.y)},${Math.round(target.w)},${Math.round(target.h)})`);
             states.push({ win, actor, isNew, startX: frame.x, startY: frame.y, startW: frame.width, startH: frame.height, targetX: target.x, targetY: target.y, targetW: target.w, targetH: target.h });
         }
         this._animTargets = null;
@@ -1573,8 +2179,10 @@ export default class TilingWMExtension extends Extension {
             remaining--;
             if (remaining <= 0) {
                 this._animating = false;
+                this._debugLog(`anim: done ws=${this._wsIndex(workspace)} queued=${this._queuedAnimWorkspaces.size}`);
                 for (const w of tiledWindows) this._newWindowSet.delete(w);
                 this._animStates = null;
+                this._scheduleSaveLayouts();
                 this._scheduleBorders();
                 this._raiseFloatingWindows(workspace);
                 if (this._queuedAnimWorkspaces.size > 0) {
@@ -1593,7 +2201,9 @@ export default class TilingWMExtension extends Extension {
             if (s.actor) {
                 s.actor.remove_all_transitions();
                 s.actor.set_opacity(0);
-                s.actor.show();
+                // No show() here — a new window hidden via actor.visible=false
+                // must stay invisible until the placement reveals it at its
+                // slot.
             }
         }
 
@@ -1682,15 +2292,32 @@ export default class TilingWMExtension extends Extension {
     // --- Master-Stack Helpers ---
 
     _getMasterRatio(ws) {
-        if (!this._masterRatios.has(ws))
-            this._masterRatios.set(ws, 0.5);
-        return this._masterRatios.get(ws);
+        const idx = this._wsIndex(ws);
+        if (!this._masterRatios.has(idx)) {
+            let ratio = 0.5;
+            if (this._persistedMasterByIndex) {
+                const rule = this._persistedMasterByIndex.get(idx);
+                if (rule !== undefined) ratio = rule;
+            }
+            this._masterRatios.set(idx, ratio);
+        }
+        return this._masterRatios.get(idx);
     }
 
     _getStackRatios(ws) {
-        if (!this._stackRatios.has(ws))
-            this._stackRatios.set(ws, new Map());
-        return this._stackRatios.get(ws);
+        const idx = this._wsIndex(ws);
+        if (!this._stackRatios.has(idx)) {
+            const map = new Map();
+            if (this._persistedStackByIndex) {
+                const rule = this._persistedStackByIndex.get(idx);
+                if (rule) {
+                    for (const [k, v] of rule)
+                        map.set(k, v);
+                }
+            }
+            this._stackRatios.set(idx, map);
+        }
+        return this._stackRatios.get(idx);
     }
 
     _clampMasterStackRatios(ws, tiledWindows, areaW, gap, centered) {
@@ -1726,7 +2353,8 @@ export default class TilingWMExtension extends Extension {
         } else {
             clamped = Math.max(lo, Math.min(hi, ratio));
         }
-        this._masterRatios.set(ws, clamped);
+        this._masterRatios.set(this._wsIndex(ws), clamped);
+        this._scheduleSaveLayouts();
     }
 
     _retileMasterStack(workspace, tiledWindows, skipWindow = null) {
@@ -1858,7 +2486,7 @@ export default class TilingWMExtension extends Extension {
                 masterX = frame.x;
                 masterW = frame.width;
                 const effectiveRatio = masterW / (areaW - gap * 2);
-                this._masterRatios.set(workspace, Math.max(0.15, Math.min(0.85, effectiveRatio)));
+                this._masterRatios.set(this._wsIndex(workspace), Math.max(0.15, Math.min(0.85, effectiveRatio)));
             } else {
                 const masterRatio = this._getMasterRatio(workspace);
                 masterW = Math.floor((areaW - gap * 2) * masterRatio);
@@ -2005,7 +2633,7 @@ export default class TilingWMExtension extends Extension {
             const maxMaster = masterDenom - numStack * 100;
             if (maxMaster >= minMaster) {
                 const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-                this._masterRatios.set(workspace, clamped / masterDenom);
+                this._masterRatios.set(this._wsIndex(workspace), clamped / masterDenom);
             }
         } else {
             const idx = tiledWindows.indexOf(focused);
@@ -2015,6 +2643,7 @@ export default class TilingWMExtension extends Extension {
             const currentWeight = stackRatios.has(stackIdx) ? stackRatios.get(stackIdx) : 1.0;
             const newWeight = Math.max(0.1, currentWeight + delta * 0.005);
             stackRatios.set(stackIdx, newWeight);
+            this._scheduleSaveLayouts();
         }
     }
 
@@ -2659,6 +3288,24 @@ export default class TilingWMExtension extends Extension {
 
     _onWindowIdentityChanged(win) {
         if (this._destroyed || !win) return;
+        // Backstop for the Extensions app / prefs window: its wm-class and GTK
+        // app id can resolve AFTER the window was already added to the tiler.
+        // If it identifies as the Extensions app now, un-tile it and restore
+        // the layout so opening prefs never leaves the workspace rearranged.
+        try {
+            const wms = (win.get_wm_class_instance() || '').toLowerCase();
+            const appId = (win.get_gtk_application_id && win.get_gtk_application_id() || '').toLowerCase();
+            if (wms === 'org.gnome.shell.extensions' || wms === 'org.gnome.extensions' ||
+                appId === 'org.gnome.shell.extensions' || appId === 'org.gnome.extensions') {
+                if (this._windowWorkspaces.has(win)) {
+                    this._debugLog('extensions app: un-tiling settings window (late identity)');
+                    const ws = win.get_workspace();
+                    this._removeWindow(win);
+                    if (ws) this._retileWorkspace(ws);
+                }
+                return;
+            }
+        } catch (_e) {}
         if (!this._isFloating(win)) return;
         const ws = win.get_workspace();
         if (ws) {
@@ -2670,6 +3317,21 @@ export default class TilingWMExtension extends Extension {
             this._raiseFloatingWindows(ws);
         }
         this._restoreFloatNaturalRect(win);
+        // Reveal: the window can be pending-hidden from the tiled
+        // choreography (actor.visible=false + mask uniform 0) when its
+        // identity resolved late to floating — nothing else reveals it, so
+        // it would sit invisible until the 2.5s safety timer. Reveal now.
+        try {
+            if (this._pendingWarp) this._pendingWarp.delete(win);
+            const a = win.get_compositor_private();
+            if (a) {
+                a.visible = true;
+                a.set_opacity(255);
+            }
+            const effect = this._windowMasks && this._windowMasks.get(win);
+            if (effect && effect.setOpacityUniform)
+                effect.setOpacityUniform(1);
+        } catch (_e) {}
     }
 
     _restoreFloatNaturalRect(win) {
@@ -3431,9 +4093,14 @@ export default class TilingWMExtension extends Extension {
         }
 
         const blurEnabled = this._settings.get_boolean('window-blur');
-        const opacity = blurEnabled
+        let opacity = blurEnabled
             ? this._settings.get_int('window-blur-opacity') / 100
             : 1;
+        // A window hidden for its spawn choreography (actor opacity is ignored
+        // by the offscreen mask) must stay invisible through the shader
+        // uniform until it lands at its slot.
+        if (this._pendingWarp && this._pendingWarp.has(win))
+            opacity = 0;
 
         const scratchWin = !!(this._scratchpadWindows && this._scratchpadWindows.has(win));
         let ringWidth = 0;
@@ -4225,9 +4892,10 @@ export default class TilingWMExtension extends Extension {
         const idx = layouts.indexOf(current);
         const next = layouts[(idx + 1) % layouts.length];
         if (next !== current) {
-            this._workspaceLayouts.set(ws, next);
+            this._workspaceLayouts.set(this._wsIndex(ws), next);
             this._retileWorkspace(ws);
             this._showPopup(`Layout: ${LAYOUT_NAMES[next] || next}`);
+            this._scheduleSaveLayouts();
         }
     }
 
@@ -5517,8 +6185,12 @@ export default class TilingWMExtension extends Extension {
     }
 
     _showBackgroundAppInitOverlay() {
-        // The Plaid login moment — always shown at enable (a brand moment,
-        // minimum 3s), extended while the bg-app pipeline processes.
+        // The Plaid login moment — shown once per shell session (real logins
+        // only). GNOME Shell re-enables extensions after every unlock; the
+        // module-level flag survives that cycle so the splash stays a login
+        // brand moment instead of appearing on every screen-lock unlock.
+        if (_splashShownThisShell) return;
+        _splashShownThisShell = true;
         if (this._backgroundAppInitOverlay) return;
         this._backgroundAppInitOverlayAwaiting =
             this._settings && this._settings.get_boolean('background-app-enabled') &&
@@ -5641,6 +6313,25 @@ export default class TilingWMExtension extends Extension {
         if (!this._settings.get_boolean('background-app-enabled')) return;
         const command = this._settings.get_string('background-app');
         if (!command) return;
+        // GNOME Shell re-enables extensions after every screen unlock. The
+        // bg-app process survives the lock, so adopt the existing window
+        // instead of spawning a duplicate (matches by the PLAID_BGAPP env
+        // marker / command token). A genuinely dead process leaves no window
+        // and respawns normally.
+        this._debugLog(`launch check: lockCycle=${_lockCycle} command=${command}`);
+        if (_lockCycle && this._adoptBackgroundAppWindow()) {
+            this._debugLog('launch check: adopt pending or done');
+            return;
+        }
+        this._debugLog('launch check: no surviving window to adopt');
+        if (this._hasBackgroundAppWindow()) {
+            this._debugLog('background app: existing window found — adopting, skipping relaunch');
+            return;
+        }
+        this._spawnBackgroundAppProcess(command);
+    }
+
+    _spawnBackgroundAppProcess(command) {
         if (!this._isDynamicWorkspaces()) {
             this._debugLog('background app: dynamic workspaces required');
             this._showPopup('Background App',
@@ -5692,19 +6383,187 @@ export default class TilingWMExtension extends Extension {
             this._settings.get_string('background-app') || '');
     }
 
+    _hasBackgroundAppWindow() {
+        try {
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!ws) continue;
+                for (const win of ws.list_windows()) {
+                    if (win && win.is_client_window() && this._matchesBackgroundApp(win))
+                        return true;
+                }
+            }
+        } catch (_e) {}
+        return false;
+    }
+
+    _adoptBackgroundAppWindow() {
+        let win = this._findBackgroundAppWindow();
+        if (win)
+            return this._adoptFoundWindow(win);
+        // The surviving window's identity (pid/class) can take a moment to
+        // settle after the unlock re-map — retry a few times before giving up
+        // so we adopt instead of spawning a duplicate. The retry is
+        // claim-aware: if any path (e.g. the enable idle pass) claims the
+        // window meanwhile, cancel — never spawn a second instance on top of
+        // a window that is already back in the pipeline.
+        let attempt = 0;
+        const command = this._settings.get_string('background-app');
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (this._backgroundAppWin) {
+                this._debugLog('adopt: window already claimed elsewhere — cancelling retry');
+                return GLib.SOURCE_REMOVE;
+            }
+            attempt++;
+            this._debugLog(`adopt: retry ${attempt}`);
+            const w = this._findBackgroundAppWindow();
+            if (w) {
+                if (this._adoptFoundWindow(w))
+                    log('[plaid] background app: resumed surviving window (lock cycle, retry)');
+                else
+                    this._debugLog('adopt: retry found window but adoption failed');
+                return GLib.SOURCE_REMOVE;
+            }
+            if (attempt >= 4) {
+                if (this._backgroundAppWin || this._hasBackgroundAppWindow()) {
+                    this._debugLog('adopt: surviving window present — skipping fresh spawn');
+                    return GLib.SOURCE_REMOVE;
+                }
+                this._debugLog('adopt: no surviving window after retries — spawning fresh');
+                this._spawnBackgroundAppProcess(command);
+                return GLib.SOURCE_REMOVE;
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+        return true;
+    }
+
+    _findBackgroundAppWindow() {
+        // Pass 1: pid-based environ marker — the most reliable early signal
+        // (independent of wm-class/GTK app id resolution timing).
+        try {
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!ws) continue;
+                for (const w of ws.list_windows()) {
+                    if (!w || !w.is_client_window()) continue;
+                    let pid = 0;
+                    try { pid = w.get_pid(); } catch (_e) {}
+                    if (pid > 0 && this._procEnvironHasMarker(pid, 'PLAID_BGAPP=1'))
+                        return w;
+                }
+            }
+        } catch (_e) {}
+        // Pass 2: full match (marker + pid set + command token fallback).
+        try {
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!ws) continue;
+                for (const w of ws.list_windows()) {
+                    if (w && w.is_client_window() && this._matchesBackgroundApp(w))
+                        return w;
+                }
+            }
+        } catch (_e) {}
+        try {
+            const seen = [];
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!ws) continue;
+                for (const w of ws.list_windows()) {
+                    if (!w) continue;
+                    let pid = 0;
+                    try { pid = w.get_pid(); } catch (_e) {}
+                    seen.push(`${w.get_wm_class_instance() || '?'}/${w.get_title ? w.get_title() || '' : ''}:pid${pid}`);
+                }
+            }
+            this._debugLog(`adopt: scan miss — windows: ${seen.join(', ') || 'none'}`);
+        } catch (_e) {}
+        return null;
+    }
+
+    _adoptFoundWindow(win) {
+        try {
+            if (this._windowWorkspaces.has(win)) {
+                this._debugLog('background app: de-registering window from tiler');
+                this._removeWindow(win);
+            }
+            this._removeMask(win);
+            this._removeBlur(win);
+            this._removeBorder(win);
+            this._backgroundAppWin = win;
+            this._backgroundAppUnmanagedId = win.connect('unmanaged', () => {
+                log(`[plaid] background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
+                if (this._backgroundAppWin === win)
+                    this._backgroundAppWin = null;
+            });
+            this._configureBackgroundApp(win);
+        } catch (e) {
+            log(`[plaid] background app: adopt failed: ${e.message}`);
+            return false;
+        }
+        this._debugLog(`adopt: found ${win.get_wm_class_instance() || '?'}`);
+        log('[plaid] background app: resumed surviving window (lock cycle)');
+        return true;
+    }
+
     _isMarkerProcess(win, marker, command) {
         if (!win) return false;
         let pid = 0;
         try { pid = win.get_pid(); } catch (_e) {}
         if (pid > 0 && this._procEnvironHasMarker(pid, marker)) return true;
         if (pid > 0 && this._markerPidSetHas(marker, pid)) return true;
-        return this._commandTokenMatches(win, command);
+        // No command-token fallback here: a token like 'ghostty' matches every
+        // ghostty window, not just the bg-app. The env marker is the reliable
+        // identity — the bg-app is always spawned with it.
+        return false;
+    }
+
+    _isBgAppProcessWindow(win) {
+        // Strict bg-app identity: the process env carries PLAID_BGAPP=1.
+        // No class/token matching — user windows of the same app (ghostty)
+        // must never be mistaken for the bg-app.
+        if (!win) return false;
+        let pid = 0;
+        try { pid = win.get_pid(); } catch (_e) {}
+        if (pid > 0 && this._procEnvironHasMarker(pid, 'PLAID_BGAPP=1')) return true;
+        return false;
+    }
+
+    _isExtensionsAppWindow(win) {
+        if (!win) return false;
+        let pid = 0;
+        try { pid = win.get_pid(); } catch (_e) {}
+        if (pid > 0) {
+            try {
+                const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
+                if (data) {
+                    const cmd = new TextDecoder().decode(data).replace(/\0/g, ' ');
+                    if (cmd.includes('org.gnome.Shell.Extensions') ||
+                        cmd.includes('org.gnome.Extensions') ||
+                        cmd.includes('gnome-extensions-app'))
+                        return true;
+                }
+            } catch (_e) {}
+        }
+        const wms = (win.get_wm_class_instance() || '').toLowerCase();
+        if (wms === 'org.gnome.shell.extensions' || wms === 'org.gnome.extensions')
+            return true;
+        const appId = (win.get_gtk_application_id && win.get_gtk_application_id() || '').toLowerCase();
+        if (appId === 'org.gnome.shell.extensions' || appId === 'org.gnome.extensions')
+            return true;
+        return false;
     }
 
     _procEnvironHasMarker(pid, marker) {
         try {
-            const [, data] = GLib.file_get_contents(`/proc/${pid}/environ`);
-            if (!data) return false;
+            // GLib.file_get_contents stats the file first — /proc files report
+            // size 0, so it returns empty. Gio.File.load_contents reads to EOF
+            // and works on /proc/<pid>/environ.
+            const f = Gio.File.new_for_path(`/proc/${pid}/environ`);
+            const [success, data] = f.load_contents(null);
+            if (!success || !data) return false;
             return new TextDecoder().decode(data).split('\0').includes(marker);
         } catch (_e) {
             return false;
@@ -5816,6 +6675,7 @@ export default class TilingWMExtension extends Extension {
         this._removeBorder(win);
         this._backgroundAppWin = win;
         this._backgroundAppUnmanagedId = win.connect('unmanaged', () => {
+            log(`[plaid] background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
             if (this._backgroundAppWin === win)
                 this._backgroundAppWin = null;
         });
@@ -6331,7 +7191,8 @@ export default class TilingWMExtension extends Extension {
         this._disconnectBackgroundAppParkWatch();
         if (this._backgroundAppNWorkspacesId) {
             try { global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId); } catch (_e) {}
-        this._backgroundAppNWorkspacesId = 0;
+            this._backgroundAppNWorkspacesId = 0;
+        }
         if (this._backgroundAppParkRetryId) {
             GLib.source_remove(this._backgroundAppParkRetryId);
             this._backgroundAppParkRetryId = 0;
@@ -6346,7 +7207,6 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppInitOverlayAwaiting = false;
         this._backgroundAppParkRetryId = 0;
         this._backgroundAppParkRetryCount = 0;
-        }
         if (this._backgroundAppKeepAliveId) {
             GLib.source_remove(this._backgroundAppKeepAliveId);
             this._backgroundAppKeepAliveId = 0;
@@ -6370,9 +7230,16 @@ export default class TilingWMExtension extends Extension {
             const waiter = this._backgroundAppWaiter;
             this._backgroundAppWaiter = null;
             try { waiter.cleanup(false); } catch (_e) {}
-            this._closeBackgroundAppWindow(waiter.win);
+            if (!_lockCycle) {
+                this._debugLog(`bg teardown: closing waiter window (lockCycle=${_lockCycle})`);
+                this._closeBackgroundAppWindow(waiter.win);
+            } else {
+                this._debugLog('bg teardown: keeping waiter window alive (lock cycle)');
+            }
         }
         const win = this._backgroundAppWin;
+        this._debugLog(`bg teardown: win=${win ? win.get_wm_class_instance() || '?' : 'null'} ` +
+            `waiter=${!!this._backgroundAppWaiter} lockCycle=${_lockCycle}`);
         if (this._backgroundAppUnmanagedId) {
             if (win) {
                 try { win.disconnect(this._backgroundAppUnmanagedId); } catch (_e) {}
@@ -6386,29 +7253,40 @@ export default class TilingWMExtension extends Extension {
             } catch (_e) {}
             this._backgroundAppFirstFrameId = 0;
         }
-        if (win)
+        if (win && !_lockCycle) {
+            this._debugLog(`bg teardown: closing main window (lockCycle=${_lockCycle})`);
             this._closeBackgroundAppWindow(win);
+        } else if (win) {
+            this._debugLog('bg teardown: keeping main window alive (lock cycle)');
+        }
         this._backgroundAppWin = null;
         this._backgroundAppProc = null;
-        this._restoreBackgroundAppHiding();
-        try {
-            // The front-reserved ws0 is the shell's own first workspace — never
-            // remove it (only the appended trailing fallback parking is
-            // removable). The reservation survives restarts and toggles.
-            if (!this._backgroundAppParkingFront &&
-                this._backgroundAppParkingWs &&
-                this._backgroundAppParkingWs.list_windows().length === 0)
-                global.workspace_manager.remove_workspace(this._backgroundAppParkingWs, this._currentTime());
-        } catch (_e) {}
+        // During a lock cycle the shell re-enables us right after unlocking;
+        // keep the bg-app process, its hiding state, and the parking workspace
+        // so the re-enable adopts the surviving window instead of relaunching.
+        if (!_lockCycle) {
+            this._restoreBackgroundAppHiding();
+            try {
+                // The front-reserved ws0 is the shell's own first workspace — never
+                // remove it (only the appended trailing fallback parking is
+                // removable). The reservation survives restarts and toggles.
+                if (!this._backgroundAppParkingFront &&
+                    this._backgroundAppParkingWs &&
+                    this._backgroundAppParkingWs.list_windows().length === 0)
+                    global.workspace_manager.remove_workspace(this._backgroundAppParkingWs, this._currentTime());
+            } catch (_e) {}
+        }
         this._backgroundAppParkingWs = null;
         this._backgroundAppParkingFront = false;
     }
 
     _closeBackgroundAppWindow(win) {
         if (!win) return;
+        log(`[plaid] background app: closing bg window ${win.get_wm_class_instance() || '?'}`);
         try { win.delete(this._currentTime()); } catch (_e) {}
         const proc = this._backgroundAppProc;
         if (proc) {
+            log('[plaid] background app: bg process force_exit scheduled');
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                 try { proc.force_exit(); } catch (_e) {}
                 return GLib.SOURCE_REMOVE;
@@ -6807,7 +7685,7 @@ export default class TilingWMExtension extends Extension {
                             }
                             if (hi <= lo) { lo = 0.5; hi = 0.5; }
                             if (Number.isFinite(newRatio))
-                                this._masterRatios.set(ws, Math.max(lo, Math.min(hi, newRatio)));
+                                this._masterRatios.set(this._wsIndex(ws), Math.max(lo, Math.min(hi, newRatio)));
                         }
                     }
                     if (this._grabHeightSign !== 0) {
@@ -6854,6 +7732,7 @@ export default class TilingWMExtension extends Extension {
                                     initialWeight + (dy * this._grabHeightSign) / totalStackH * numStack);
                                 const stackRatios = this._getStackRatios(ws);
                                 stackRatios.set(idx - 1, newWeight);
+                                this._scheduleSaveLayouts();
                             }
                         }
                     }
