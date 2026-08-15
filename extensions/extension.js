@@ -282,6 +282,7 @@ export default class TilingWMExtension extends Extension {
         this._pointerFocusLastX = -1;
         this._pointerFocusLastY = -1;
         this._pointerFocusCandSig = '';
+        this._chromiumProcessCache = new Map();
         this._backgroundAppProc = null;
         this._backgroundAppFirstFrameId = 0;
         this._backgroundAppClone = null;
@@ -5724,6 +5725,7 @@ export default class TilingWMExtension extends Extension {
     _resolveWindowByScan(px, py) {
         try {
             const candidates = [];
+            const under = [];
             let total = 0;
             const activeWs = global.workspace_manager.get_active_workspace();
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
@@ -5732,11 +5734,14 @@ export default class TilingWMExtension extends Extension {
                 if (ws === this._backgroundAppParkingWs) continue;
                 for (const win of ws.list_windows()) {
                     total++;
-                    if (!win || !this._canPointerFocusWindow(win)) continue;
-                    if (win === this._backgroundAppWin) continue;
+                    if (!win) continue;
                     const r = win.get_frame_rect();
-                    if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
-                        candidates.push(win);
+                    if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height) {
+                        const pass = this._canPointerFocusWindow(win) && win !== this._backgroundAppWin;
+                        under.push({ win, pass });
+                        if (pass)
+                            candidates.push(win);
+                    }
                 }
             }
             const sig = candidates.map(w => w.get_id()).join(',');
@@ -5744,9 +5749,16 @@ export default class TilingWMExtension extends Extension {
                 this._pointerFocusCandSig = sig;
                 this._debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
             }
-            if (candidates.length === 0) return null;
-            const stacked = global.display.sort_windows_by_stacking(candidates);
-            return stacked[stacked.length - 1];
+            if (under.length === 0) return null;
+            const stacked = global.display.sort_windows_by_stacking(under.map(u => u.win));
+            const top = stacked[stacked.length - 1];
+            // A popup/menu-like window on top must never be reached through:
+            // focusing what's beneath it strips the menu's parent focus and
+            // kills the menu (Steam's fixed-size popups extending over other
+            // windows). No focus change is the safe outcome.
+            const topUnder = under.find(u => u.win === top);
+            if (topUnder && !topUnder.pass) return null;
+            return top;
         } catch (e) {
             this._debugLog(`pointer focus: scan failed: ${e.message}`);
             return null;
@@ -5756,10 +5768,52 @@ export default class TilingWMExtension extends Extension {
     _canPointerFocusWindow(win) {
         if (!win) return false;
         if (win.minimized) return false;
+        // The Chromium family (Electron/CEF/Steam's steamwebhelper) renders
+        // its menus as web overlays INSIDE its windows. Focus calls on the
+        // host windows disturb the web UI and close the menus — a documented
+        // upstream incompatibility with focus-follows-mouse (steam-for-linux
+        // #11077, electron #48737). The hover-focus steps away from the
+        // whole family; their focus is app-managed anyway.
+        try {
+            const instance = (win.get_wm_class_instance() || '').toLowerCase();
+            if (instance === 'steamwebhelper') return false;
+        } catch (_e) {}
+        try {
+            if (this._isChromiumProcessWindow(win)) return false;
+        } catch (_e) {}
         try {
             if (win.is_skip_taskbar() && !this._isFloating(win)) return false;
         } catch (_e) {}
         return true;
+    }
+
+    // The Chromium process model: every child process (renderer, gpu-process,
+    // zygote, crashpad-handler…) carries a --type= flag on its cmdline —
+    // native apps never do. Verdicts cached per PID (own cache — the float
+    // cache holds boolean verdicts for a different question).
+    _isChromiumProcessWindow(win) {
+        try {
+            const pid = win.get_pid();
+            if (!pid) return false;
+            if (this._chromiumProcessCache) {
+                const cached = this._chromiumProcessCache.get(pid);
+                if (cached !== undefined) return cached;
+            }
+            let verdict = false;
+            try {
+                const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
+                if (data)
+                    verdict = /--type=/.test(new TextDecoder().decode(data));
+            } catch (_e) {}
+            if (this._chromiumProcessCache) {
+                if (this._chromiumProcessCache.size >= 256)
+                    this._chromiumProcessCache.clear();
+                this._chromiumProcessCache.set(pid, verdict);
+            }
+            return verdict;
+        } catch (_e) {
+            return false;
+        }
     }
 
     // --- Background App ---
