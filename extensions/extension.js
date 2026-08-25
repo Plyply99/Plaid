@@ -1516,10 +1516,12 @@ export default class TilingWMExtension extends Extension {
         if (this._destroyed || !this._floatHooks || this._floatHooks.has(win)) return;
         const ids = [
             win.connect('position-changed', () => {
+                this._updateBorders();
                 this._convertMaximizedToGaps(win);
                 this._trackFloatGeometry(win);
             }),
             win.connect('size-changed', () => {
+                this._updateBorders();
                 this._convertMaximizedToGaps(win);
                 this._trackFloatGeometry(win);
             }),
@@ -3344,6 +3346,11 @@ export default class TilingWMExtension extends Extension {
     }
 
     _ensureWindowBorder(win, actor, frame, isFocused) {
+        const old = this._windowBorders.get(win);
+        if (old) {
+            try { old.destroy(); } catch (_e) {}
+            this._windowBorders.delete(win);
+        }
         if (!frame || frame.width === 0 || frame.height === 0) return false;
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
@@ -3925,37 +3932,6 @@ export default class TilingWMExtension extends Extension {
                 setUniform('ringColor', 4, ringColor || [0, 0, 0, 0]);
                 setUniform('ringAreaBounds', 4, [x1 + inset + rw, y1 + inset + rw, x2 - inset - rw, y2 - inset - rw]);
                 setUniform('ringAreaClipRadius', 1, [Math.max(0, radius - inset - rw)]);
-                if (!effect._uniformLogged && this._settings && this._settings.get_boolean('debug')) {
-                    effect._uniformLogged = true;
-                    let texInfo = 'none';
-                    let volInfo = 'none';
-                    let fr = 'none';
-                    let bu = 'none';
-                    try {
-                        const tex = effect.get_texture();
-                        if (tex)
-                            texInfo = `${tex.get_width()}x${tex.get_height()}`;
-                    } catch (_e) {}
-                    try {
-                        const vol = actor ? actor.get_paint_volume() : null;
-                        if (vol) {
-                            const o = vol.get_origin();
-                            volInfo = `origin=(${o.x},${o.y}) ${vol.get_width()}x${vol.get_height()}`;
-                        }
-                    } catch (_e) {}
-                    try {
-                        const f = effect._metaWin ? effect._metaWin.get_frame_rect() : null;
-                        if (f) fr = `(${f.x},${f.y},${f.width},${f.height})`;
-                    } catch (_e) {}
-                    try {
-                        const b = effect._metaWin ? effect._metaWin.get_buffer_rect() : null;
-                        if (b) bu = `(${b.x},${b.y},${b.width},${b.height})`;
-                    } catch (_e) {}
-                    log(`[plaid] mask pspace dump: actor=${w}x${h} texture=${texInfo} vol=${volInfo} frame=${fr} buffer=${bu}`);
-                    log(`[plaid] mask uniform dump: bounds=[${x1},${y1},${x2},${y2}] clipRadius=${radius} ` +
-                        `pixelStep=[${(1 / w).toFixed(4)},${(1 / h).toFixed(4)}] borderWidth=${borderWidth} ` +
-                        `opacity=${opacity}`);
-                }
             } catch (e) {
                 log(`[plaid] mask uniforms failed: ${e.message}`);
                 return;
