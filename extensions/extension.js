@@ -749,6 +749,7 @@ export default class TilingWMExtension extends Extension {
                             win.get_window_type() === Meta.WindowType.NORMAL)
                             this._cursorWarpDeferred(win);
                         this._connectFloatHooks(win);
+                        this._updateBorders();
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
@@ -758,6 +759,7 @@ export default class TilingWMExtension extends Extension {
                             win.get_window_type() === Meta.WindowType.NORMAL)
                             this._cursorWarpDeferred(win);
                         this._connectFloatHooks(win);
+                        this._updateBorders();
                         return false;
                     });
                 }
@@ -3251,6 +3253,7 @@ export default class TilingWMExtension extends Extension {
                 }
             }
         }
+        this._updateBorders();
     }
 
     _updateBorders() {
@@ -3302,6 +3305,23 @@ export default class TilingWMExtension extends Extension {
             const isFocused = win === focusWindow;
             if (bordersEnabled && this._ensureWindowBorder(win, actor, frame, isFocused))
                 continue;
+        }
+
+        // Floating windows are not in _windowWSIndices (they skip _addWindow),
+        // so the tiled loop above misses them. Apply Flair directly.
+        for (const win of ws.list_windows()) {
+            if (win.get_window_type() !== Meta.WindowType.NORMAL) continue;
+            if (!this._isFloating(win)) continue;
+            if (win.is_fullscreen()) { this._removeMask(win); this._removeBlur(win); continue; }
+            const actor = win.get_compositor_private();
+            if (!actor) continue;
+            const frame = win.get_frame_rect();
+            if (frame.width === 0 || frame.height === 0) continue;
+            if (blurEnabled) this._ensureWindowBlur(win, actor);
+            if (roundedCorners && borderRadius > 0)
+                this._ensureWindowMask(win, actor, borderRadius + 1);
+            const isFocused = win === focusWindow;
+            if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
         }
 
         if (this._settings.get_boolean('gradient-borders') &&
