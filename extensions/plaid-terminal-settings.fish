@@ -130,7 +130,7 @@ set -g _PLAID_TABLE \
     'resize-shrink-height|as|Shrink window height' \
     'resize-grow-height|as|Grow window height' \
     'toggle-float|as|Toggle floating for focused window' \
-    'toggle-tiling|as|Toggle Plaid on/off (tiling + visual effects)' \
+    'toggle-tiling|as|Toggle Plaid on/off (tiling only; Flair keeps its own settings)' \
     'toggle-maximize|as|Toggle maximize (maximize, press again to restore)' \
     'center-window|as|Center focused window' \
     'follow-focus|b|Move cursor to focused window' \
@@ -147,7 +147,7 @@ set -g _PLAID_TABLE \
     'scratchpad-add|as|Add window to scratchpad' \
     'scratchpad-remove|as|Remove window from scratchpad' \
     'scratchpad-border-color|as|Scratchpad border color' \
-    'logo|s|Logo during the Plaid login moment (a-tartan, b-bsp, c-weave, all)' \
+    'logo|s|Logo during the Plaid login moment (a-tartan, b-bsp, b-thread, b-weave, c-weave, all)' \
     'dropdown-terminal-command|s|Drop-down terminal command' \
     'dropdown-terminal-height|i|Drop-down terminal height' \
     'dropdown-terminal|as|Toggle drop-down terminal' \

@@ -11,34 +11,34 @@
 
     <key name="gap" type="i">
       <default>4</default>
-      <range min="0"/>
+      <range min="0" max="50"/>
       <summary>Gap between windows in pixels</summary>
     </key>
 
     <key name="single-gap-top" type="i">
       <default>4</default>
-      <range min="0"/>
+      <range min="0" max="200"/>
       <summary>Top gap around a single window</summary>
       <description>Gap between a single tiled window and the top screen edge (0 = no gap)</description>
     </key>
 
     <key name="single-gap-bottom" type="i">
       <default>4</default>
-      <range min="0"/>
+      <range min="0" max="200"/>
       <summary>Bottom gap around a single window</summary>
       <description>Gap between a single tiled window and the bottom screen edge (0 = no gap)</description>
     </key>
 
     <key name="single-gap-left" type="i">
       <default>4</default>
-      <range min="0"/>
+      <range min="0" max="200"/>
       <summary>Left gap around a single window</summary>
       <description>Gap between a single tiled window and the left screen edge (0 = no gap)</description>
     </key>
 
     <key name="single-gap-right" type="i">
       <default>4</default>
-      <range min="0"/>
+      <range min="0" max="200"/>
       <summary>Right gap around a single window</summary>
       <description>Gap between a single tiled window and the right screen edge (0 = no gap)</description>
     </key>
@@ -69,12 +69,14 @@
 
     <key name="dwindle-ratio" type="d">
       <default>0.618</default>
+      <range min="0" max="1"/>
       <summary>Dwindle split ratio</summary>
-      <description>Ratio for dwindle splits (0.3 to 0.7). Default 0.618 is the golden ratio (1/φ)</description>
+      <description>Ratio for dwindle splits (0.0 to 1.0). Default 0.618 is the golden ratio (1/φ)</description>
     </key>
 
     <key name="master-ratio" type="d">
       <default>0.5</default>
+      <range min="0.15" max="0.85"/>
       <summary>Master area ratio</summary>
       <description>Ratio of the screen allocated to the master window (0.15 to 0.85)</description>
     </key>
@@ -87,6 +89,7 @@
 
     <key name="active-border-width" type="i">
       <default>2</default>
+      <range min="0" max="20"/>
       <summary>Active window border thickness</summary>
       <description>Thickness of the active window border in pixels</description>
     </key>
@@ -105,6 +108,7 @@
 
     <key name="inactive-border-width" type="i">
       <default>1</default>
+      <range min="0" max="20"/>
       <summary>Inactive window border thickness</summary>
       <description>Thickness of inactive window borders in pixels</description>
     </key>
@@ -123,6 +127,7 @@
 
     <key name="border-radius" type="i">
       <default>0</default>
+      <range min="0" max="50"/>
       <summary>Border corner radius</summary>
       <description>Radius of border corners in pixels (0 for square corners)</description>
     </key>
@@ -251,6 +256,7 @@
     <!-- Resize amount in pixels -->
     <key name="resize-amount" type="i">
       <default>40</default>
+      <range min="10" max="200"/>
       <summary>Resize step in pixels</summary>
       <description>Number of pixels to resize per keypress</description>
     </key>
@@ -286,7 +292,7 @@
     <key name="toggle-tiling" type="as">
       <default><![CDATA[['<Super>t']]]></default>
       <summary>Toggle Plaid on/off</summary>
-      <description>Master switch: disables and re-enables tiling and all visual effects (borders, rounded corners, blur)</description>
+      <description>Master switch: disables and re-enables tiling. Flair (borders, rounded corners, blur) is controlled by its own settings and survives the toggle</description>
     </key>
 
     <key name="toggle-maximize" type="as">
@@ -359,8 +365,6 @@
       <summary>Pick window to float</summary>
       <description>Press to enter pick mode; click a window to add it to the float list by class or title</description>
     </key>
-
-    <!-- Keybinding: Fill Screen -->
 
     <!-- Keybinding: Cycle Layout -->
     <key name="cycle-layout" type="as">
