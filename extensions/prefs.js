@@ -5,6 +5,13 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Gdk from 'gi://Gdk?version=4.0';
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+// Which this.<prop> array holds the rendered rows for each strv-backed list.
+const STRV_LIST_ROWS_PROP = {
+    'float-windows': '_floatClassRows',
+    'float-titles': '_floatTitleRows',
+    'min-window-sizes': '_minSizeRows',
+};
+
 export default class TilingWMPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
@@ -43,68 +50,23 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         page.add(group);
 
-        const enableRow = new Adw.SwitchRow({
-            title: _('Enable Tiling'),
-            subtitle: _('Turn tiling on or off'),
-        });
-        group.add(enableRow);
-        settings.bind('enabled', enableRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        this._addSwitchRow(group, settings, 'enabled', _('Enable Tiling'),
+            _('Turn tiling on or off'));
+        this._addSwitchRow(group, settings, 'follow-focus', _('Cursor Follows Focus'),
+            _('Warp cursor to focused window on keybind navigation and new windows'));
+        this._addSwitchRow(group, settings, 'pointer-focus', _('Focus on Hover'),
+            _('Focus the window under the mouse (works across monitors)'));
+        this._addSwitchRow(group, settings, 'mouse-resize', _('Mouse Resize and Swap'),
+            _('Drag window edges to resize splits, drag title bar to swap windows'));
+        this._addSwitchRow(group, settings, 'workspace-popup', _('Show Workspace Popup'),
+            _('Show workspace number and layout when switching workspaces'));
+        this._addSwitchRow(group, settings, 'tiling-popup', _('Show Tiling Popup'),
+            _('Show a popup when tiling is toggled on or off'));
+        this._addSwitchRow(group, settings, 'release-check-enabled', _('Auto Update'),
+            _('Install updates automatically — they load on your next login.'));
 
-        const followRow = new Adw.SwitchRow({
-            title: _('Cursor Follows Focus'),
-            subtitle: _('Warp cursor to focused window on keybind navigation and new windows'),
-        });
-        group.add(followRow);
-        settings.bind('follow-focus', followRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
-        const pointerFocusRow = new Adw.SwitchRow({
-            title: _('Focus on Hover'),
-            subtitle: _('Focus the window under the mouse (works across monitors)'),
-        });
-        group.add(pointerFocusRow);
-        settings.bind('pointer-focus', pointerFocusRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
-        const mouseResizeRow = new Adw.SwitchRow({
-            title: _('Mouse Resize and Swap'),
-            subtitle: _('Drag window edges to resize splits, drag title bar to swap windows'),
-        });
-        group.add(mouseResizeRow);
-        settings.bind('mouse-resize', mouseResizeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
-        const workspacePopupRow = new Adw.SwitchRow({
-            title: _('Show Workspace Popup'),
-            subtitle: _('Show workspace number and layout when switching workspaces'),
-        });
-        group.add(workspacePopupRow);
-        settings.bind('workspace-popup', workspacePopupRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
-        const tilingPopupRow = new Adw.SwitchRow({
-            title: _('Show Tiling Popup'),
-            subtitle: _('Show a popup when tiling is toggled on or off'),
-        });
-        group.add(tilingPopupRow);
-        settings.bind('tiling-popup', tilingPopupRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
-        const updateRow = new Adw.SwitchRow({
-            title: _('Auto Update'),
-            subtitle: _('Install updates automatically — they load on your next login.'),
-        });
-        group.add(updateRow);
-        settings.bind('release-check-enabled', updateRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
-        const gapRow = new Adw.SpinRow({
-            title: _('Window Gap'),
-            subtitle: _('Gap between windows in pixels'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 50,
-                step_increment: 1,
-                page_increment: 5,
-                value: settings.get_int('gap'),
-            }),
-        });
-        group.add(gapRow);
-        settings.bind('gap', gapRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        this._addSpinRow(group, settings, 'gap', _('Window Gap'),
+            _('Gap between windows in pixels'), 0, 50, 1, 5);
 
         const singleEdgeRow = new Adw.ActionRow({
             title: _('Single Window Edges'),
@@ -184,35 +146,10 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 () => selectLayout(layout), previewDrawings));
         }
 
-        const dwindleRatioRow = new Adw.SpinRow({
-            title: _('Dwindle Split Ratio'),
-            subtitle: _('Ratio for dwindle splits. Default 0.618 (golden ratio)'),
-            digits: 4,
-            adjustment: new Gtk.Adjustment({
-                lower: 0.0,
-                upper: 1.0,
-                step_increment: 0.05,
-                page_increment: 0.1,
-                value: settings.get_double('dwindle-ratio'),
-            }),
-        });
-        group.add(dwindleRatioRow);
-        settings.bind('dwindle-ratio', dwindleRatioRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-
-        const masterRatioRow = new Adw.SpinRow({
-            title: _('Master Ratio'),
-            subtitle: _('Ratio of the screen allocated to the master window'),
-            digits: 4,
-            adjustment: new Gtk.Adjustment({
-                lower: 0.15,
-                upper: 0.85,
-                step_increment: 0.05,
-                page_increment: 0.1,
-                value: settings.get_double('master-ratio'),
-            }),
-        });
-        group.add(masterRatioRow);
-        settings.bind('master-ratio', masterRatioRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        const dwindleRatioRow = this._addSpinRow(group, settings, 'dwindle-ratio', _('Dwindle Split Ratio'),
+            _('Ratio for dwindle splits. Default 0.618 (golden ratio)'), 0.0, 1.0, 0.05, 0.1, 4);
+        const masterRatioRow = this._addSpinRow(group, settings, 'master-ratio', _('Master Ratio'),
+            _('Ratio of the screen allocated to the master window'), 0.15, 0.85, 0.05, 0.1, 4);
 
         const updateRatioVisibility = () => {
             const layout = settings.get_string('layout');
@@ -225,19 +162,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             refreshLayoutPreviews();
         });
 
-        const resizeAmountRow = new Adw.SpinRow({
-            title: _('Resize Step'),
-            subtitle: _('Pixels to resize per keypress'),
-            adjustment: new Gtk.Adjustment({
-                lower: 10,
-                upper: 200,
-                step_increment: 5,
-                page_increment: 20,
-                value: settings.get_int('resize-amount'),
-            }),
-        });
-        group.add(resizeAmountRow);
-        settings.bind('resize-amount', resizeAmountRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        this._addSpinRow(group, settings, 'resize-amount', _('Resize Step'),
+            _('Pixels to resize per keypress'), 10, 200, 5, 20);
     }
 
     _buildLayoutPreviewCard(settings, layout, caption, onSelect, previewDrawings) {
@@ -362,31 +288,16 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         page.add(mainGroup);
 
-        const showBordersRow = new Adw.SwitchRow({
-            title: _('Show Borders'),
-            subtitle: _('Draw borders around windows (rounded corners still apply if enabled)'),
-        });
-        mainGroup.add(showBordersRow);
-        settings.bind('borders-enabled', showBordersRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        this._addSwitchRow(mainGroup, settings, 'borders-enabled', _('Show Borders'),
+            _('Draw borders around windows (rounded corners still apply if enabled)'));
 
         const activeGroup = new Adw.PreferencesGroup({
             title: _('Active Window Border'),
         });
         page.add(activeGroup);
 
-        const activeWidthRow = new Adw.SpinRow({
-            title: _('Border Thickness'),
-            subtitle: _('Width of the active window border in pixels'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 20,
-                step_increment: 1,
-                page_increment: 2,
-                value: settings.get_int('active-border-width'),
-            }),
-        });
-        activeGroup.add(activeWidthRow);
-        settings.bind('active-border-width', activeWidthRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        this._addSpinRow(activeGroup, settings, 'active-border-width', _('Border Thickness'),
+            _('Width of the active window border in pixels'), 0, 20, 1, 2);
 
         const activeColorRow = this._buildColorRow(
             settings, 'active-border-color', _('Border Color')
@@ -403,19 +314,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         page.add(inactiveGroup);
 
-        const inactiveWidthRow = new Adw.SpinRow({
-            title: _('Border Thickness'),
-            subtitle: _('Width of inactive window borders in pixels'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 20,
-                step_increment: 1,
-                page_increment: 2,
-                value: settings.get_int('inactive-border-width'),
-            }),
-        });
-        inactiveGroup.add(inactiveWidthRow);
-        settings.bind('inactive-border-width', inactiveWidthRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        this._addSpinRow(inactiveGroup, settings, 'inactive-border-width', _('Border Thickness'),
+            _('Width of inactive window borders in pixels'), 0, 20, 1, 2);
 
         const inactiveColorRow = this._buildColorRow(
             settings, 'inactive-border-color', _('Border Color')
@@ -432,33 +332,13 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         page.add(styleGroup);
 
-        const radiusRow = new Adw.SpinRow({
-            title: _('Corner Radius'),
-            subtitle: _('Radius of border corners in pixels'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 50,
-                step_increment: 1,
-                page_increment: 5,
-                value: settings.get_int('border-radius'),
-            }),
-        });
-        styleGroup.add(radiusRow);
-        settings.bind('border-radius', radiusRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        this._addSpinRow(styleGroup, settings, 'border-radius', _('Corner Radius'),
+            _('Radius of border corners in pixels'), 0, 50, 1, 5);
 
-        const roundedRow = new Adw.SwitchRow({
-            title: _('Rounded Corners'),
-            subtitle: _('Mask window content corners to match the border radius'),
-        });
-        styleGroup.add(roundedRow);
-        settings.bind('rounded-corners', roundedRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
-        const gradientRow = new Adw.SwitchRow({
-            title: _('Gradient Borders'),
-            subtitle: _('Use a gradient between the two border colors'),
-        });
-        styleGroup.add(gradientRow);
-        settings.bind('gradient-borders', gradientRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        this._addSwitchRow(styleGroup, settings, 'rounded-corners', _('Rounded Corners'),
+            _('Mask window content corners to match the border radius'));
+        this._addSwitchRow(styleGroup, settings, 'gradient-borders', _('Gradient Borders'),
+            _('Use a gradient between the two border colors'));
 
         const directionModel = new Gtk.StringList({
             strings: ['vertical', 'horizontal', 'diagonal'],
@@ -484,19 +364,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 settings.set_string('gradient-direction', dirs[idx]);
         });
 
-        const animSpeedRow = new Adw.SpinRow({
-            title: _('Animation Speed'),
-            subtitle: _('Speed of the gradient border rotation (0 = off, 10 = fastest)'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 10,
-                step_increment: 1,
-                page_increment: 2,
-                value: settings.get_int('border-animation-speed'),
-            }),
-        });
-        styleGroup.add(animSpeedRow);
-        settings.bind('border-animation-speed', animSpeedRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        const animSpeedRow = this._addSpinRow(styleGroup, settings, 'border-animation-speed', _('Animation Speed'),
+            _('Speed of the gradient border rotation (0 = off, 10 = fastest)'), 0, 10, 1, 2);
 
         const updateGradientVisibility = () => {
             const gradient = settings.get_boolean('gradient-borders');
@@ -513,55 +382,15 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         page.add(blurGroup);
 
-        const blurRow = new Adw.SwitchRow({
-            title: _('Blur Windows'),
-            subtitle: _('Blur the content behind windows using the shell\'s native blur'),
-        });
-        blurGroup.add(blurRow);
-        settings.bind('window-blur', blurRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        this._addSwitchRow(blurGroup, settings, 'window-blur', _('Blur Windows'),
+            _('Blur the content behind windows using the shell\'s native blur'));
 
-        const blurRadiusRow = new Adw.SpinRow({
-            title: _('Blur Radius'),
-            subtitle: _('Strength of the blur in pixels'),
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 100,
-                step_increment: 1,
-                page_increment: 5,
-                value: settings.get_int('window-blur-radius'),
-            }),
-        });
-        blurGroup.add(blurRadiusRow);
-        settings.bind('window-blur-radius', blurRadiusRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-
-        const blurBrightnessRow = new Adw.SpinRow({
-            title: _('Blur Brightness'),
-            subtitle: _('Brightness of the blurred layer'),
-            digits: 2,
-            adjustment: new Gtk.Adjustment({
-                lower: 0.1,
-                upper: 1.0,
-                step_increment: 0.05,
-                page_increment: 0.1,
-                value: settings.get_double('window-blur-brightness'),
-            }),
-        });
-        blurGroup.add(blurBrightnessRow);
-        settings.bind('window-blur-brightness', blurBrightnessRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-
-        const blurOpacityRow = new Adw.SpinRow({
-            title: _('Window Opacity'),
-            subtitle: _('Opacity of window content over the blurred layer (lower values soften the whole window, including text)'),
-            adjustment: new Gtk.Adjustment({
-                lower: 30,
-                upper: 100,
-                step_increment: 1,
-                page_increment: 10,
-                value: settings.get_int('window-blur-opacity'),
-            }),
-        });
-        blurGroup.add(blurOpacityRow);
-        settings.bind('window-blur-opacity', blurOpacityRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        const blurRadiusRow = this._addSpinRow(blurGroup, settings, 'window-blur-radius', _('Blur Radius'),
+            _('Strength of the blur in pixels'), 0, 100, 1, 5);
+        const blurBrightnessRow = this._addSpinRow(blurGroup, settings, 'window-blur-brightness', _('Blur Brightness'),
+            _('Brightness of the blurred layer'), 0.1, 1.0, 0.05, 0.1, 2);
+        const blurOpacityRow = this._addSpinRow(blurGroup, settings, 'window-blur-opacity', _('Window Opacity'),
+            _('Opacity of window content over the blurred layer (lower values soften the whole window, including text)'), 30, 100, 1, 10);
 
         const updateBlurVisibility = () => {
             const blur = settings.get_boolean('window-blur');
@@ -584,30 +413,15 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         ddtGroup.add(ddtCommandRow);
         settings.bind('dropdown-terminal-command', ddtCommandRow, 'text', Gio.SettingsBindFlags.DEFAULT);
 
-        const ddtHeightRow = new Adw.SpinRow({
-            title: _('Terminal Height'),
-            subtitle: _('Height of the drop-down terminal as a percentage of the screen'),
-            adjustment: new Gtk.Adjustment({
-                lower: 20,
-                upper: 80,
-                step_increment: 1,
-                page_increment: 5,
-                value: settings.get_int('dropdown-terminal-height'),
-            }),
-        });
-        ddtGroup.add(ddtHeightRow);
-        settings.bind('dropdown-terminal-height', ddtHeightRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        this._addSpinRow(ddtGroup, settings, 'dropdown-terminal-height', _('Terminal Height'),
+            _('Height of the drop-down terminal as a percentage of the screen'), 20, 80, 1, 5);
 
         const bgAppGroup = new Adw.PreferencesGroup({
             title: _('Background App'),
         });
         page.add(bgAppGroup);
 
-        const bgAppEnabledRow = new Adw.SwitchRow({
-            title: _('Enabled'),
-        });
-        bgAppGroup.add(bgAppEnabledRow);
-        settings.bind('background-app-enabled', bgAppEnabledRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        const bgAppEnabledRow = this._addSwitchRow(bgAppGroup, settings, 'background-app-enabled', _('Enabled'));
 
         const bgAppRow = new Adw.ActionRow({
             title: _('Command'),
@@ -818,6 +632,36 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         this._addShortcutRow(miscGroup, settings, 'dropdown-terminal', _('Toggle Drop-Down Terminal'));
     }
 
+    _addSwitchRow(group, settings, key, title, subtitle = null) {
+        const row = new Adw.SwitchRow({ title });
+        if (subtitle)
+            row.subtitle = subtitle;
+        group.add(row);
+        settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _addSpinRow(group, settings, key, title, subtitle, min, max, step, page, digits = 0) {
+        // Double keys are the ones with a fractional bound/step — deterministic
+        // for every current call site and keeps the signatures tiny.
+        const isDouble = !Number.isInteger(min) || !Number.isInteger(max) || !Number.isInteger(step);
+        const row = new Adw.SpinRow({
+            title,
+            subtitle,
+            digits,
+            adjustment: new Gtk.Adjustment({
+                lower: min,
+                upper: max,
+                step_increment: step,
+                page_increment: page,
+                value: isDouble ? settings.get_double(key) : settings.get_int(key),
+            }),
+        });
+        group.add(row);
+        settings.bind(key, row, 'value', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
     _addShortcutRow(group, settings, key, title) {
         const row = new Adw.ActionRow({
             title: title,
@@ -933,16 +777,26 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                         const current = new Set(settings.get_strv(target));
                         current.add(value);
                         settings.set_strv(target, [...current]);
-                        if (target === 'float-windows')
-                            this._rebuildFloatList(settings, this._floatClassGroup, this._floatClassAddRow, 'float-windows', '_floatClassRows');
-                        else
-                            this._rebuildFloatList(settings, this._floatTitleGroup, this._floatTitleAddRow, 'float-titles', '_floatTitleRows');
+                        this._rebuildStrvList(settings,
+                            target === 'float-windows' ? this._floatClassGroup : this._floatTitleGroup,
+                            target);
                     },
                     () => window.present()
                 );
             });
         };
         pickRow.connect('activated', startPick);
+        // Abandoned pick mode must not leave the watcher armed: closing the
+        // window mid-pick disconnects it and exits pick mode so a later
+        // desktop click is never captured into a dead dialog.
+        window.connect('close-request', () => {
+            if (pickWatchId) {
+                settings.disconnect(pickWatchId);
+                pickWatchId = 0;
+                settings.set_boolean('pick-mode', false);
+            }
+            return false;
+        });
 
         const classGroup = new Adw.PreferencesGroup({
             title: _('Floating by Window Class'),
@@ -964,13 +818,12 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         addClassRow.add_suffix(addClassButton);
         classGroup.add(addClassRow);
-        this._floatClassAddRow = addClassRow;
 
         addClassRow.connect('activated', () => {
-            this._showAddFloatDialog(window, settings, classGroup, addClassRow, 'float-windows', _('WM_CLASS instance name (e.g. gimp)'));
+            this._showAddFloatDialog(window, settings, classGroup, 'float-windows', _('WM_CLASS instance name (e.g. gimp)'));
         });
 
-        this._rebuildFloatList(settings, classGroup, addClassRow, 'float-windows', '_floatClassRows');
+        this._rebuildStrvList(settings, classGroup, 'float-windows');
 
         const titleGroup = new Adw.PreferencesGroup({
             title: _('Floating by Window Title'),
@@ -992,13 +845,12 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         addTitleRow.add_suffix(addTitleButton);
         titleGroup.add(addTitleRow);
-        this._floatTitleAddRow = addTitleRow;
 
         addTitleRow.connect('activated', () => {
-            this._showAddFloatDialog(window, settings, titleGroup, addTitleRow, 'float-titles', _('Exact window title (e.g. Picture-in-Picture)'));
+            this._showAddFloatDialog(window, settings, titleGroup, 'float-titles', _('Exact window title (e.g. Picture-in-Picture)'));
         });
 
-        this._rebuildFloatList(settings, titleGroup, addTitleRow, 'float-titles', '_floatTitleRows');
+        this._rebuildStrvList(settings, titleGroup, 'float-titles');
 
         const minSizeGroup = new Adw.PreferencesGroup({
             title: _('Minimum Window Sizes'),
@@ -1020,10 +872,10 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         minSizeGroup.add(addMinSizeRow);
 
         addMinSizeRow.connect('activated', () => {
-            this._showAddMinSizeDialog(window, settings, minSizeGroup, addMinSizeRow);
+            this._showAddMinSizeDialog(window, settings, minSizeGroup);
         });
 
-        this._rebuildMinSizeList(settings, minSizeGroup, addMinSizeRow);
+        this._rebuildStrvList(settings, minSizeGroup, 'min-window-sizes');
     }
 
     _showPickChoiceDialog(window, settings, cls, title, onAdd, onDone) {
@@ -1059,7 +911,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         if (cls) {
             const classBtn = new Gtk.Button({
-                label: _('WM_CLASS: %s').replace('%s', cls),
+                label: _('WM_CLASS: %s').format(cls),
                 css_classes: ['suggested-action'],
                 hexpand: true,
             });
@@ -1073,7 +925,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         if (title) {
             const titleBtn = new Gtk.Button({
-                label: _('Title: %s').replace('%s', title),
+                label: _('Title: %s').format(title),
                 css_classes: ['suggested-action'],
                 hexpand: true,
             });
@@ -1101,15 +953,16 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         dialog.present();
     }
 
-    _rebuildFloatList(settings, group, addRow, settingsKey, rowsProperty) {
+    _rebuildStrvList(settings, group, settingsKey) {
+        const rowsProperty = STRV_LIST_ROWS_PROP[settingsKey];
         for (const row of this[rowsProperty])
             group.remove(row);
         this[rowsProperty] = [];
 
-        const classes = settings.get_strv(settingsKey);
-        for (const cls of classes) {
+        const items = settings.get_strv(settingsKey);
+        for (const item of items) {
             const row = new Adw.ActionRow({
-                title: cls,
+                title: item,
                 activatable: false,
             });
             const removeBtn = new Gtk.Button({
@@ -1118,9 +971,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             });
             removeBtn.connect('clicked', () => {
                 const current = new Set(settings.get_strv(settingsKey));
-                current.delete(cls);
+                current.delete(item);
                 settings.set_strv(settingsKey, [...current]);
-                this._rebuildFloatList(settings, group, addRow, settingsKey, rowsProperty);
+                this._rebuildStrvList(settings, group, settingsKey);
             });
             row.add_suffix(removeBtn);
             group.add(row);
@@ -1128,34 +981,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         }
     }
 
-    _rebuildMinSizeList(settings, group, addRow) {
-        for (const row of this._minSizeRows)
-            group.remove(row);
-        this._minSizeRows = [];
-
-        const entries = settings.get_strv('min-window-sizes');
-        for (const entry of entries) {
-            const row = new Adw.ActionRow({
-                title: entry,
-                activatable: false,
-            });
-            const removeBtn = new Gtk.Button({
-                icon_name: 'list-remove-symbolic',
-                css_classes: ['flat', 'circular'],
-            });
-            removeBtn.connect('clicked', () => {
-                const current = new Set(settings.get_strv('min-window-sizes'));
-                current.delete(entry);
-                settings.set_strv('min-window-sizes', [...current]);
-                this._rebuildMinSizeList(settings, group, addRow);
-            });
-            row.add_suffix(removeBtn);
-            group.add(row);
-            this._minSizeRows.push(row);
-        }
-    }
-
-    _showAddMinSizeDialog(window, settings, group, addRow) {
+    _showAddMinSizeDialog(window, settings, group) {
         const dialog = new Adw.Window({
             modal: true,
             transient_for: window,
@@ -1208,7 +1034,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 const current = new Set(settings.get_strv('min-window-sizes'));
                 current.add(entry);
                 settings.set_strv('min-window-sizes', [...current]);
-                this._rebuildMinSizeList(settings, group, addRow);
+                this._rebuildStrvList(settings, group, 'min-window-sizes');
             }
             dialog.close();
         });
@@ -1223,7 +1049,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         classEntry.grab_focus();
     }
 
-    _showAddFloatDialog(window, settings, group, addRow, settingsKey, placeholder) {
+    _showAddFloatDialog(window, settings, group, settingsKey, placeholder) {
         const dialog = new Adw.Window({
             modal: true,
             transient_for: window,
@@ -1267,8 +1093,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 const current = new Set(settings.get_strv(settingsKey));
                 current.add(text);
                 settings.set_strv(settingsKey, [...current]);
-                const rowsProperty = settingsKey === 'float-titles' ? '_floatTitleRows' : '_floatClassRows';
-                this._rebuildFloatList(settings, group, addRow, settingsKey, rowsProperty);
+                this._rebuildStrvList(settings, group, settingsKey);
             }
             dialog.close();
         });
