@@ -968,6 +968,10 @@ export default class TilingWMExtension extends Extension {
             for (const { emitter, id } of sigIds) {
                 try { emitter.disconnect(id); } catch (_e) {}
             }
+            // Re-enables are resumes: the maps come back with the same window
+            // objects, so the flag must be cleared here or _connectWindowSignals
+            // would refuse to re-arm position/size/identity/unmanaged handlers.
+            win._plaidSignalsConnected = false;
         }
         this._windowSignals = null;
         for (const id of this._pendingRetileIds.values())
@@ -1351,7 +1355,13 @@ export default class TilingWMExtension extends Extension {
 
     _addWindow(win, resume = false) {
         if (!this._settings) return;
-        if (this._windowWorkspaces.has(win)) return;
+        if (this._windowWorkspaces.has(win)) {
+            // Belt-and-braces: if the maps survived a disable/enable but the
+            // window signals did not (stale flag from a previous instance),
+            // re-arm them instead of leaving the window deaf.
+            if (!win._plaidSignalsConnected) this._connectWindowSignals(win);
+            return;
+        }
         this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
         // Lock-cycle resumes register windows that are already on screen and
         // tiled — the new-window fade-in (opacity 0 → landing audit → fade
