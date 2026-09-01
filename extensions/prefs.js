@@ -525,7 +525,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             subtitle: _('Strength of the blur in pixels'),
             adjustment: new Gtk.Adjustment({
                 lower: 0,
-                upper: 30,
+                upper: 100,
                 step_increment: 1,
                 page_increment: 5,
                 value: settings.get_int('window-blur-radius'),

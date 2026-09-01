@@ -146,7 +146,7 @@
 
     <key name="window-blur-radius" type="i">
       <default>20</default>
-      <range min="0" max="30"/>
+      <range min="0" max="100"/>
       <summary>Window blur radius</summary>
       <description>Strength of the window blur in pixels</description>
     </key>

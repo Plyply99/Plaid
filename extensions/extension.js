@@ -4443,7 +4443,7 @@ export default class TilingWMExtension extends Extension {
                     blur.corner_radius = cr;
             }
             const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-            const radius = Math.round(Math.min(this._settings.get_int('window-blur-radius') * scale, 28));
+            const radius = Math.round(Math.min(this._settings.get_int('window-blur-radius') * scale, 100));
             if (blur.radius !== radius)
                 blur.radius = radius;
             const brightness = this._settings.get_double('window-blur-brightness');
