@@ -12,6 +12,21 @@ echo "==========="
 
 glib-compile-schemas "$SOURCE/schemas/"
 
+# Authoritative syntax gate (AGENTS.md): file-mode `node --check` can
+# silently pass broken ESM — the stdin form is the real gate. A zip with
+# code GJS rejects must never be built.
+if command -v node >/dev/null 2>&1; then
+    for js in "$SOURCE/extension.js" "$SOURCE/prefs.js"; do
+        if ! node --input-type=module --check < "$js"; then
+            echo "Syntax gate FAILED: $js" >&2
+            exit 1
+        fi
+        echo "Syntax gate OK: $(basename "$js")"
+    done
+else
+    echo "WARNING: node not found — syntax gate skipped" >&2
+fi
+
 mkdir -p "$OUT"
 echo "Packing $SOURCE -> $OUT/plaid@plyply99.zip"
 gnome-extensions pack --force --out-dir="$OUT" "$SOURCE"
