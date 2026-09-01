@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: ESM syntax gate (stdin form — file-mode --check is not authoritative)
+        run: |
+          set -e
+          for js in extensions/extension.js extensions/prefs.js; do
+            node --input-type=module --check < "$js"
+            echo "syntax OK: $js"
+          done
+
+      - name: Terminal script syntax gate
+        run: |
+          set -e
+          bash -n extensions/plaid-terminal-settings.sh
+          echo "bash OK"
+
+      - name: Schema compile gate
+        run: |
+          set -e
+          if ! command -v glib-compile-schemas >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq libglib2.0-dev-bin
+          fi
+          glib-compile-schemas --strict extensions/schemas/
+          echo "schema OK"
