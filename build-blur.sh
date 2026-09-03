@@ -49,12 +49,17 @@ mkdir -p "$SOURCE/lib"
 cp "$LIB_DIR"/libblur-effect-1.0.so.1.0.0 "$SOURCE/lib/libblur-effect-1.0.so.1"
 cp LICENSE "$SOURCE/lib/LICENSE"
 
-# Regenerate the typelib with the absolute library path baked in, so the
-# shell can dlopen it directly from the extension's own directory.
-# Override INSTALL_LIB when baking into a system image (e.g. PlaidOS).
-INSTALL_LIB="${INSTALL_LIB:-$HOME/.local/share/gnome-shell/extensions/plaid@plyply99/lib/libblur-effect-1.0.so.1}"
-sed "s|shared-library=\"libblur-effect-1.0.so.1\"|shared-library=\"$INSTALL_LIB\"|" "$GIR_FILE" > "$WORK/Blur-abs.gir"
-g-ir-compiler "$WORK/Blur-abs.gir" -o "$SOURCE/lib/Blur-1.0.typelib"
-
-echo "Done: bundled into $SOURCE/lib (typelib patched for $INSTALL_LIB)"
+# The typelib ships RAW — shared-library is a bare name resolved via the
+# session's LD_LIBRARY_PATH from plaid-blur.conf, so one artifact works on
+# any machine (host, VMs, auto-updated installs). Set INSTALL_LIB to bake an
+# absolute path instead — only needed when building for a system image
+# without the conf (e.g. PlaidOS).
+if [ -n "$INSTALL_LIB" ]; then
+    sed "s|shared-library=\"libblur-effect-1.0.so.1\"|shared-library=\"$INSTALL_LIB\"|" "$GIR_FILE" > "$WORK/Blur-abs.gir"
+    g-ir-compiler "$WORK/Blur-abs.gir" -o "$SOURCE/lib/Blur-1.0.typelib"
+    echo "Done: bundled into $SOURCE/lib (typelib baked for $INSTALL_LIB)"
+else
+    g-ir-compiler "$GIR_FILE" -o "$SOURCE/lib/Blur-1.0.typelib"
+    echo "Done: bundled into $SOURCE/lib (raw typelib — resolves via session LD_LIBRARY_PATH)"
+fi
 echo "Verify with: file $SOURCE/lib/libblur-effect-1.0.so.1"

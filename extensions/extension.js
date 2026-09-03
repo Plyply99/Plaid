@@ -4289,7 +4289,17 @@ export default class TilingWMExtension extends Extension {
 
             if (!ok) {
                 this._blurModule = null;
-                this._debugLog('bundled blur unavailable, using Shell.BlurEffect');
+                // Two very different causes share this fallback: (a) the
+                // designed pre-relog state — the conf was just (re)written
+                // and the session env is stale (the popup fires; a relog
+                // fixes it); (b) a broken artifact — e.g. a typelib whose
+                // baked shared-library path cannot load on THIS machine
+                // (v51.07 auto-updates clobbered VM installs exactly this
+                // way). Only (a) is fixed by a relog, so say which it is.
+                if (this._plaidSetupNoticeBlur)
+                    log('[plaid] blur: bundled Blur library unavailable — falling back to Shell.BlurEffect (expected before relogin; rounded blur after)');
+                else
+                    log('[plaid] blur: bundled Blur library FAILED to load — falling back to Shell.BlurEffect (frosted glass, no rounded blur). NOT the pre-relog state: a relog will NOT fix this. See the "blur probe" errors above; the typelib/library must resolve for this machine.');
             }
             if (!this._destroyed)
                 this._updateBorders();
