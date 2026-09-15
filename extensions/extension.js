@@ -4271,7 +4271,7 @@ export default class TilingWMExtension extends Extension {
                 if (!stale) {
                     try {
                         const [okRead, cur] = GLib.file_get_contents(confFile);
-                        stale = !okRead || cur.toString() !== wantContent;
+                        stale = !okRead || new TextDecoder().decode(cur) !== wantContent;
                     } catch (_e) {
                         stale = true;
                     }
@@ -5126,7 +5126,7 @@ export default class TilingWMExtension extends Extension {
         const bottomMargin = Math.floor(maxY * 0.70);
 
         const box = new St.BoxLayout({
-            vertical: true,
+            orientation: Clutter.Orientation.VERTICAL,
             style: `background-color: rgba(0, 0, 0, 0.7); border-radius: 12px; padding: 14px 28px; spacing: 4px; margin-top: ${bottomMargin}px;`,
         });
         box.add_child(new St.Label({
@@ -5354,7 +5354,7 @@ export default class TilingWMExtension extends Extension {
         const bottomMargin = Math.floor(maxY * 0.70);
 
         const box = new St.BoxLayout({
-            vertical: true,
+            orientation: Clutter.Orientation.VERTICAL,
             style: `background-color: rgba(0, 0, 0, 0.75); border-radius: 16px; padding: 22px 40px; spacing: 8px; margin-top: ${bottomMargin}px; min-width: 480px;`,
         });
         box.add_child(new St.Label({
@@ -6378,7 +6378,7 @@ export default class TilingWMExtension extends Extension {
             const overlay = new St.BoxLayout({
                 reactive: true,
                 visible: true,
-                vertical: true,
+                orientation: Clutter.Orientation.VERTICAL,
                 x_expand: true,
                 y_expand: true,
             });
@@ -6386,7 +6386,7 @@ export default class TilingWMExtension extends Extension {
             overlay.set_size(stage.width, stage.height);
             overlay.set_position(0, 0);
             const column = new St.BoxLayout({
-                vertical: true,
+                orientation: Clutter.Orientation.VERTICAL,
                 x_align: Clutter.ActorAlign.CENTER,
                 y_align: Clutter.ActorAlign.CENTER,
             });
@@ -8207,7 +8207,7 @@ export default class TilingWMExtension extends Extension {
         const dialog = new ModalDialog();
         this._pickDialog = dialog;
 
-        const content = new St.BoxLayout({ vertical: true, style: 'spacing: 12px;' });
+        const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style: 'spacing: 12px;' });
 
         const header = new St.Label({
             text: _('Add Floating Window'),
