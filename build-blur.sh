@@ -11,7 +11,7 @@
 set -e
 
 REPO="${REPO:-https://github.com/Plyply99/Plaid-rounded-blur}"
-PIN="${PIN:-d3a682a}"
+PIN="${PIN:-31bd7db}"
 WORK="$(mktemp -d)"
 SOURCE="$(cd "$(dirname "$0")" && pwd)/extensions"
 
