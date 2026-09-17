@@ -4,14 +4,14 @@
 # new mutter major version. Requires: mutter-devel, gobject-introspection-devel,
 # glib2-devel, meson, ninja-build, gcc-c++ (Fedora package names).
 #
-# The fork pins a specific commit so rebuilds are reproducible; the mutter
-# API version is a build-arg (18 for GNOME 50, 19 for GNOME 51) and defaults
-# to whatever mutter is installed.
+# The fork pins a specific commit per ABI so rebuilds are reproducible; the
+# mutter API version is a build-arg (18 for GNOME 50, 51 for GNOME 51 — the
+# numbering aligned with the major in 51) and defaults to whatever mutter is
+# installed. Each ABI pins its own source state (see the PIN block below).
 
 set -e
 
 REPO="${REPO:-https://github.com/Plyply99/Plaid-rounded-blur}"
-PIN="${PIN:-31bd7db}"
 WORK="$(mktemp -d)"
 SOURCE="$(cd "$(dirname "$0")" && pwd)/extensions"
 
@@ -19,10 +19,23 @@ SOURCE="$(cd "$(dirname "$0")" && pwd)/extensions"
 MUTTER_API="${MUTTER_API:-}"
 if [ -z "$MUTTER_API" ]; then
     MUTTER_API="$(pkg-config --modversion libmutter-18 2>/dev/null && echo 18 || \
-                   pkg-config --modversion libmutter-19 2>/dev/null && echo 19 || \
+                   pkg-config --modversion libmutter-51 2>/dev/null && echo 51 || \
                    (ls /usr/lib64/libmutter-*.so 2>/dev/null | grep -oE 'mutter-[0-9]+' | head -1 | grep -oE '[0-9]+$' || echo 18))"
 fi
 echo "Building against mutter API: $MUTTER_API"
+
+# Per-ABI pin: the two source states genuinely differ —
+#   18 (GNOME 50): d3a682a — the last source compiling against mutter-18
+#                  (legacy clutter_get_default_backend route)
+#   51 (GNOME 51): 31bd7db — the hard mutter-51 bump (context-accessor route)
+# An explicit PIN= env always wins.
+if [ -z "${PIN:-}" ]; then
+    if [ "$MUTTER_API" = "18" ]; then
+        PIN="d3a682a"
+    else
+        PIN="31bd7db"
+    fi
+fi
 
 trap 'rm -rf "$WORK"' EXIT
 
