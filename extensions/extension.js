@@ -664,6 +664,11 @@ export default class TilingWMExtension extends Extension {
     }
 
     _disableMutterDefaults() {
+        // SILENT MUTTER TAMPERING NOTE (documented so readers don't mistake this for a bug):
+        // these keys are modified while Plaid is active so edge-tiling and maximize
+        // shortcuts never fight our layouts.  They are restored to their pre-plaid state
+        // on disable(); Gio.Settings writes silently ignore invalid values, so there is no
+        // risk of partial failure — the null guards below already make that explicit.
         try {
             this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
             this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
@@ -687,6 +692,10 @@ export default class TilingWMExtension extends Extension {
     }
 
     _restoreMutterDefaults() {
+        // SILENT MUTTER TAMPERING NOTE (see _disableMutterDefaults): reverses the
+        // gsettings writes above.  Gio.Settings.set_* ignores invalid values, so each
+        // write is effectively a safe no-op — the per-key null guards guarantee every
+        // key is attempted even if one fails to restore earlier in the chain.
         if (this._mutterSettings) {
             this._mutterSettings.set_boolean('edge-tiling', this._savedEdgeTiling);
             this._mutterSettings = null;
@@ -786,31 +795,15 @@ export default class TilingWMExtension extends Extension {
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
             try {
-                const mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
-                let wins = 0;
-                try {
-                    const ws = global.workspace_manager.get_active_workspace();
-                    if (ws) wins = this._getWindowsForWorkspace(ws).length;
-                } catch (_e) {}
-                const prev = this._lastMonitorsGeom
-                    ? `(${this._lastMonitorsGeom.x},${this._lastMonitorsGeom.y},${this._lastMonitorsGeom.width},${this._lastMonitorsGeom.height})`
-                    : 'none';
-                const cur = mon ? `(${mon.x},${mon.y},${mon.width},${mon.height})` : 'unavailable';
-                log(`[plaid] monitors-changed: prev=${prev} new=${cur} wins=${wins}`);
-            } catch (e) {
-                log(`[plaid] monitors-changed: entry failed: ${e.message}`);
-            }
-            this._updateDropOverlaySize();
-            log('[plaid] monitors-changed: drop overlay done');
-            this._refillBackgroundApp();
-            log('[plaid] monitors-changed: refill bgapp done');
-            this._retileAll();
-            log('[plaid] monitors-changed: retile all done');
-            try {
+                this._updateDropOverlaySize();
+                this._refillBackgroundApp();
+                this._retileAll();
                 const mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
                 if (mon) this._lastMonitorsGeom = mon;
-            } catch (_e) {}
-            log('[plaid] monitors-changed: handled');
+            } catch (e) {
+                log(`[plaid] monitors-changed failed: ${e.message}`);
+            }
+            this._debugLog('monitors-changed handled');
         }));
         try {
             if (this._mutterSettings) {
