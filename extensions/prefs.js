@@ -64,6 +64,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             _('Show a popup when tiling is toggled on or off'));
         this._addSwitchRow(group, settings, 'release-check-enabled', _('Auto Update'),
             _('Install updates automatically — they load on your next login.'));
+        this._addSwitchRow(group, settings, 'init-overlay-enabled', _('Show Init Overlay'),
+            _('Full-screen “Plaid is initializing…” moment at login. Applies at your next login.'));
 
         this._addSpinRow(group, settings, 'gap', _('Window Gap'),
             _('Gap between windows in pixels'), 0, 50, 1, 5);

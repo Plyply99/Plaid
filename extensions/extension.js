@@ -1071,7 +1071,11 @@ export default class TilingWMExtension extends Extension {
             if (frame.width === 0 || frame.height === 0) return false;
             const centerX = frame.x + frame.width / 2;
             const centerY = frame.y + frame.height / 2;
-            const backend = Clutter.get_default_backend();
+            // mutter-51 removed Clutter.get_default_backend (the 51.β→.rc
+            // window); the context-accessor route works on both 50 and 51.
+            const backend = (typeof Clutter.get_default_backend === 'function')
+                ? Clutter.get_default_backend()
+                : global.stage.get_context().get_backend();
             const seat = backend.get_default_seat();
             seat.warp_pointer(centerX, centerY);
             return true;
@@ -1157,8 +1161,10 @@ export default class TilingWMExtension extends Extension {
     }
 
     _isFixedSizeWindow(win) {
-        const instance = (win.get_wm_class_instance() || '').toLowerCase();
-        if (instance !== 'steamwebhelper') return false;
+        // Non-resizable windows: Mutter refuses atomic move_resize_frame
+        // placements, so tiling them only buys a ~2s retry dance before the
+        // give-up float. A min===max hint is the cheap, reliable signal —
+        // float such windows up front instead.
         const [mw, mh] = win.get_min_size();
         const [xw, xh] = win.get_max_size();
         return mw > 0 && xw > 0 && mw === xw && mh === xh;
@@ -1809,7 +1815,7 @@ export default class TilingWMExtension extends Extension {
                 off++;
         }
         if (off > 0) {
-            log(`[plaid] audit: ws re-tiled (${off}/${tiled.length} windows off-slot)`);
+            this._debugLog(`audit: ws re-tiled (${off}/${tiled.length} windows off-slot)`);
             this._scheduleRetile(ws);
         }
     }
@@ -1904,7 +1910,7 @@ export default class TilingWMExtension extends Extension {
             const f = win.get_frame_rect();
             if (Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16 ||
                 Math.abs(f.width - slot.w) > 16 || Math.abs(f.height - slot.h) > 16) {
-                log(`[plaid] retile verify: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} off-slot frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+                this._debugLog(`retile verify: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} off-slot frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
                 const prev = this._mismatchFrames?.get(win);
                 this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
                 const refusesShrink = f.width > slot.w + 16 || f.height > slot.h + 16;
@@ -1932,14 +1938,14 @@ export default class TilingWMExtension extends Extension {
             if (Math.abs(f.x - s.targetX) > 16 || Math.abs(f.y - s.targetY) > 16 ||
                 Math.abs(f.width - s.targetW) > 16 || Math.abs(f.height - s.targetH) > 16) {
                 if (!pure) {
-                    log(`[plaid] anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                    this._debugLog(`anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
                     try {
                         const mws = win.get_workspace();
                         if (mws) {
                             const tree = this._bspGetTree(mws);
                             const min = this._getWindowMinSize(win);
                             if (tree)
-                                log(`[plaid] diag: tree=${JSON.stringify(tree)} min=${min.w}x${min.h}`);
+                                this._debugLog(`diag: tree=${JSON.stringify(tree)} min=${min.w}x${min.h}`);
                         }
                     } catch (_e) {}
                     const prev = this._mismatchFrames?.get(win);
@@ -1974,7 +1980,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         const n = (this._landingRetries.get(win) || 0) + 1;
-        if (n > 3) {
+        if (n > 3 || this._isFixedSizeWindow(win)) {
             this._landingRetries.delete(win);
             this._landingGivenUp.add(win);
             if (this._mismatchFrames) this._mismatchFrames.delete(win);
@@ -1993,7 +1999,7 @@ export default class TilingWMExtension extends Extension {
             if (this._landingGivenUp && this._landingGivenUp.has(win)) return GLib.SOURCE_REMOVE;
             const ws = win.get_workspace();
             if (ws) {
-                log(`[plaid] anim: landing retry ${n} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized}`);
+                this._debugLog(`anim: landing retry ${n} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized}`);
                 this._retileWorkspace(ws);
             }
             return GLib.SOURCE_REMOVE;
@@ -2014,7 +2020,7 @@ export default class TilingWMExtension extends Extension {
                 for (const ws of pending) this._scheduleRetile(ws);
             } else {
                 this._queuedAnimWorkspaces.add(workspace);
-                log(`[plaid] anim: retile queued while animating (queue=${this._queuedAnimWorkspaces.size})`);
+                this._debugLog(`anim: retile queued while animating (queue=${this._queuedAnimWorkspaces.size})`);
                 return;
             }
         }
@@ -3105,7 +3111,7 @@ export default class TilingWMExtension extends Extension {
         if (!workArea) return;
         const rect = this._singleWindowRect(workArea);
         if (!rect) return;
-        log(`[plaid] maximize: converting to gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
+        this._debugLog(`maximize: converting to gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
         try { win.unmaximize(); } catch (_e) {}
         this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
     }
@@ -5744,6 +5750,11 @@ export default class TilingWMExtension extends Extension {
                 for (const win of ws.list_windows()) {
                     total++;
                     if (!win) continue;
+                    // Minimized windows are invisible: not a hover target, and
+                    // never a reach-through blocker (a hidden DDT / scratchpad
+                    // / Super+H window whose frame overlaps the pointer would
+                    // otherwise null the scan via the popup protection).
+                    if (win.minimized) continue;
                     const r = win.get_frame_rect();
                     if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height) {
                         const pass = this._canPointerFocusWindow(win) && win !== this._backgroundAppWin;
@@ -5898,7 +5909,7 @@ export default class TilingWMExtension extends Extension {
 
     _releaseBackgroundAppReservation() {
         if (this._destroyed || !this._backgroundAppParkingWs) return;
-        log('[plaid] background app: release reservation (no window after 20s)');
+        this._debugLog('background app: release reservation (no window after 20s)');
         try {
             if (this._backgroundAppNWorkspacesId) {
                 global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId);
@@ -5951,11 +5962,11 @@ export default class TilingWMExtension extends Extension {
                 const parking = global.workspace_manager.append_new_workspace(false, this._currentTime());
                 this._backgroundAppParkingWs = parking;
                 this._backgroundAppParkingFront = false;
-                log(`[plaid] background app: reserved trailing parking (index=${this._wsIndex(parking)})`);
+                this._debugLog(`background app: reserved trailing parking (index=${this._wsIndex(parking)})`);
             } else {
                 this._backgroundAppParkingWs = first;
                 this._backgroundAppParkingFront = true;
-                log('[plaid] background app: reserved ws0 parking (index=0)');
+                this._debugLog('background app: reserved ws0 parking (index=0)');
             }
             // Keep the parking alive: the shell's dynamic-workspace check
             // removes empty inactive workspaces — the reservation must be
@@ -5977,12 +5988,12 @@ export default class TilingWMExtension extends Extension {
                         try {
                             const next = global.workspace_manager.get_workspace_by_index(1);
                             if (next) next.activate(this._currentTime());
-                            log(`[plaid] background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
+                            this._debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
                         } catch (_e) {}
                         return GLib.SOURCE_REMOVE;
                     });
                 } else {
-                    log(`[plaid] background app: active already at index=${global.workspace_manager.get_active_workspace_index()}`);
+                    this._debugLog(`background app: active already at index=${global.workspace_manager.get_active_workspace_index()}`);
                 }
             } catch (_e) {}
             this._applyBackgroundAppHiding();
@@ -6359,6 +6370,7 @@ export default class TilingWMExtension extends Extension {
         // only). GNOME Shell re-enables extensions after every unlock; the
         // module-level flag survives that cycle so the splash stays a login
         // brand moment instead of appearing on every screen-lock unlock.
+        if (this._settings && !this._settings.get_boolean('init-overlay-enabled')) return;
         if (_splashShownThisShell) return;
         _splashShownThisShell = true;
         if (this._backgroundAppInitOverlay) return;
@@ -7033,7 +7045,7 @@ export default class TilingWMExtension extends Extension {
             log(`[plaid] background app: park resize failed: ${e.message}`);
         }
         const f = win.get_frame_rect();
-        log(`[plaid] background app: parked ws=${beforeIdx}->${targetIdx} frame=(${f.x},${f.y},${f.width},${f.height})`);
+        this._debugLog(`background app: parked ws=${beforeIdx}->${targetIdx} frame=(${f.x},${f.y},${f.width},${f.height})`);
     }
 
     _applyBackgroundAppHiding() {
@@ -7236,7 +7248,7 @@ export default class TilingWMExtension extends Extension {
             const oldParking = this._backgroundAppParkingWs;
             this._backgroundAppParkingWs =
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
-            log(`[plaid] background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
+            this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)}`);
             try {
                 if (this._backgroundAppWin.get_workspace() !== this._backgroundAppParkingWs)
                     this._backgroundAppWin.change_workspace(this._backgroundAppParkingWs);
@@ -7271,7 +7283,7 @@ export default class TilingWMExtension extends Extension {
                         this._raiseBackgroundAppClone();
                     });
                 }
-                log('[plaid] background app: clone created');
+                this._debugLog('background app: clone created');
             } catch (e) {
                 log(`[plaid] background app clone failed: ${e.message}`);
                 this._backgroundAppClone = null;
@@ -7306,7 +7318,7 @@ export default class TilingWMExtension extends Extension {
                 clone.set_size(mon.width, mon.height);
             } catch (_e) {}
             const src = clone.get_source();
-            log(`[plaid] background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
+            this._debugLog(`background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
                 `source=${src ? `${Math.round(src.width)}x${Math.round(src.height)}` : 'none'}`);
         } catch (e) {
             log(`[plaid] background app: clone position failed: ${e.message}`);
@@ -7452,11 +7464,11 @@ export default class TilingWMExtension extends Extension {
 
     _closeBackgroundAppWindow(win) {
         if (!win) return;
-        log(`[plaid] background app: closing bg window ${win.get_wm_class_instance() || '?'}`);
+        this._debugLog(`background app: closing bg window ${win.get_wm_class_instance() || '?'}`);
         try { win.delete(this._currentTime()); } catch (_e) {}
         const proc = this._backgroundAppProc;
         if (proc) {
-            log('[plaid] background app: bg process force_exit scheduled');
+            this._debugLog('background app: bg process force_exit scheduled');
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                 try { proc.force_exit(); } catch (_e) {}
                 return GLib.SOURCE_REMOVE;
@@ -7468,18 +7480,18 @@ export default class TilingWMExtension extends Extension {
 
     _scratchpadAdd() {
         const win = this._getActiveWindow();
-        log('[plaid] scratch add: invoked');
+        this._debugLog('scratch add: invoked');
         if (!win) {
-            log('[plaid] scratch add: skipped (no active window)');
+            this._debugLog('scratch add: skipped (no active window)');
             return;
         }
         if (this._scratchpadWindows.has(win)) {
-            log('[plaid] scratch add: skipped (already in scratchpad)');
+            this._debugLog('scratch add: skipped (already in scratchpad)');
             return;
         }
         const ws = win.get_workspace();
         if (!ws) {
-            log('[plaid] scratch add: skipped (no workspace)');
+            this._debugLog('scratch add: skipped (no workspace)');
             return;
         }
         try {
@@ -7495,7 +7507,7 @@ export default class TilingWMExtension extends Extension {
             this._scratchpadVisible = false;
             this._retileWorkspace(ws);
             this._showPopup('Added to Scratchpad');
-            log(`[plaid] scratch add: added ${win.get_wm_class() || 'window'}`);
+            this._debugLog(`scratch add: added ${win.get_wm_class() || 'window'}`);
         } catch (e) {
             log(`[plaid] scratch add failed: ${e.message}`);
         }
@@ -7503,10 +7515,10 @@ export default class TilingWMExtension extends Extension {
 
     _scratchpadToggle() {
         if (!this._scratchpadWindows || this._scratchpadWindows.size === 0) {
-            log('[plaid] scratch toggle: empty scratchpad');
+            this._debugLog('scratch toggle: empty scratchpad');
             return;
         }
-        log(`[plaid] scratch toggle: size=${this._scratchpadWindows.size}`);
+        this._debugLog(`scratch toggle: size=${this._scratchpadWindows.size}`);
         if (this._scratchpadVisible) {
             for (const win of this._scratchpadWindows.keys()) {
                 try {

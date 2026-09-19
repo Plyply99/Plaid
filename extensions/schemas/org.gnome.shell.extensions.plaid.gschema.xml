@@ -439,6 +439,12 @@
     </key>
 
     <!-- Branding -->
+    <key name="init-overlay-enabled" type="b">
+      <default>true</default>
+      <summary>Show the Plaid init overlay</summary>
+      <description>Show the full-screen 'Plaid is initializing…' moment at login. Applies at your next login.</description>
+    </key>
+
     <key name="logo" type="s">
       <default>'b-weave'</default>
       <summary>Logo shown during the Plaid login moment</summary>
