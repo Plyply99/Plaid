@@ -147,7 +147,6 @@ set -g _PLAID_TABLE \
     'scratchpad-add|as|Add window to scratchpad' \
     'scratchpad-remove|as|Remove window from scratchpad' \
     'scratchpad-border-color|as|Scratchpad border color' \
-    'logo|s|Logo during the Plaid login moment (a-tartan, b-bsp, b-thread, b-weave, c-weave, all)' \
     'dropdown-terminal-command|s|Drop-down terminal command' \
     'dropdown-terminal-height|i|Drop-down terminal height' \
     'dropdown-terminal|as|Toggle drop-down terminal' \

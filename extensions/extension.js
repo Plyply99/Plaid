@@ -36,11 +36,19 @@ const BLUR_EFFECT_NAME = 'plaid-window-blur';
 // lock/unlock re-enable cycle but resets on the next login.
 let _splashShownThisShell = false;
 
+// Monitor-geometry cache version: bumped by monitors-changed so the blur
+// effect's per-frame _monitorDims scan is served from a module-level cache
+// (bumped only when the geometry actually changes).
+let _monitorDimsVersion = 0;
+let _monitorDimsCache = null;
+
 // True once the extension has been enabled at least once in this shell
 // process. A manual disable/enable (or any re-enable that isn't a fresh
 // login) must register pre-existing windows as a resume — running the
 // new-window choreography on them force-shows other-workspace windows
 // (the actor.visible reveal overrides the workspace manager's hiding).
+// enable() captures the PREVIOUS value before setting it — the resume
+// decision is "was it enabled before this enable()".
 let _enabledThisShell = false;
 
 // Set when the session enters the lock screen. The shell disables extensions
@@ -251,6 +259,7 @@ let CornerMaskEffectClass = null;
 
 export default class TilingWMExtension extends Extension {
     enable() {
+        const wasEnabled = _enabledThisShell;
         _enabledThisShell = true;
         try {
             if (Meta.is_wayland_compositor && !Meta.is_wayland_compositor()) {
@@ -295,6 +304,7 @@ export default class TilingWMExtension extends Extension {
         this._workspaceOrders = new Map();
         this._windowWorkspaces = new Map();
         this._windowWSIndices = new Map();
+        this._slotReassertTimes = new Map();
         this._workspaceLayouts = new Map();
         this._currentDefaultLayout = this._settings.get_string('layout');
         this._lastRetileTimes = new Map();
@@ -388,7 +398,6 @@ export default class TilingWMExtension extends Extension {
         this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
         this._gappedMaxSet = new Set();
-        this._anyGrabOp = null;
         this._borderAnimId = 0;
         this._scratchpadWindows = new Map();
         this._scratchpadVisible = false;
@@ -425,7 +434,8 @@ export default class TilingWMExtension extends Extension {
         this._initWorkspacePill();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
-            this._ensureTerminalSettingsProfile();
+            if (this._settings && this._settings.get_boolean('terminal-profile-integration'))
+                this._ensureTerminalSettingsProfile();
             return GLib.SOURCE_REMOVE;
         });
         this._initBackgroundApp();
@@ -445,7 +455,7 @@ export default class TilingWMExtension extends Extension {
             // must register pre-existing windows as a resume — running the
             // new-window choreography on them force-shows other-workspace
             // windows via the actor.visible reveal.
-            const resumeLike = _lockCycle || _enabledThisShell;
+            const resumeLike = _lockCycle || wasEnabled;
             if (resumeLike && _stashedTiling)
                 this._restoreTilingState();
             const bgCommand = this._settings.get_string('background-app');
@@ -459,7 +469,6 @@ export default class TilingWMExtension extends Extension {
                         if (!resumeLockCycle)
                             this._convertMaximizedToGaps(win);
                     } else if (this._isFloating(win)) {
-                        this._raiseFloatingWindows(ws);
                         this._restoreFloatNaturalRect(win);
                         if (!resumeLockCycle)
                             this._convertMaximizedToGaps(win);
@@ -555,7 +564,7 @@ export default class TilingWMExtension extends Extension {
 
     _wsIndex(ws) {
         if (!ws) return -1;
-        try { return typeof ws.index === 'number' ? ws.index : ws.get_index(); } catch (_e) {}
+        try { return ws.index(); } catch (_e) {}
         try {
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 if (global.workspace_manager.get_workspace_by_index(i) === ws) return i;
@@ -565,6 +574,9 @@ export default class TilingWMExtension extends Extension {
     }
 
     disable() {
+        // X11 early-return path in enable() never initialized the instance
+        // fields — teardown must not touch them.
+        if (!this._settings) return;
         // Lock-screen cycles: the shell switches to the lock mode and disables
         // extensions not whitelisted for it, then re-enables them on unlock.
         // isLocked is already true when this runs, so the module-level flag is
@@ -611,9 +623,13 @@ export default class TilingWMExtension extends Extension {
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
         this._stopLiveResizeLoop();
         this._disconnectGrabBoundaryHooks();
+        // A disable mid-grab would otherwise leave _grabOp set: every retile
+        // early-returns until a grab-op-end that never comes.
+        this._grabOp = null;
+        this._grabWindow = null;
         this._restoreMutterDefaults();
         this._removeAllBorders();
-        this._hideDropPreview();
+        this._destroyDropPreview();
         if (this._dropOverlay) {
             this._dropOverlay.destroy();
             this._dropOverlay = null;
@@ -710,13 +726,13 @@ export default class TilingWMExtension extends Extension {
         this._toggleFloatWindows = null;
         this._floatMaxRects = null;
         this._gappedMaxSet = null;
-        this._anyGrabOp = null;
         this._windowBorders = null;
         this._scratchpadRings = null;
         try { this._removeAllMasks(); } catch (_e) {}
         this._windowMasks = null;
         try { this._removeAllBlurs(); } catch (_e) {}
         this._windowBlurs = null;
+        this._slotReassertTimes = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
         this._windowWSIndices = null;
@@ -829,7 +845,6 @@ export default class TilingWMExtension extends Extension {
                 const doRaise = () => {
                     if (this._destroyed) return;
                     const ws = win.get_workspace();
-                    if (ws) this._raiseFloatingWindows(ws);
                 };
                 const doRestore = () => {
                     if (this._destroyed) return;
@@ -881,6 +896,7 @@ export default class TilingWMExtension extends Extension {
             }
         }));
         this._addSignal(Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => {
+            _monitorDimsVersion++;
             try {
                 this._updateDropOverlaySize();
                 this._refillBackgroundApp();
@@ -946,6 +962,11 @@ export default class TilingWMExtension extends Extension {
                 if (this._settings.get_boolean('workspace-popup'))
                     this._showWorkspacePopup(ws);
             } catch (_e) {}
+            // Re-assert float layering + refresh Flair after the switch
+            // settles (the restacked signal can fire before the reveal
+            // ordering is final).
+            try { this._reassertFloatingTransients(); } catch (_e) {}
+            try { this._updateBorders(); } catch (_e) {}
             try { this._auditWorkspaceLandings(ws); } catch (_e) {}
             const windows = this._getWindowsForWorkspace(ws);
             if (windows.length === 0) return;
@@ -986,17 +1007,14 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(this._settings, this._settings.connect('changed::single-gap-right', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::enabled', () => this._onTilingEnabledChanged()));
         this._addSignal(this._settings, this._settings.connect('changed::layout', () => {
-            const oldDefault = this._currentDefaultLayout;
+            // The new default must apply to every workspace that has no
+            // explicit override — _getWorkspaceLayout already resolves
+            // live → persisted → default, so workspaces without a live
+            // entry fall through to the new default automatically.
             this._currentDefaultLayout = this._settings.get_string('layout');
-            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
-                const ws = global.workspace_manager.get_workspace_by_index(i);
-                if (!this._workspaceLayouts.has(i))
-                    this._workspaceLayouts.set(i, oldDefault);
-            }
             const activeWs = global.workspace_manager.get_active_workspace();
             if (activeWs)
-                this._workspaceLayouts.set(this._wsIndex(activeWs), this._currentDefaultLayout);
-            this._retileWorkspace(activeWs);
+                this._retileWorkspace(activeWs);
             this._scheduleSaveLayouts();
         }));
         this._addSignal(this._settings, this._settings.connect('changed::dwindle-ratio', () => this._retileAll()));
@@ -1199,7 +1217,7 @@ export default class TilingWMExtension extends Extension {
     _isFloating(win) {
         if (this._toggleFloatWindows && this._toggleFloatWindows.has(win)) return true;
         const wms = win.get_wm_class_instance();
-        if (wms && this._floatingClasses.has(wms.toLowerCase())) return true;
+        if (wms && this._floatingClasses && this._floatingClasses.has(wms.toLowerCase())) return true;
         const title = win.get_title();
         if (this._floatingTitleMatches(title)) return true;
         // Process-based fallback: at window-created the wm-class may not be
@@ -1434,6 +1452,10 @@ export default class TilingWMExtension extends Extension {
                     if (effect && effect.setOpacityUniform)
                         effect.setOpacityUniform(1);
                 } catch (_e) {}
+                // The blur/flair skipped during the pending-warp window must
+                // attach once the reveal fires.
+                this._scheduleBorders();
+                this._updateBorders();
                 return GLib.SOURCE_REMOVE;
             });
         }
@@ -1516,6 +1538,17 @@ export default class TilingWMExtension extends Extension {
         this._windowWorkspaces.delete(win);
         this._windowWSIndices.delete(win);
         this._toggleFloatWindows.delete(win);
+        // Prune the landing/choreography maps so dead windows (and the
+        // actors they hold) don't linger until disable.
+        if (this._landingRetries) this._landingRetries.delete(win);
+        if (this._landingGivenUp) this._landingGivenUp.delete(win);
+        if (this._mismatchFrames) this._mismatchFrames.delete(win);
+        if (this._slotReassertTimes) this._slotReassertTimes.delete(win);
+        if (this._pendingWarp) this._pendingWarp.delete(win);
+        if (win._plaidInvisibleTimer) {
+            try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+            win._plaidInvisibleTimer = 0;
+        }
         if (this._maximizeToggleRects) this._maximizeToggleRects.delete(win);
         this._savedRects.delete(win);
         this._scratchpadWindows.delete(win);
@@ -1659,12 +1692,23 @@ export default class TilingWMExtension extends Extension {
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 const order = ws.list_windows();
-                const tiled = order.filter(w => !this._isFloating(w));
+                // The tiled stack = windows Plaid actually manages AND that
+                // are not floating. Everything else — float-listed windows,
+                // transients, and UNMANAGED windows (non-NORMAL types like
+                // Steam's "Update News" child that the tiler never claims)
+                // — is naturally floating and must be re-raised above the
+                // tiles on restacks/workspace changes. The old "not
+                // _isFloating" bucket lumped the unmanaged windows into the
+                // tiles, so they sank below them.
+                const tiled = order.filter(w => this._windowWorkspaces.has(w) && !this._isFloating(w));
                 // Floats: reposition each float's actor above the topmost
                 // tiled actor — pure compositor layering, no meta above state.
+                // Transients are included: a floating transient of a TILED
+                // parent (e.g. a floating Steam child window) would otherwise
+                // sink below the tiles on restacks/workspace changes (loop 2
+                // only covers transients of floating parents).
                 for (const win of order) {
-                    if (tiled.includes(win) || win === this._backgroundAppWin ||
-                        win.get_transient_for()) continue;
+                    if (tiled.includes(win) || win === this._backgroundAppWin) continue;
                     const a = win.get_compositor_private();
                     if (!a || a.get_parent() !== global.window_group) continue;
                     let topTiledIdx = -1;
@@ -1700,12 +1744,6 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
     }
 
-    _raiseFloatingWindows(workspace) {
-        // Own-layer approach: the meta stack is left natural (no above
-        // state — it breaks Qt popup surfaces). Visual layering is
-        // maintained by the restacked-driven actor re-assert.
-    }
-
     _retileAll() {
         if (!this._settings || this._destroyed) return;
         for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
@@ -1723,14 +1761,12 @@ export default class TilingWMExtension extends Extension {
     _doRetileWorkspace(workspace) {
         if (!this._settings) return;
         if (!this._settings.get_boolean('enabled')) {
-            this._raiseFloatingWindows(workspace);
             return;
         }
         if (this._grabOp) return;
         const tiledWindows = this._getWindowsForWorkspace(workspace)
             .filter(w => !this._isFloating(w));
         if (tiledWindows.length === 0) {
-            this._raiseFloatingWindows(workspace);
             return;
         }
 
@@ -1753,7 +1789,6 @@ export default class TilingWMExtension extends Extension {
             log(`[plaid] _doUpdateBorders after retile failed: ${e.message}`);
         }
         try { this._verifyRetileLandings(workspace); } catch (_e) {}
-        this._raiseFloatingWindows(workspace);
         for (const win of tiledWindows)
             this._newWindowSet.delete(win);
         // Retiles are the common denominator for layout/ratio mutations —
@@ -1765,9 +1800,12 @@ export default class TilingWMExtension extends Extension {
     // --- Animation ---
 
     _getAnimationTime() {
+        // Do NOT gate on St.Settings.enable_animations — it can read false
+        // even when the gsettings default is true (observed on llvmpipe
+        // VMs), silently disabling every placement animation and the spawn
+        // hide choreography. slow_down_factor is the accessibility lever.
         const stSettings = St.Settings.get();
-        if (!stSettings.enable_animations) return 0;
-        return 0.1 * stSettings.slow_down_factor;
+        return 0.1 * Math.max(0.1, stSettings.slow_down_factor);
     }
 
     _cancelAnimation() {
@@ -1811,9 +1849,17 @@ export default class TilingWMExtension extends Extension {
                 const actor = s.win.get_compositor_private();
                 if (actor) {
                     actor.visible = true;
-                    actor.set_opacity(255);
+                    // actor opacity is still 0 from the spawn hide — the
+                    // ease below animates 0→255.
                 }
             } catch (_e) {}
+            // The window has landed — cancel the 2.5s backstop reveal so it
+            // can't force-reveal a window that later moves to an inactive
+            // workspace.
+            if (s.win._plaidInvisibleTimer) {
+                try { GLib.source_remove(s.win._plaidInvisibleTimer); } catch (_e) {}
+                s.win._plaidInvisibleTimer = 0;
+            }
             this._scheduleBorders();
             let faded = false;
             const finishFade = () => {
@@ -2052,6 +2098,16 @@ export default class TilingWMExtension extends Extension {
                 if (this._pendingWarp && this._pendingWarp.has(win)) {
                     this._pendingWarp.delete(win);
                     this._moveCursorToWindow(win);
+                    // The window has landed — cancel the 2.5s backstop reveal
+                    // (it must not force-reveal a window that later moves to
+                    // an inactive workspace) and re-attach flair that the
+                    // pending-warp state skipped.
+                    if (win._plaidInvisibleTimer) {
+                        try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+                        win._plaidInvisibleTimer = 0;
+                    }
+                    this._scheduleBorders();
+                    this._updateBorders();
                 }
                 return true;
             }
@@ -2139,7 +2195,6 @@ export default class TilingWMExtension extends Extension {
             this._animTargets = null;
             for (const win of tiledWindows) this._newWindowSet.delete(win);
             this._scheduleBorders();
-            this._raiseFloatingWindows(workspace);
             return;
         }
 
@@ -2171,7 +2226,6 @@ export default class TilingWMExtension extends Extension {
                 this._animStates = null;
                 this._scheduleSaveLayouts();
                 this._scheduleBorders();
-                this._raiseFloatingWindows(workspace);
                 if (this._queuedAnimWorkspaces.size > 0) {
                     const pending = [...this._queuedAnimWorkspaces];
                     this._queuedAnimWorkspaces.clear();
@@ -3121,10 +3175,11 @@ export default class TilingWMExtension extends Extension {
                     tree = this._bspRemove(tree, tw);
                 }
             }
+            let currentWins = this._bspCollectWindows(tree);
             for (const win of tiledWindows) {
-                const currentWins = this._bspCollectWindows(tree);
                 if (!currentWins.includes(win)) {
                     tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
+                    currentWins = this._bspCollectWindows(tree);
                 }
             }
             this._bspTrees.set(workspace, tree);
@@ -3301,7 +3356,6 @@ export default class TilingWMExtension extends Extension {
                 this._bspTrees.set(ws, this._bspRemove(tree, win));
                 this._retileWorkspace(ws);
             }
-            this._raiseFloatingWindows(ws);
         }
         this._restoreFloatNaturalRect(win);
         // Reveal: the window can be pending-hidden from the tiled
@@ -3346,7 +3400,6 @@ export default class TilingWMExtension extends Extension {
             const ws = global.workspace_manager.get_workspace_by_index(i);
             for (const win of ws.list_windows()) {
                 if (this._isFloating(win)) {
-                    this._raiseFloatingWindows(ws);
                     this._restoreFloatNaturalRect(win);
                 }
             }
@@ -3361,7 +3414,6 @@ export default class TilingWMExtension extends Extension {
 
     _doUpdateBorders() {
         if (!this._settings) return;
-        try { this._removeAllBorders(); } catch (_e) {}
 
         // Flair (borders, rounded corners, blur) renders from its own
         // settings and stays even when tiling is toggled off.
@@ -3373,6 +3425,14 @@ export default class TilingWMExtension extends Extension {
         const bordersEnabled = this._settings.get_boolean('borders-enabled');
         const blurEnabled = this._settings.get_boolean('window-blur');
 
+        // Only sweep ALL borders when the feature turned off — otherwise
+        // _ensureWindowBorder's per-window signature gate skips unchanged
+        // windows (destroy/recreate churn on every focus change is the
+        // biggest steady-state cost under hover-focus).
+        if (!bordersEnabled) {
+            try { this._removeAllBorders(); } catch (_e) {}
+        }
+
         const ws = global.workspace_manager.get_active_workspace();
         if (!ws) return;
 
@@ -3381,6 +3441,7 @@ export default class TilingWMExtension extends Extension {
             if (win.is_fullscreen()) {
                 this._removeMask(win);
                 this._removeBlur(win);
+                this._removeBorder(win);
                 continue;
             }
             if (this._grabOp && win === this._getActiveWindow()) continue;
@@ -3401,8 +3462,7 @@ export default class TilingWMExtension extends Extension {
             }
 
             const isFocused = win === focusWindow;
-            if (bordersEnabled && this._ensureWindowBorder(win, actor, frame, isFocused))
-                continue;
+            if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
         }
 
         // Floating windows are not in _windowWSIndices (they skip _addWindow),
@@ -3426,27 +3486,19 @@ export default class TilingWMExtension extends Extension {
             this._settings.get_int('border-animation-speed') > 0)
             this._startBorderAnimation();
 
-        if (!roundedCorners || borderRadius <= 0) {
-            try { this._removeAllMasks(); } catch (_e) {}
-        }
+        if (!roundedCorners || borderRadius <= 0)
+            this._removeAllMasks();
 
-        if (!blurEnabled) {
-            try { this._removeAllBlurs(); } catch (_e) {}
-        }
+        if (!blurEnabled)
+            this._removeAllBlurs();
 
         if (this._dropdownWin)
             this._applyDropdownEffects(this._dropdownWin);
 
-        this._raiseFloatingWindows(ws);
         this._syncBorderAnimation();
     }
 
     _ensureWindowBorder(win, actor, frame, isFocused) {
-        const old = this._windowBorders.get(win);
-        if (old) {
-            try { old.destroy(); } catch (_e) {}
-            this._windowBorders.delete(win);
-        }
         if (!frame || frame.width === 0 || frame.height === 0) return false;
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
@@ -3464,17 +3516,40 @@ export default class TilingWMExtension extends Extension {
 
         if (borderWidth === 0) return false;
 
+        // Frame-level border on the window ACTOR (v51.11 mechanism): the
+        // actor is the frame, and the border appended last always paints
+        // above the frame and the client surface. The client child (X11
+        // surfaces) is REPLACED on workspace round-trips for some clients
+        // (Steam's steamwebhelper) — attaching there nested borders inside
+        // borders, grew them every pass, and sank the border below the
+        // frame. The mask cuts the window's corners; the border keeps its
+        // square corners (the pre-cleanup accepted look).
         const buffer = win.get_buffer_rect();
-        const offsetX = frame.x - buffer.x;
-        const offsetY = frame.y - buffer.y;
+        const borderX = (frame.x - buffer.x) - borderWidth;
+        const borderY = (frame.y - buffer.y) - borderWidth;
+        const borderW = frame.width + borderWidth * 2;
+        const borderH = frame.height + borderWidth * 2;
+
+        const old = this._windowBorders.get(win);
+        // Scratch membership is part of the identity: the outer ring lives
+        // on the create path, so entering/leaving the scratchpad must flip
+        // the signature.
+        const scratch = !!(this._scratchpadWindows && this._scratchpadWindows.has(win));
+        const sig = [borderX, borderY, borderW, borderH, borderWidth,
+            borderRadius, gradient ? 1 : 0, gradientDir, color1, color2, scratch ? 1 : 0].join('|');
+        if (old) {
+            if (old._plaidSig === sig) return true;
+            try { old.destroy(); } catch (_e) {}
+            this._windowBorders.delete(win);
+        }
 
         let border;
         if (gradient) {
             border = new St.DrawingArea({
-                x: offsetX - borderWidth,
-                y: offsetY - borderWidth,
-                width: frame.width + borderWidth * 2,
-                height: frame.height + borderWidth * 2,
+                x: borderX,
+                y: borderY,
+                width: borderW,
+                height: borderH,
                 reactive: false,
                 visible: true,
             });
@@ -3489,16 +3564,17 @@ export default class TilingWMExtension extends Extension {
         } else {
             border = new St.Widget({
                 name: 'tiling-border',
-                x: offsetX - borderWidth,
-                y: offsetY - borderWidth,
-                width: frame.width + borderWidth * 2,
-                height: frame.height + borderWidth * 2,
+                x: borderX,
+                y: borderY,
+                width: borderW,
+                height: borderH,
                 style: `border: ${borderWidth}px solid ${color1}; border-radius: ${borderRadius}px; box-sizing: border-box;`,
                 reactive: false,
                 visible: true,
             });
         }
         actor.add_child(border);
+        border._plaidSig = sig;
         this._windowBorders.set(win, border);
 
         // Scratchpad windows get a Hyprland-style outer yellow ring: the
@@ -3511,16 +3587,17 @@ export default class TilingWMExtension extends Extension {
                     (this._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
                 const ring = new St.Widget({
                     name: 'tiling-border',
-                    x: offsetX - borderWidth - ringWidth,
-                    y: offsetY - borderWidth - ringWidth,
-                    width: frame.width + (borderWidth + ringWidth) * 2,
-                    height: frame.height + (borderWidth + ringWidth) * 2,
+                    x: borderX - ringWidth,
+                    y: borderY - ringWidth,
+                    width: borderW + ringWidth * 2,
+                    height: borderH + ringWidth * 2,
                     style: `border: ${ringWidth}px solid ${scratchColor}; ` +
                         `border-radius: ${borderRadius + borderWidth + ringWidth}px; box-sizing: border-box;`,
                     reactive: false,
                     visible: true,
                 });
                 actor.add_child(ring);
+                ring._plaidRing = true;
                 const old = this._scratchpadRings.get(win);
                 if (old) {
                     try { old.destroy(); } catch (_e) {}
@@ -3790,11 +3867,22 @@ export default class TilingWMExtension extends Extension {
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
             const buffer = win.get_buffer_rect();
-            const offsetX = frame.x - buffer.x;
-            const offsetY = frame.y - buffer.y;
             const bw = win === focusWindow ? activeWidth : inactiveWidth;
-            border.set_position(offsetX - bw, offsetY - bw);
-            border.set_size(frame.width + bw * 2, frame.height + bw * 2);
+            const bx = (frame.x - buffer.x) - bw;
+            const by = (frame.y - buffer.y) - bw;
+            const bwSize = frame.width + bw * 2;
+            const bhSize = frame.height + bw * 2;
+            border.set_position(bx, by);
+            border.set_size(bwSize, bhSize);
+            if (border._plaidBorder) {
+                // Gradient path: the cairo stroke width lives in _plaidBorder
+                // — keep it in sync with the live width and rebuild the
+                // cached segments for the new size.
+                if (border._plaidBorder.width !== bw) {
+                    border._plaidBorder.width = bw;
+                    border._plaidSegKey = '';
+                }
+            }
             if (border.queue_repaint) {
                 try { border.queue_redraw(); } catch (_e) {}
             }
@@ -3833,8 +3921,18 @@ export default class TilingWMExtension extends Extension {
     _unwrapMaskActor(actor, win) {
         if (!actor) return null;
         if (win.get_client_type() === Meta.WindowClientType.X11) {
-            const firstChild = actor.get_first_child();
-            return firstChild || null;
+            // The client surface is the first child that is NOT a Plaid
+            // widget — our border/ring widgets can occupy the first-child
+            // slot (they were attached to the actor while the client
+            // surface was absent), and treating them as the mask target
+            // nested borders inside borders and grew them every pass.
+            let child = actor.get_first_child();
+            while (child) {
+                if (!child._plaidSig && !child._plaidBorder && !child._plaidRing)
+                    return child;
+                child = child.get_next_sibling();
+            }
+            return null;
         }
         return actor;
     }
@@ -3969,7 +4067,7 @@ export default class TilingWMExtension extends Extension {
                         } catch (_e) {
                             return;
                         }
-                    this.queue_repaint();
+                        this.queue_repaint();
                     }
 
                 });
@@ -4054,12 +4152,28 @@ export default class TilingWMExtension extends Extension {
             } catch (_e) {}
         };
 
+        effect.setOpacityUniform = (v) => {
+            try {
+                effect.set_uniform_float('opacity', 1, [v]);
+                if (effect.invalidate)
+                    effect.invalidate();
+                try { global.stage.queue_redraw(); } catch (_e) {}
+            } catch (_e) {}
+            };
+
         return effect;
     }
 
     _ensureWindowMask(win, actor, radius) {
         if (!this._windowMasks || !actor || !actor.add_effect_with_name) return;
         const target = this._unwrapMaskActor(actor, win);
+        // v51.11 mechanism: the mask attaches to the X11 client child ONCE.
+        // The child can be REPLACED on workspace round-trips (Steam's
+        // steamwebhelper) — the mask is then lost with the old child and the
+        // window degrades to square corners, which is benign. Re-attaching
+        // to the REPLACED child was NOT benign: it masked a surface whose
+        // offscreen capture renders empty (foreign texture), making the
+        // window's content invisible. Never re-target.
         if (!target || !target.add_effect_with_name) return;
         let effect = this._windowMasks.get(win);
         if (effect && effect._radius !== radius) {
@@ -4159,6 +4273,12 @@ export default class TilingWMExtension extends Extension {
         const bh = frame.height - buffer.height;
 
         let borderWidth = 0;
+
+        // Clamp the SDF radius to half the window — a radius wider than the
+        // window inverts the rounded-rect SDF (centerLeft > centerRight).
+        radius = Math.max(0, Math.min(radius,
+            Math.floor(Math.max(1, actor.width) / 2),
+            Math.floor(Math.max(1, actor.height) / 2)));
         if (this._settings) {
             const isFocused = win === global.display.focus_window;
             const widthKey = isFocused ? 'active-border-width' : 'inactive-border-width';
@@ -4365,7 +4485,6 @@ export default class TilingWMExtension extends Extension {
                         this._fatalFail = false;
                         this._paintFailLogged = false;
                         this._paintFailCount = 0;
-                        this._fbProbeLogged = false;
                         this._blitFailLogged = false;
                         // FBO rebuild throttle: GL textures are allocated
                         // ONLY here (bounded to ~10 rebuilds/sec), so GJS GC
@@ -4436,87 +4555,53 @@ export default class TilingWMExtension extends Extension {
                     }
 
                     _probeAndBuild(paintContext) {
-                        const logStep = (name, ok, msg = '') => {
-                            log(`[plaid] spike: ${name} ${ok ? 'OK' : 'FAILED'}${msg ? ': ' + msg : ''}`);
-                        };
                         try {
                             const stage = global.stage;
                             const ctx = stage.get_context();
-                            logStep('stage.get_context', !!ctx);
                             const backend = ctx.get_backend();
-                            logStep('context.get_backend', !!backend);
                             this._coglCtx = backend.get_cogl_context();
-                            logStep('backend.get_cogl_context', !!this._coglCtx);
                             this._basePipeline = Cogl.Pipeline.new(this._coglCtx);
-                            logStep('Cogl.Pipeline.new', !!this._basePipeline);
                             this._basePipeline.set_layer_null_texture(0);
                             this._brightPipeline = Cogl.Pipeline.new(this._coglCtx);
                             this._brightPipeline.set_layer_null_texture(0);
                             const snippet = Cogl.Snippet.new(SNIPPET_HOOK_FRAGMENT, BLUR_SNIPPET_DECLARATIONS, BLUR_SNIPPET_CODE);
-                            logStep('Cogl.Snippet.new', !!snippet);
                             this._brightPipeline.add_snippet(snippet);
                             this._brightUniform = this._brightPipeline.get_uniform_location('brightness');
                             this._boundsUniform = this._brightPipeline.get_uniform_location('bounds');
                             this._radiusUniform = this._brightPipeline.get_uniform_location('clipRadius');
                             this._stepUniform = this._brightPipeline.get_uniform_location('pixelStep');
-                            logStep('uniform locations',
-                                this._brightUniform >= 0 && this._boundsUniform >= 0 &&
-                                this._radiusUniform >= 0 && this._stepUniform >= 0);
                             this._brightPipeline.set_uniform_float(this._brightUniform, 1, 1, [1]);
-                            logStep('pipeline.set_uniform_float', true);
                             this._hPipeline = Cogl.Pipeline.new(this._coglCtx);
                             this._hPipeline.set_layer_null_texture(0);
                             this._vPipeline = Cogl.Pipeline.new(this._coglCtx);
                             this._vPipeline.set_layer_null_texture(0);
                             const kernelSnippet = Cogl.Snippet.new(BLUR_LOOKUP_HOOK, BLUR_KERNEL_DECLARATIONS, null);
-                            logStep('Cogl.Snippet.new (TEXTURE_LOOKUP)', !!kernelSnippet);
-                            try {
-                                kernelSnippet.set_replace(BLUR_KERNEL_CODE);
-                                logStep('snippet.set_replace', true);
-                            } catch (e) {
-                                logStep('snippet.set_replace', false, e.message);
-                                throw e;
-                            }
-                            try {
-                                this._hPipeline.add_layer_snippet(0, kernelSnippet);
-                                this._vPipeline.add_layer_snippet(0, kernelSnippet);
-                                logStep('pipeline.add_layer_snippet', true);
-                            } catch (e) {
-                                logStep('pipeline.add_layer_snippet', false, e.message);
-                                throw e;
-                            }
+                            kernelSnippet.set_replace(BLUR_KERNEL_CODE);
+                            this._hPipeline.add_layer_snippet(0, kernelSnippet);
+                            this._vPipeline.add_layer_snippet(0, kernelSnippet);
                             this._hSigmaUniform = this._hPipeline.get_uniform_location('sigma');
                             this._hStepUniform = this._hPipeline.get_uniform_location('pixel_step');
                             this._hDirUniform = this._hPipeline.get_uniform_location('direction');
                             this._vSigmaUniform = this._vPipeline.get_uniform_location('sigma');
                             this._vStepUniform = this._vPipeline.get_uniform_location('pixel_step');
                             this._vDirUniform = this._vPipeline.get_uniform_location('direction');
-                            logStep('kernel uniform locations',
-                                this._hSigmaUniform >= 0 && this._hStepUniform >= 0 && this._hDirUniform >= 0 &&
-                                this._vSigmaUniform >= 0 && this._vStepUniform >= 0 && this._vDirUniform >= 0);
                             this._hPipeline.set_uniform_float(this._hSigmaUniform, 1, 1, [3]);
                             this._hPipeline.set_uniform_float(this._hStepUniform, 1, 1, [0.01]);
                             this._hPipeline.set_uniform_float(this._hDirUniform, 2, 1, [1, 0]);
-                            logStep('kernel set_uniform_float', true);
                             const actor = this.get_actor();
                             const { monW, monH } = this._monitorDims();
                             const ds = this._downscaleFor(monW, monH, this._radius);
                             this._rebuildTargets(ds);
                             if (this._fatalFail) return;
                             const fb = paintContext.get_framebuffer();
-                            logStep('paintContext.get_framebuffer', !!fb);
                             const blitNode = new Clutter.BlitNode(fb);
-                            logStep('Clutter.BlitNode', !!blitNode);
                             const layerNode = new Clutter.LayerNode(this._bgFb, this._basePipeline);
-                            logStep('Clutter.LayerNode', !!layerNode);
                             const box = new Clutter.ActorBox({ x1: 0, y1: 0, x2: 10, y2: 10 });
                             blitNode.add_blit_rectangle(0, 0, 0, 0, 10, 10);
                             layerNode.add_texture_rectangle(box, 0, 0, 0.5, 0.5);
-                            logStep('add_texture_rectangle', true);
-                            log('[plaid] spike: CHAIN READY');
                             this._ready = true;
                         } catch (e) {
-                            log(`[plaid] spike: chain build FAILED: ${e.message}`);
+                            log(`[plaid] blur: GJS effect build failed: ${e.message}`);
                             this._fatalFail = true;
                         }
                     }
@@ -4529,7 +4614,7 @@ export default class TilingWMExtension extends Extension {
                             this._brightFb, this._hTex, this._hFb, this._vTex, this._vFb]) {
                             if (r) this._retired.push(r);
                         }
-                        while (this._retired.length > 12)
+                        while (this._retired.length > 3)
                             this._retired.shift();
                         this._bgTex = null;
                         this._bgFb = null;
@@ -4539,11 +4624,6 @@ export default class TilingWMExtension extends Extension {
                         this._hFb = null;
                         this._vTex = null;
                         this._vFb = null;
-                    }
-
-                    _probeFb(name, ok, msg = '') {
-                        if (this._fbProbeLogged) return;
-                        log(`[plaid] spike: ${name} ${ok ? 'OK' : 'FAILED'}${msg ? ': ' + msg : ''}`);
                     }
 
                     _setupFbo(fb, tex, pipeline, fbW, fbH) {
@@ -4556,16 +4636,12 @@ export default class TilingWMExtension extends Extension {
                         // pixel space to NDC with the translate+scale matrix.
                         try {
                             fb.allocate();
-                            this._probeFb('framebuffer.allocate', true);
                         } catch (e) {
-                            this._probeFb('framebuffer.allocate', false, e.message);
                             throw e;
                         }
                         try {
                             pipeline.set_layer_texture(0, tex);
-                            this._probeFb('pipeline.set_layer_texture', true);
                         } catch (e) {
-                            this._probeFb('pipeline.set_layer_texture', false, e.message);
                             throw e;
                         }
                         try {
@@ -4573,9 +4649,8 @@ export default class TilingWMExtension extends Extension {
                                 Cogl.PipelineFilter.LINEAR, Cogl.PipelineFilter.LINEAR);
                             pipeline.set_layer_wrap_mode(0,
                                 Cogl.PipelineWrapMode.CLAMP_TO_EDGE);
-                            this._probeFb('pipeline filters/wrap', true);
                         } catch (e) {
-                            this._probeFb('pipeline filters/wrap', false, e.message);
+                            log(`[plaid] blur: FBO filters/wrap failed: ${e.message}`);
                         }
                         try {
                             const m = new graphene.Matrix();
@@ -4586,13 +4661,18 @@ export default class TilingWMExtension extends Extension {
                             }));
                             m.scale(2 / fbW, -2 / fbH, 1);
                             fb.set_projection_matrix(m);
-                            this._probeFb('framebuffer.set_projection_matrix', true);
                         } catch (e) {
-                            this._probeFb('framebuffer.set_projection_matrix', false, e.message);
+                            log(`[plaid] blur: FBO projection failed: ${e.message}`);
                         }
                     }
 
                     _monitorDims() {
+                        // PHYSICAL pixel dims (logical geometry × UI scale) —
+                        // the stage framebuffer and the blit operate in
+                        // physical pixels; the FBOs must match. Cached at
+                        // module level; invalidated by monitors-changed.
+                        if (_monitorDimsCache && _monitorDimsCache.v === _monitorDimsVersion)
+                            return _monitorDimsCache.d;
                         let monW = 0, monH = 0;
                         try {
                             const n = global.display.get_n_monitors();
@@ -4602,7 +4682,10 @@ export default class TilingWMExtension extends Extension {
                                 monH = Math.max(monH, g.height);
                             }
                         } catch (_e) {}
-                        return { monW: Math.max(monW, 640), monH: Math.max(monH, 480) };
+                        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+                        const d = { monW: Math.max(Math.round(monW * scale), 640), monH: Math.max(Math.round(monH * scale), 480) };
+                        _monitorDimsCache = { v: _monitorDimsVersion, d };
+                        return d;
                     }
 
                     _rebuildTargets(ds) {
@@ -4622,18 +4705,13 @@ export default class TilingWMExtension extends Extension {
                             this._hFb = Cogl.Offscreen.new_with_texture(this._hTex);
                             this._vTex = Cogl.Texture2D.new_with_size(this._coglCtx, bgW, bgH);
                             this._vFb = Cogl.Offscreen.new_with_texture(this._vTex);
-                            this._probeFb('Texture2D/Offscreen', !!(this._bgFb && this._brightFb && this._hFb && this._vFb));
                             this._setupFbo(this._bgFb, this._bgTex, this._basePipeline, monW, monH);
                             this._setupFbo(this._brightFb, this._brightTex, this._brightPipeline, bgW, bgH);
                             this._setupFbo(this._hFb, this._hTex, this._hPipeline, bgW, bgH);
                             this._setupFbo(this._vFb, this._vTex, this._vPipeline, bgW, bgH);
                             this._monitorKey = `${monW}x${monH}:${ds}`;
-                            if (!this._fbProbeLogged) {
-                                this._fbProbeLogged = true;
-                                log('[plaid] spike: FBO CHAIN READY');
-                            }
                         } catch (e) {
-                            log(`[plaid] spike: FBO build FAILED: ${e.message}`);
+                            log(`[plaid] blur: FBO build failed: ${e.message}`);
                             this._fatalFail = true;
                         }
                     }
@@ -4653,7 +4731,7 @@ export default class TilingWMExtension extends Extension {
                         }
                     }
 
-                    _buildChain(w, h, ds, px, py, paintContext) {
+                    _buildChain(w, h, ds, px, py, physW, physH, paintContext) {
                         // Builds the per-frame render chain. Every node refs
                         // only CACHED FBOs/pipelines — nothing here allocates
                         // a GL texture (the shell can allocate blur textures
@@ -4661,6 +4739,14 @@ export default class TilingWMExtension extends Extension {
                         // GC cannot, so per-frame allocation is forbidden).
                         // The layer node COPIES the pipeline at creation, so
                         // uniforms must be set BEFORE the nodes are created.
+                        //
+                        // Coordinate spaces: the blit reads the STAGE
+                        // framebuffer in PHYSICAL view-relative pixels (px,
+                        // py, physW, physH — origin and size both scaled);
+                        // every composite rect is in logical local coords
+                        // (positioned by the actor transform); the SDF maps
+                        // texcoords (0..physW/monW) back to logical window
+                        // pixels via pixelStep = scale/monW.
                         const bw = w / ds;
                         const bh = h / ds;
                         if (!this._bgFb || !this._brightFb || !this._hFb || !this._vFb) return null;
@@ -4669,38 +4755,41 @@ export default class TilingWMExtension extends Extension {
                         const monH = this._bgTex.get_height();
                         const dbw = monW / ds;
                         const dbh = monH / ds;
+                        const scale = physW / w;
                         this._brightPipeline.set_uniform_float(this._brightUniform, 1, 1, [this._brightness]);
                         this._brightPipeline.set_uniform_float(this._boundsUniform, 4, 1, [1, 1, w, h]);
-                        this._brightPipeline.set_uniform_float(this._radiusUniform, 1, 1, [this._cornerRadius]);
-                        // The SDF maps texcoords (0..w/monW) to window pixels:
-                        // p = tc / pixelStep must span 0..w → pixelStep = 1/monW.
-                        this._brightPipeline.set_uniform_float(this._stepUniform, 2, 1, [1 / monW, 1 / monH]);
+                        const safeCorner = Math.max(0, Math.min(this._cornerRadius,
+                            Math.floor(Math.max(1, w) / 2), Math.floor(Math.max(1, h) / 2)));
+                        this._brightPipeline.set_uniform_float(this._radiusUniform, 1, 1, [safeCorner]);
+                        this._brightPipeline.set_uniform_float(this._stepUniform, 2, 1, [scale / monW, scale / monH]);
                         this._hPipeline.set_uniform_float(this._hStepUniform, 1, 1, [1 / dbw]);
                         this._hPipeline.set_uniform_float(this._hDirUniform, 2, 1, [1, 0]);
                         this._vPipeline.set_uniform_float(this._vStepUniform, 1, 1, [1 / dbh]);
                         this._vPipeline.set_uniform_float(this._vDirUniform, 2, 1, [0, 1]);
-                        // All FBOs are MONITOR-sized; each level's content
-                        // occupies its first (w×h)/(bw×bh) pixels. Every
-                        // composite must map ONLY the content region onto its
-                        // rect via custom texture coordinates (0..w/monW).
+                        // All FBOs are MONITOR-sized (physical); each level's
+                        // content occupies its first (physW×physH)/(bw×bh)
+                        // pixels. Every composite maps ONLY the content region
+                        // onto its rect via custom texture coordinates.
+                        const fx = physW / monW;
+                        const fy = physH / monH;
                         const brightLayer = new Clutter.LayerNode(this._brightFb, this._brightPipeline);
                         brightLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: w, y2: h }),
-                            0, 0, w / monW, h / monH);
+                            0, 0, fx, fy);
                         const vLayer = new Clutter.LayerNode(this._vFb, this._vPipeline);
                         vLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: bw, y2: bh }),
-                            0, 0, w / monW, h / monH);
+                            0, 0, fx, fy);
                         brightLayer.add_child(vLayer);
                         const hLayer = new Clutter.LayerNode(this._hFb, this._hPipeline);
                         hLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: bw, y2: bh }),
-                            0, 0, w / monW, h / monH);
+                            0, 0, fx, fy);
                         vLayer.add_child(hLayer);
                         const bgLayer = new Clutter.LayerNode(this._bgFb, this._basePipeline);
                         bgLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: bw, y2: bh }),
-                            0, 0, w / monW, h / monH);
+                            0, 0, fx, fy);
                         hLayer.add_child(bgLayer);
                         const blitNode = new Clutter.BlitNode(paintContext.get_framebuffer());
                         bgLayer.add_child(blitNode);
-                        blitNode.add_blit_rectangle(px, py, 0, 0, w, h);
+                        blitNode.add_blit_rectangle(px, py, 0, 0, physW, physH);
                         return brightLayer;
                     }
 
@@ -4726,22 +4815,19 @@ export default class TilingWMExtension extends Extension {
                                     this._lastRebuildTime = now;
                                 }
                             }
-                            let px = 0, py = 0, scale = 1;
+                            let px = 0, py = 0;
+                            const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
                             try {
                                 const pos = actor.get_transformed_position();
                                 px = pos[0];
                                 py = pos[1];
                                 const stageView = paintContext.get_stage_view();
-                                if (stageView) {
-                                    if (stageView.get_layout) {
-                                        const layout = stageView.get_layout();
-                                        if (layout) {
-                                            px -= layout.x;
-                                            py -= layout.y;
-                                        }
+                                if (stageView && stageView.get_layout) {
+                                    const layout = stageView.get_layout();
+                                    if (layout) {
+                                        px -= layout.x;
+                                        py -= layout.y;
                                     }
-                                    if (stageView.get_scale)
-                                        scale = stageView.get_scale();
                                 }
                             } catch (_e) {}
                             px *= scale;
@@ -4754,7 +4840,9 @@ export default class TilingWMExtension extends Extension {
                                     log('[plaid] blur: blit position invalid — zeroed');
                                 }
                             }
-                            const chain = this._buildChain(w, h, ds, px, py, paintContext);
+                            const physW = Math.max(1, Math.round(w * scale));
+                            const physH = Math.max(1, Math.round(h * scale));
+                            const chain = this._buildChain(w, h, ds, px, py, physW, physH, paintContext);
                             if (!chain) return true;
                             node.add_child(chain);
                             return true;
@@ -4864,16 +4952,6 @@ export default class TilingWMExtension extends Extension {
                 blur._sourceActor = actor;
                 this._windowBlurs.set(win, blur);
                 try {
-                    if (blur._fatalFail) {
-                        this._debugLog('blur self-heal: GJS effect failed at creation, falling back');
-                        blur = new Shell.BlurEffect();
-                        sibling.add_effect_with_name(BLUR_EFFECT_NAME, blur);
-                        blur._sibling = sibling;
-                        blur._sourceActor = actor;
-                        this._windowBlurs.set(win, blur);
-                    }
-                } catch (_e) {}
-                try {
                     blur._actorDestroyId = actor.connect('destroy', () => this._removeBlur(win));
                 } catch (_e) {}
                 try {
@@ -4916,9 +4994,12 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
 
         try {
-            const blurMode = Shell.BlurMode.BACKGROUND;
-            if (blur.mode !== blurMode)
-                blur.mode = blurMode;
+            // mode is Shell-only — the GJS effect has no mode property.
+            if (blur instanceof Shell.BlurEffect) {
+                const blurMode = Shell.BlurMode.BACKGROUND;
+                if (blur.mode !== blurMode)
+                    blur.mode = blurMode;
+            }
             const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
             const radius = Math.round(Math.min(this._settings.get_int('window-blur-radius') * scale, 100));
             if (blur.radius !== radius)
@@ -4944,6 +5025,19 @@ export default class TilingWMExtension extends Extension {
     }
 
     _syncBlurStacking() {
+        if (!this._windowBlurs) return;
+        // SYNCHRONOUS (never deferred to idle): restacked + parent-set fire
+        // on every re-stack (menu opens, raises, workspace switches) and the
+        // sibling re-assert must happen INSIDE the signal, before the frame
+        // is composed — mutter's re-stacking moves window actors but never
+        // our plain St.Widget siblings, so each blur sibling must be
+        // re-inserted directly below its window. Deferring this to idle
+        // produced a double full-stage repaint (the popup frame rendered,
+        // then the re-assert invalidated everything → screen flicker).
+        this._syncBlurStackingNow();
+    }
+
+    _syncBlurStackingNow() {
         if (!this._windowBlurs) return;
         const monitors = global.display.get_n_monitors();
         let monitorW = 0, monitorH = 0;
@@ -5010,13 +5104,10 @@ export default class TilingWMExtension extends Extension {
         }
         if (blur._sibling) {
             this._unbindBlurSibling(blur);
+            // The blur effect lives on the sibling — destroying it drops the
+            // effect; the window actor carries no blur effect to remove.
             try { blur._sibling.destroy(); } catch (_e) {}
             blur._sibling = null;
-        }
-        const actor = win.get_compositor_private();
-        const target = this._unwrapMaskActor(actor, win);
-        if (target && target.remove_effect_by_name) {
-            try { target.remove_effect_by_name(BLUR_EFFECT_NAME); } catch (_e) {}
         }
         this._windowBlurs.delete(win);
     }
@@ -5915,6 +6006,7 @@ export default class TilingWMExtension extends Extension {
             }
             return;
         }
+        if (this._dropdownPending) return;
         const command = this._settings.get_string('dropdown-terminal-command');
         if (!command) return;
         this._dropdownPending = true;
@@ -5992,9 +6084,25 @@ export default class TilingWMExtension extends Extension {
             this._debugLog('dropdown: de-registering window from tiler');
             this._removeWindow(win);
         }
-        this._removeMask(win);
         this._removeBlur(win);
         this._removeBorder(win);
+        // Reveal the window: the spawn choreography may have hidden it
+        // (actor.visible=false + pending-warp mask opacity), and the 2.5s
+        // backstop timer must not force-reveal it later on a wrong
+        // workspace. Clear both here.
+        if (win._plaidInvisibleTimer) {
+            try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+            win._plaidInvisibleTimer = 0;
+        }
+        if (this._pendingWarp && this._pendingWarp.has(win))
+            this._pendingWarp.delete(win);
+        try {
+            const a = win.get_compositor_private();
+            if (a) {
+                a.visible = true;
+                a.set_opacity(255);
+            }
+        } catch (_e) {}
         this._dropdownWin = win;
         this._dropdownGeometryIds = [];
         this._dropdownGeometryIds.push(win.connect('size-changed', () => {
@@ -6235,10 +6343,12 @@ export default class TilingWMExtension extends Extension {
                     }
                 }
             }
-            const sig = candidates.map(w => w.get_id()).join(',');
-            if (sig !== this._pointerFocusCandSig) {
-                this._pointerFocusCandSig = sig;
-                this._debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
+            if (this._settings && this._settings.get_boolean('debug')) {
+                const sig = candidates.map(w => w.get_id()).join(',');
+                if (sig !== this._pointerFocusCandSig) {
+                    this._pointerFocusCandSig = sig;
+                    this._debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
+                }
             }
             if (under.length === 0) return null;
             const stacked = global.display.sort_windows_by_stacking(under.map(u => u.win));
@@ -7221,6 +7331,13 @@ export default class TilingWMExtension extends Extension {
     }
 
     _markerPidSetHas(marker, pid) {
+        // The /proc sweep is a synchronous, full-directory scan in the
+        // compositor main loop — only run it while the bg-app feature is on
+        // and its window isn't claimed yet (spawn pending or lock-cycle
+        // adoption search). Once claimed, no marker match is needed.
+        if (!this._settings || !this._settings.get_boolean('background-app-enabled'))
+            return false;
+        if (this._backgroundAppWin && !this._backgroundAppPending) return false;
         const now = Date.now();
         const cache = this._markerPidCache;
         if (!cache || cache.marker !== marker || now - cache.at > 1500) {
@@ -7339,7 +7456,6 @@ export default class TilingWMExtension extends Extension {
 
     _configureBackgroundApp(win) {
         try { win.skip_taskbar = true; } catch (_e) {}
-        try { win.skip_pager = true; } catch (_e) {}
         try { win.unstick(); } catch (_e) {}
         try { win.unmake_above(); } catch (_e) {}
         // Clone path: park the window on the reserved parking workspace and
@@ -7348,9 +7464,9 @@ export default class TilingWMExtension extends Extension {
         this._debugLog('background app: clone mode (parked window + background clone)');
         const deferredPark = () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
-            log('[plaid] background app: deferred park firing');
+            this._debugLog('[plaid] background app: deferred park firing');
             if (win !== this._backgroundAppWin) {
-                log('[plaid] background app: deferred park skipped (window no longer the bg app)');
+                this._debugLog('[plaid] background app: deferred park skipped (window no longer the bg app)');
                 return GLib.SOURCE_REMOVE;
             }
             // Defer the park out of the login burst: the workspace mutation,
@@ -7378,7 +7494,7 @@ export default class TilingWMExtension extends Extension {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
                 if (this._destroyed) return GLib.SOURCE_REMOVE;
                 this._raiseBackgroundAppClone();
-                log('[plaid] background app: clone re-raised after startup settle');
+                this._debugLog('[plaid] background app: clone re-raised after startup settle');
                 return GLib.SOURCE_REMOVE;
             });
             this._requestBackgroundAppInitDismiss();
@@ -7392,7 +7508,7 @@ export default class TilingWMExtension extends Extension {
                         try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
                         this._backgroundAppFirstFrameId = 0;
                     }
-                    log('[plaid] background app: first-frame fired, scheduling park in 3s');
+                    this._debugLog('[plaid] background app: first-frame fired, scheduling park in 3s');
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, deferredPark);
                 });
             }
@@ -7471,7 +7587,7 @@ export default class TilingWMExtension extends Extension {
         if (!mon || mon.width === 0) return;
 
         if (!this._backgroundAppParkingWs) {
-            log('[plaid] background app: park deferred (no parking ws yet, scheduling reservation)');
+            this._debugLog('[plaid] background app: park deferred (no parking ws yet, scheduling reservation)');
             this._scheduleBackgroundAppReservation();
             // Retry until the reservation completes (bounded) — the window
             // must never be left unparked on the user's workspace.
@@ -7735,12 +7851,12 @@ export default class TilingWMExtension extends Extension {
         if (!this._backgroundAppClone) {
             const actor = win.get_compositor_private();
             if (!actor) {
-                log('[plaid] background app: clone skipped (no compositor actor)');
+                this._debugLog('[plaid] background app: clone skipped (no compositor actor)');
                 return;
             }
             const bg = Main.layoutManager._backgroundGroup;
             if (!bg) {
-                log('[plaid] background app: clone skipped (no background group)');
+                this._debugLog('[plaid] background app: clone skipped (no background group)');
                 return;
             }
             try {
@@ -7764,13 +7880,13 @@ export default class TilingWMExtension extends Extension {
     _positionBackgroundAppClone() {
         const clone = this._backgroundAppClone;
         if (!clone) {
-            log('[plaid] background app: clone position skipped (no clone)');
+            this._debugLog('[plaid] background app: clone position skipped (no clone)');
             return;
         }
         const monitor = global.display.get_primary_monitor();
         const mon = global.display.get_monitor_geometry(monitor);
         if (!mon || mon.width === 0) {
-            log('[plaid] background app: clone position skipped (monitor geometry unavailable)');
+            this._debugLog('[plaid] background app: clone position skipped (monitor geometry unavailable)');
             return;
         }
         try {
@@ -7854,8 +7970,6 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppInitOverlayPendingDismissId = 0;
         this._backgroundAppInitOverlayMinTime = 0;
         this._backgroundAppInitOverlayAwaiting = false;
-        this._backgroundAppParkRetryId = 0;
-        this._backgroundAppParkRetryCount = 0;
         if (this._backgroundAppKeepAliveId) {
             GLib.source_remove(this._backgroundAppKeepAliveId);
             this._backgroundAppKeepAliveId = 0;
@@ -8057,7 +8171,6 @@ export default class TilingWMExtension extends Extension {
 
     _connectGrabSignals() {
         this._addSignal(global.display, global.display.connect('grab-op-begin', (_d, metaWindow, grabOp) => {
-            this._anyGrabOp = grabOp;
             if (metaWindow && this._gappedMaxSet && this._gappedMaxSet.has(metaWindow)) {
                 this._debugLog('float maximize: drag exits gapped mode');
                 this._gappedMaxSet.delete(metaWindow);
@@ -8068,7 +8181,6 @@ export default class TilingWMExtension extends Extension {
             this._handleGrabBegin(metaWindow, grabOp);
         }));
         this._addSignal(global.display, global.display.connect('grab-op-end', (_d, metaWindow, grabOp) => {
-            this._anyGrabOp = null;
             this._handleGrabEnd(metaWindow, grabOp);
         }));
         this._addSignal(global.display, global.display.connect('restacked', () => {
@@ -8216,7 +8328,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _isResizeGrab(grabOp) {
-        // GNOME 50: MetaGrabOp is bitfield-encoded.
+        // MetaGrabOp is bitfield-encoded (identical on mutter 18 and 51):
         // WINDOW_BASE=1, direction in bits 12-15 (W=1,E=2,S=4,N=8).
         // Resize ops have direction bits; move ops have none.
         if (grabOp === Meta.GrabOp.KEYBOARD_RESIZING_UNKNOWN) return true;
@@ -8589,14 +8701,23 @@ export default class TilingWMExtension extends Extension {
         if (this._destroyed || !this._settings) return;
         if (!this._settings.get_boolean('enabled')) return;
         if (this._grabOp) return;
+        if (!win || win.is_fullscreen() || win.minimized) return;
+        if (this._isFloating(win)) return;
+        if (!this._windowWorkspaces.has(win)) return;
+        // Timestamp gate: size-changed fires per move/resize step and the
+        // full slot computation is O(n²) per retile — skip re-checks for the
+        // same window within 250ms (the retile verify covers the rest).
+        const now = Date.now();
+        if (this._slotReassertTimes) {
+            const last = this._slotReassertTimes.get(win);
+            if (last && now - last < 250) return;
+            this._slotReassertTimes.set(win, now);
+        }
         if (this._animating) {
             const ws = win.get_workspace();
             if (ws && this._queuedAnimWorkspaces) this._queuedAnimWorkspaces.add(ws);
             return;
         }
-        if (!win || win.is_fullscreen() || win.minimized) return;
-        if (this._isFloating(win)) return;
-        if (!this._windowWorkspaces.has(win)) return;
         const ws = win.get_workspace();
         if (!ws) return;
         const gap = this._settings.get_int('gap');
@@ -8885,13 +9006,22 @@ export default class TilingWMExtension extends Extension {
             });
             this._dropOverlay.add_child(this._dropPreview);
         }
+        this._dropPreview.visible = true;
         this._dropPreview.set_position(x, y);
         this._dropPreview.set_size(w, h);
     }
 
     _hideDropPreview() {
+        // Hide, don't destroy — the 16ms grab loop alternates between
+        // target/no-target regions; recreating the widget each tick churns
+        // allocations and re-layout under a live grab.
+        if (this._dropPreview)
+            this._dropPreview.visible = false;
+    }
+
+    _destroyDropPreview() {
         if (this._dropPreview) {
-            this._dropPreview.destroy();
+            try { this._dropPreview.destroy(); } catch (_e) {}
             this._dropPreview = null;
         }
     }

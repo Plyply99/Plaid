@@ -412,6 +412,12 @@
       <description>Show or hide the drop-down terminal on the active monitor</description>
     </key>
 
+    <key name="terminal-profile-integration" type="b">
+      <default>false</default>
+      <summary>Shell profile integration</summary>
+      <description>Add a source line to ~/.bashrc or config.fish so Plaid's terminal settings apply to new shells. Off by default; enable to opt in.</description>
+    </key>
+
     <!-- Background App -->
     <key name="background-app-enabled" type="b">
       <default>false</default>
@@ -443,12 +449,6 @@
       <default>true</default>
       <summary>Show the Plaid init overlay</summary>
       <description>Show the full-screen 'Plaid is initializing…' moment at login. Applies at your next login.</description>
-    </key>
-
-    <key name="logo" type="s">
-      <default>'b-weave'</default>
-      <summary>Logo shown during the Plaid login moment</summary>
-      <description>Which logo mark the init overlay displays: 'a-tartan', 'b-bsp', 'b-thread', 'b-weave', 'c-weave', or 'all' to show every mark side by side</description>
     </key>
 
     <!-- Updates -->
