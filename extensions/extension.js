@@ -3,6 +3,7 @@ import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import graphene from 'gi://Graphene';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
@@ -149,6 +150,100 @@ const MASK_SNIPPET_CODE = `
 
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
 
+// Custom background blur (v51.11, pure GJS): reimplements Shell.BlurEffect's
+// BACKGROUND-mode paint chain (blit stage-beneath → FBO → blur node → final
+// composite) with the rounded-corner SDF built into the final pipeline —
+// the same architecture the bundled C library used, now in GJS.
+const BLUR_SNIPPET_DECLARATIONS = `
+uniform float brightness;
+uniform vec4 bounds;
+uniform float clipRadius;
+uniform vec2 pixelStep;
+
+float circleBounds(vec2 p, vec2 center, float clipRadius) {
+    vec2 delta = p - center;
+    float distSquared = dot(delta, delta);
+    float outerRadius = clipRadius + 0.5;
+    if (distSquared >= (outerRadius * outerRadius))
+        return 0.0;
+    float innerRadius = clipRadius - 0.5;
+    if (distSquared <= (innerRadius * innerRadius))
+        return 1.0;
+    return outerRadius - sqrt(distSquared);
+}
+
+float getPointOpacity(vec2 p, vec4 bounds, float clipRadius) {
+    if (p.x < bounds.x || p.x > bounds.z || p.y < bounds.y || p.y > bounds.w)
+        return 0.0;
+    vec2 center;
+    float centerLeft = bounds.x + clipRadius;
+    float centerRight = bounds.z - clipRadius;
+    if (p.x < centerLeft)
+        center.x = centerLeft;
+    else if (p.x > centerRight)
+        center.x = centerRight;
+    else
+        return 1.0;
+    float centerTop = bounds.y + clipRadius;
+    float centerBottom = bounds.w - clipRadius;
+    if (p.y < centerTop)
+        center.y = centerTop;
+    else if (p.y > centerBottom)
+        center.y = centerBottom;
+    else
+        return 1.0;
+    return circleBounds(p, center, clipRadius);
+}
+`;
+
+const BLUR_SNIPPET_CODE = `
+    vec2 p = cogl_tex_coord0_in.xy / pixelStep;
+    float pointAlpha = getPointOpacity(p, bounds, clipRadius);
+    cogl_color_out.rgb *= brightness;
+    cogl_color_out *= pointAlpha;
+`;
+
+// Separable Gaussian blur, VERBATIM from mutter's clutter-blur.c (the shader
+// inside ClutterBlurNode). It must use the TEXTURE_LOOKUP hook — that hook is
+// where cogl_sampler is declared; the plain FRAGMENT hook fails to compile
+// ("cogl_sampler undeclared", observed on GNOME 50). Writes cogl_texel via
+// set_replace, coefficients computed incrementally (GPU Gems ch. 40).
+const BLUR_LOOKUP_HOOK = Cogl.SnippetHook ? Cogl.SnippetHook.TEXTURE_LOOKUP : Shell.SnippetHook.TEXTURE_LOOKUP;
+
+const BLUR_KERNEL_DECLARATIONS = `
+uniform float sigma;
+uniform float pixel_step;
+uniform vec2 direction;
+`;
+
+const BLUR_KERNEL_CODE = `
+    vec2 uv = vec2 (cogl_tex_coord.st);
+    vec3 gauss_coefficient;
+    gauss_coefficient.x = 1.0 / (sqrt (2.0 * 3.14159265) * sigma);
+    gauss_coefficient.y = exp (-0.5 / (sigma * sigma));
+    gauss_coefficient.z = gauss_coefficient.y * gauss_coefficient.y;
+    float gauss_coefficient_total = gauss_coefficient.x;
+    vec4 ret = texture2D (cogl_sampler, uv) * gauss_coefficient.x;
+    gauss_coefficient.xy *= gauss_coefficient.yz;
+    int n_steps = int (ceil (1.5 * sigma)) * 2;
+    for (int i = 1; i <= n_steps; i += 2) {
+        float coefficient_subtotal = gauss_coefficient.x;
+        gauss_coefficient.xy *= gauss_coefficient.yz;
+        coefficient_subtotal += gauss_coefficient.x;
+        float gauss_ratio = gauss_coefficient.x / coefficient_subtotal;
+        float foffset = float (i) + gauss_ratio;
+        vec2 offset = direction * foffset * pixel_step;
+        ret += texture2D (cogl_sampler, uv + offset) * coefficient_subtotal;
+        ret += texture2D (cogl_sampler, uv - offset) * coefficient_subtotal;
+        gauss_coefficient_total += 2.0 * coefficient_subtotal;
+        gauss_coefficient.xy *= gauss_coefficient.yz;
+    }
+    cogl_texel = ret / gauss_coefficient_total;
+`;
+
+// Registered lazily (module-level guard — registerClass runs exactly once).
+let PlaidBackgroundBlurEffectClass = null;
+
 // The GNOME 50 mask class must never be registered on GNOME 51 (its vfuncs
 // no longer exist there), so registration is lazy — and it must register
 // exactly once per process, so the result is cached.
@@ -180,12 +275,7 @@ export default class TilingWMExtension extends Extension {
         }
         this._destroyed = false;
         this._settings = this.getSettings();
-        try {
-            this._ensureBlurModule().catch(e =>
-                log(`[plaid] blur probe: crashed: ${e.message}`));
-        } catch (e) {
-            log(`[plaid] blur probe: sync crash: ${e.message}`);
-        }
+        try { this._cleanupLegacyBlur(); } catch (_e) {}
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._floatingTitlePatterns = this._compileTitlePatterns(this._floatingTitles);
@@ -267,7 +357,6 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppWin = null;
         this._backgroundAppWaiter = null;
         this._backgroundAppReleaseId = 0;
-        this._plaidSetupNoticeBlur = false;
         this._plaidSetupNoticeTerminal = false;
         this._setupPopupCheckId = 0;
         this._maximizeToggleRects = new Map();
@@ -628,8 +717,6 @@ export default class TilingWMExtension extends Extension {
         this._windowMasks = null;
         try { this._removeAllBlurs(); } catch (_e) {}
         this._windowBlurs = null;
-        this._blurModulePromise = null;
-        this._blurModule = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
         this._windowWSIndices = null;
@@ -4177,146 +4264,523 @@ export default class TilingWMExtension extends Extension {
         this._teardownMaskEffect(win, effect);
         this._windowMasks.delete(win);
     }
-    async _ensureBlurModule() {
-        if (this._blurModulePromise) return this._blurModulePromise;
-        this._blurModule = null;
-        this._blurModulePromise = (async () => {
-            const [libPath] = GLib.filename_from_uri(import.meta.url);
-            const baseLib = GLib.path_get_dirname(libPath) + '/lib';
-            // The bundled blur lib is mutter-ABI-targeted (DT_NEEDED soname):
-            // blur50 = mutter 18/50-era, blur51 = mutter 51 (rawhide). Pick by
-            // the same fork condition the mask uses (new_with_snippet exists
-            // on 51 only) — imports.misc.config is unavailable in the
-            // extension's ESM context.
-            const modernShader = !!(Clutter.ShaderEffect && Clutter.ShaderEffect.new_with_snippet);
-            const candidates = modernShader ? ['blur51'] : ['blur50'];
-
-            // The host's gjs (1.88-era) can only on-demand-load the Blur
-            // namespace from the base lib dir, not from a subdir (observed:
-            // base loads, lib/blur50 throws "Value is not a string, cannot
-            // convert to UTF-8"). Sync the selected ABI pair to the base so
-            // the load always happens from the proven location. Failure is
-            // tolerated — the probe falls back to the subdirs.
-            try {
-                const srcDir = baseLib + '/' + candidates[0];
-                for (const f of ['Blur-1.0.typelib', 'libblur-effect-1.0.so.1']) {
-                    const src = srcDir + '/' + f;
-                    const dst = baseLib + '/' + f;
-                    if (!GLib.file_test(src, GLib.FileTest.EXISTS)) continue;
-                    try {
-                        GLib.file_copy(src, dst, GLib.FileCopyFlags.OVERWRITE, null, null);
-                    } catch (_e) {
-                        GLib.file_set_contents(dst, GLib.file_get_contents(src)[1]);
-                    }
-                    if (f.endsWith('.so.1'))
-                        GLib.chmod(dst, 0o755);
-                }
-                log(`[plaid] blur base pair synced: ${candidates[0]}`);
-            } catch (e) {
-                log(`[plaid] blur base sync failed: ${e.message}`);
+    _cleanupLegacyBlur() {
+        // Auto-update sweep: v51.09/v51.10 installs with the bundled blur C
+        // library left artifacts that a plain zip install does NOT remove
+        // (gnome-extensions install --force only overwrites zip contents).
+        // Remove them at enable so no deprecated junk lingers on user
+        // systems:
+        //   1. ~/.config/environment.d/plaid-blur.conf (+ the dir if empty)
+        //   2. the extension's own lib/ (blur50/blur51 + synced base pair)
+        // The session-fixed env vars (LD_LIBRARY_PATH to a deleted dir) are
+        // inert; the conf removal clears them at the next login.
+        try {
+            const confFile = GLib.get_home_dir() + '/.config/environment.d/plaid-blur.conf';
+            if (GLib.file_test(confFile, GLib.FileTest.EXISTS)) {
+                GLib.remove(confFile);
+                log('[plaid] blur: removed legacy plaid-blur.conf (C library dropped in v51.11)');
             }
-
-            const tryImport = async (label, dir, fn) => {
-                try {
-                    const Repo = imports.gi.GIRepository;
-                    const repo = Repo.Repository.dup_default();
-                    repo.prepend_search_path(dir);
-                    repo.prepend_library_path(dir);
-                    const mod = await fn();
-                    this._blurModule = mod;
-                    this._debugLog(`using bundled gnome-rounded-blur (${label})`);
-                    return true;
-                } catch (e) {
-                    log(`[plaid] blur probe: ${label} failed: ${e.message}`);
-                    return false;
-                }
-            };
-            // Raw imports only — NO load-time class validation: accessing
-            // the namespace's class properties in the shell's gjs can throw
-            // ("Value is not a string, cannot convert to UTF-8") even when
-            // the module itself loads. The class is validated at the attach
-            // (the constructor call there falls back to Shell.BlurEffect).
-            const loadModule = () => imports.gi.Blur;
-            let ok = false;
-            let loadedDir = baseLib + '/' + candidates[0];
-            // Base first — the synced pair lives at the proven location.
-            ok = await tryImport('base', baseLib, () => loadModule());
-            if (!ok) {
-                for (const sub of candidates) {
-                    const dir = baseLib + '/' + sub;
-                    ok = await tryImport(sub, dir, () => loadModule());
-                    if (ok) {
-                        loadedDir = dir;
-                        break;
-                    }
-                }
-            }
-            if (!ok)
-                ok = await tryImport('legacy', baseLib, () => loadModule());
-
-            // Keep the environment.d conf pointing at the base lib — the
-            // synced ABI pair lives there. A stale conf (an old base path, or
-            // a previous shell's dir) poisons non-shell processes. ANY conf
-            // write — missing or stale — needs a relog to activate (the env
-            // is fixed per session), so the setup notice fires on every write.
-            const wantDir = baseLib;
             try {
                 const confDir = GLib.get_home_dir() + '/.config/environment.d';
-                const confFile = confDir + '/plaid-blur.conf';
-                const wantContent =
-                    `GI_TYPELIB_PATH=${wantDir}\n` +
-                    `LD_LIBRARY_PATH=${wantDir}\n`;
-                let stale = !GLib.file_test(confFile, GLib.FileTest.EXISTS);
-                if (!stale) {
-                    try {
-                        const [okRead, cur] = GLib.file_get_contents(confFile);
-                        stale = !okRead || new TextDecoder().decode(cur) !== wantContent;
-                    } catch (_e) {
-                        stale = true;
-                    }
-                }
-                if (stale) {
-                    GLib.mkdir_with_parents(confDir, 0o755);
-                    GLib.file_set_contents(confFile, wantContent);
-                    log('[plaid] blur library provisioned - relogin to activate');
-                    this._plaidSetupNoticeBlur = true;
-                    this._scheduleSetupPopupCheck();
-                }
-            } catch (e) {
-                log(`[plaid] blur provision failed: ${e.message}`);
+                if (this._dirIsEmpty(confDir))
+                    GLib.remove(confDir);
+            } catch (_e) {}
+        } catch (e) {
+            log(`[plaid] blur: legacy conf cleanup failed: ${e.message}`);
+        }
+        try {
+            const [libPath] = GLib.filename_from_uri(import.meta.url);
+            const libDir = GLib.path_get_dirname(libPath) + '/lib';
+            if (GLib.file_test(libDir, GLib.FileTest.IS_DIR)) {
+                this._removeDirRecursive(libDir);
+                log(`[plaid] blur: removed legacy extension lib/ (${libDir})`);
             }
-
-            if (!ok) {
-                this._blurModule = null;
-                // Two very different causes share this fallback: (a) the
-                // designed pre-relog state — the conf was just (re)written
-                // and the session env is stale (the popup fires; a relog
-                // fixes it); (b) a broken artifact — e.g. a typelib whose
-                // baked shared-library path cannot load on THIS machine
-                // (v51.07 auto-updates clobbered VM installs exactly this
-                // way). Only (a) is fixed by a relog, so say which it is.
-                if (this._plaidSetupNoticeBlur)
-                    log('[plaid] blur: bundled Blur library unavailable — falling back to Shell.BlurEffect (expected before relogin; rounded blur after)');
-                else
-                    log('[plaid] blur: bundled Blur library FAILED to load — falling back to Shell.BlurEffect (frosted glass, no rounded blur). NOT the pre-relog state: a relog will NOT fix this. See the "blur probe" errors above; the typelib/library must resolve for this machine.');
-            }
-            if (!this._destroyed)
-                this._updateBorders();
-            return this._blurModule;
-        })();
-        return this._blurModulePromise;
+        } catch (e) {
+            log(`[plaid] blur: legacy lib cleanup failed: ${e.message}`);
+        }
     }
 
-    _syncBlurCornerRadius(blur) {
-        // The blur rect is square by default and shows through the window's
-        // corner cuts — round it to match the mask's clip radius
-        // (border-radius + 1). Builds without the property no-op safely.
+    _dirIsEmpty(dir) {
         try {
-            const radius = this._settings.get_boolean('rounded-corners')
-                ? this._settings.get_int('border-radius') + 1
-                : 0;
-            blur.corner_radius = radius;
+            const handle = GLib.dir_open(dir, 0);
+            const names = [];
+            let name = GLib.dir_read_name(handle);
+            while (name) {
+                names.push(name);
+                name = GLib.dir_read_name(handle);
+            }
+            GLib.dir_close(handle);
+            return names.length === 0;
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    _removeDirRecursive(dir) {
+        try {
+            const handle = GLib.dir_open(dir, 0);
+            let name = GLib.dir_read_name(handle);
+            while (name) {
+                const p = dir + '/' + name;
+                if (name === '.' || name === '..') {
+                    name = GLib.dir_read_name(handle);
+                    continue;
+                }
+                if (GLib.file_test(p, GLib.FileTest.IS_DIR))
+                    this._removeDirRecursive(p);
+                else
+                    GLib.remove(p);
+                name = GLib.dir_read_name(handle);
+            }
+            GLib.dir_close(handle);
+            GLib.rmdir(dir);
         } catch (_e) {}
+    }
+
+    _blurCornerRadius() {
+        return (this._settings && this._settings.get_boolean('rounded-corners'))
+            ? this._settings.get_int('border-radius') + 1
+            : 0;
+    }
+
+    _createGjsBlurEffect() {
+        // Pure-GJS rounded window blur. Shell.BlurEffect has no corner
+        // radius, and stacking an offscreen mask around it cannot work
+        // (BACKGROUND-mode blur blits the stage framebuffer — an outer mask
+        // captures it inside its own FBO and the blit reads nothing). This
+        // effect reimplements the blur chain with the corner SDF inside the
+        // final pipeline. On ANY construction failure the caller falls back
+        // to Shell.BlurEffect (square).
+        try {
+            if (!PlaidBackgroundBlurEffectClass) {
+                PlaidBackgroundBlurEffectClass = GObject.registerClass({
+                    GTypeName: 'PlaidBackgroundBlurEffect',
+                }, class PlaidBackgroundBlurEffect extends Clutter.Effect {
+                    constructor() {
+                        super();
+                        this._radius = 0;
+                        this._brightness = 1;
+                        this._cornerRadius = 0;
+                        this._ready = false;
+                        this._fatalFail = false;
+                        this._paintFailLogged = false;
+                        this._paintFailCount = 0;
+                        this._fbProbeLogged = false;
+                        this._blitFailLogged = false;
+                        // FBO rebuild throttle: GL textures are allocated
+                        // ONLY here (bounded to ~10 rebuilds/sec), so GJS GC
+                        // can always keep up. Paint nodes per frame hold no
+                        // GL resources — GC retention of them is harmless.
+                        this._lastRebuildTime = 0;
+                        this._retired = [];
+                        this._coglCtx = null;
+                        this._basePipeline = null;
+                        this._brightPipeline = null;
+                        this._hPipeline = null;
+                        this._vPipeline = null;
+                        this._brightUniform = -1;
+                        this._boundsUniform = -1;
+                        this._radiusUniform = -1;
+                        this._stepUniform = -1;
+                        this._hSigmaUniform = -1;
+                        this._hStepUniform = -1;
+                        this._hDirUniform = -1;
+                        this._vSigmaUniform = -1;
+                        this._vStepUniform = -1;
+                        this._vDirUniform = -1;
+                        this._bgFb = null;
+                        this._brightFb = null;
+                        this._hFb = null;
+                        this._vFb = null;
+                        this._bgTex = null;
+                        this._brightTex = null;
+                        this._hTex = null;
+                        this._vTex = null;
+                        this._kernelKey = '';
+                        this._monitorKey = null;
+                    }
+
+                    get radius() { return this._radius; }
+                    set radius(v) {
+                        v = Math.max(0, Math.round(v));
+                        if (v === this._radius) return;
+                        this._radius = v;
+                        try { this.queue_repaint(); } catch (_e) {}
+                        try { global.stage.queue_redraw(); } catch (_e) {}
+                    }
+                    get brightness() { return this._brightness; }
+                    set brightness(v) {
+                        if (v === this._brightness) return;
+                        this._brightness = v;
+                        try { this.queue_repaint(); } catch (_e) {}
+                        try { global.stage.queue_redraw(); } catch (_e) {}
+                    }
+                    get corner_radius() { return this._cornerRadius; }
+                    set corner_radius(v) {
+                        v = Math.max(0, Math.round(v));
+                        if (v === this._cornerRadius) return;
+                        this._cornerRadius = v;
+                        try { this.queue_repaint(); } catch (_e) {}
+                        try { global.stage.queue_redraw(); } catch (_e) {}
+                    }
+
+                    _downscaleFor(w, h, radius) {
+                        let ds = 1, sW = w, sH = h, sR = radius;
+                        while (sR > 12 && sW > 256 && sH > 256) {
+                            ds *= 2;
+                            sW = w / ds;
+                            sH = h / ds;
+                            sR = radius / ds;
+                        }
+                        return ds;
+                    }
+
+                    _probeAndBuild(paintContext) {
+                        const logStep = (name, ok, msg = '') => {
+                            log(`[plaid] spike: ${name} ${ok ? 'OK' : 'FAILED'}${msg ? ': ' + msg : ''}`);
+                        };
+                        try {
+                            const stage = global.stage;
+                            const ctx = stage.get_context();
+                            logStep('stage.get_context', !!ctx);
+                            const backend = ctx.get_backend();
+                            logStep('context.get_backend', !!backend);
+                            this._coglCtx = backend.get_cogl_context();
+                            logStep('backend.get_cogl_context', !!this._coglCtx);
+                            this._basePipeline = Cogl.Pipeline.new(this._coglCtx);
+                            logStep('Cogl.Pipeline.new', !!this._basePipeline);
+                            this._basePipeline.set_layer_null_texture(0);
+                            this._brightPipeline = Cogl.Pipeline.new(this._coglCtx);
+                            this._brightPipeline.set_layer_null_texture(0);
+                            const snippet = Cogl.Snippet.new(SNIPPET_HOOK_FRAGMENT, BLUR_SNIPPET_DECLARATIONS, BLUR_SNIPPET_CODE);
+                            logStep('Cogl.Snippet.new', !!snippet);
+                            this._brightPipeline.add_snippet(snippet);
+                            this._brightUniform = this._brightPipeline.get_uniform_location('brightness');
+                            this._boundsUniform = this._brightPipeline.get_uniform_location('bounds');
+                            this._radiusUniform = this._brightPipeline.get_uniform_location('clipRadius');
+                            this._stepUniform = this._brightPipeline.get_uniform_location('pixelStep');
+                            logStep('uniform locations',
+                                this._brightUniform >= 0 && this._boundsUniform >= 0 &&
+                                this._radiusUniform >= 0 && this._stepUniform >= 0);
+                            this._brightPipeline.set_uniform_float(this._brightUniform, 1, 1, [1]);
+                            logStep('pipeline.set_uniform_float', true);
+                            this._hPipeline = Cogl.Pipeline.new(this._coglCtx);
+                            this._hPipeline.set_layer_null_texture(0);
+                            this._vPipeline = Cogl.Pipeline.new(this._coglCtx);
+                            this._vPipeline.set_layer_null_texture(0);
+                            const kernelSnippet = Cogl.Snippet.new(BLUR_LOOKUP_HOOK, BLUR_KERNEL_DECLARATIONS, null);
+                            logStep('Cogl.Snippet.new (TEXTURE_LOOKUP)', !!kernelSnippet);
+                            try {
+                                kernelSnippet.set_replace(BLUR_KERNEL_CODE);
+                                logStep('snippet.set_replace', true);
+                            } catch (e) {
+                                logStep('snippet.set_replace', false, e.message);
+                                throw e;
+                            }
+                            try {
+                                this._hPipeline.add_layer_snippet(0, kernelSnippet);
+                                this._vPipeline.add_layer_snippet(0, kernelSnippet);
+                                logStep('pipeline.add_layer_snippet', true);
+                            } catch (e) {
+                                logStep('pipeline.add_layer_snippet', false, e.message);
+                                throw e;
+                            }
+                            this._hSigmaUniform = this._hPipeline.get_uniform_location('sigma');
+                            this._hStepUniform = this._hPipeline.get_uniform_location('pixel_step');
+                            this._hDirUniform = this._hPipeline.get_uniform_location('direction');
+                            this._vSigmaUniform = this._vPipeline.get_uniform_location('sigma');
+                            this._vStepUniform = this._vPipeline.get_uniform_location('pixel_step');
+                            this._vDirUniform = this._vPipeline.get_uniform_location('direction');
+                            logStep('kernel uniform locations',
+                                this._hSigmaUniform >= 0 && this._hStepUniform >= 0 && this._hDirUniform >= 0 &&
+                                this._vSigmaUniform >= 0 && this._vStepUniform >= 0 && this._vDirUniform >= 0);
+                            this._hPipeline.set_uniform_float(this._hSigmaUniform, 1, 1, [3]);
+                            this._hPipeline.set_uniform_float(this._hStepUniform, 1, 1, [0.01]);
+                            this._hPipeline.set_uniform_float(this._hDirUniform, 2, 1, [1, 0]);
+                            logStep('kernel set_uniform_float', true);
+                            const actor = this.get_actor();
+                            const { monW, monH } = this._monitorDims();
+                            const ds = this._downscaleFor(monW, monH, this._radius);
+                            this._rebuildTargets(ds);
+                            if (this._fatalFail) return;
+                            const fb = paintContext.get_framebuffer();
+                            logStep('paintContext.get_framebuffer', !!fb);
+                            const blitNode = new Clutter.BlitNode(fb);
+                            logStep('Clutter.BlitNode', !!blitNode);
+                            const layerNode = new Clutter.LayerNode(this._bgFb, this._basePipeline);
+                            logStep('Clutter.LayerNode', !!layerNode);
+                            const box = new Clutter.ActorBox({ x1: 0, y1: 0, x2: 10, y2: 10 });
+                            blitNode.add_blit_rectangle(0, 0, 0, 0, 10, 10);
+                            layerNode.add_texture_rectangle(box, 0, 0, 0.5, 0.5);
+                            logStep('add_texture_rectangle', true);
+                            log('[plaid] spike: CHAIN READY');
+                            this._ready = true;
+                        } catch (e) {
+                            log(`[plaid] spike: chain build FAILED: ${e.message}`);
+                            this._fatalFail = true;
+                        }
+                    }
+
+                    _retireResources() {
+                        // Drop this generation's GL references. GJS finalizes
+                        // Cogl objects lazily via GC, so the ALLOCATION RATE is
+                        // what must stay bounded — the rebuild throttle does that.
+                        for (const r of [this._bgTex, this._bgFb, this._brightTex,
+                            this._brightFb, this._hTex, this._hFb, this._vTex, this._vFb]) {
+                            if (r) this._retired.push(r);
+                        }
+                        while (this._retired.length > 12)
+                            this._retired.shift();
+                        this._bgTex = null;
+                        this._bgFb = null;
+                        this._brightTex = null;
+                        this._brightFb = null;
+                        this._hTex = null;
+                        this._hFb = null;
+                        this._vTex = null;
+                        this._vFb = null;
+                    }
+
+                    _probeFb(name, ok, msg = '') {
+                        if (this._fbProbeLogged) return;
+                        log(`[plaid] spike: ${name} ${ok ? 'OK' : 'FAILED'}${msg ? ': ' + msg : ''}`);
+                    }
+
+                    _setupFbo(fb, tex, pipeline, fbW, fbH) {
+                        // Mirrors shell-blur-effect's update_fbo +
+                        // setup_projection_matrix: allocate the offscreen,
+                        // bind the FBO texture into layer 0 of the pipeline
+                        // (the layer node composites with a COPY of this
+                        // pipeline — the texture must already be bound),
+                        // set linear filters + clamp wrap, and map the FBO's
+                        // pixel space to NDC with the translate+scale matrix.
+                        try {
+                            fb.allocate();
+                            this._probeFb('framebuffer.allocate', true);
+                        } catch (e) {
+                            this._probeFb('framebuffer.allocate', false, e.message);
+                            throw e;
+                        }
+                        try {
+                            pipeline.set_layer_texture(0, tex);
+                            this._probeFb('pipeline.set_layer_texture', true);
+                        } catch (e) {
+                            this._probeFb('pipeline.set_layer_texture', false, e.message);
+                            throw e;
+                        }
+                        try {
+                            pipeline.set_layer_filters(0,
+                                Cogl.PipelineFilter.LINEAR, Cogl.PipelineFilter.LINEAR);
+                            pipeline.set_layer_wrap_mode(0,
+                                Cogl.PipelineWrapMode.CLAMP_TO_EDGE);
+                            this._probeFb('pipeline filters/wrap', true);
+                        } catch (e) {
+                            this._probeFb('pipeline filters/wrap', false, e.message);
+                        }
+                        try {
+                            const m = new graphene.Matrix();
+                            m.init_translate(new graphene.Point3D({
+                                x: -fbW / 2,
+                                y: -fbH / 2,
+                                z: 0,
+                            }));
+                            m.scale(2 / fbW, -2 / fbH, 1);
+                            fb.set_projection_matrix(m);
+                            this._probeFb('framebuffer.set_projection_matrix', true);
+                        } catch (e) {
+                            this._probeFb('framebuffer.set_projection_matrix', false, e.message);
+                        }
+                    }
+
+                    _monitorDims() {
+                        let monW = 0, monH = 0;
+                        try {
+                            const n = global.display.get_n_monitors();
+                            for (let i = 0; i < n; i++) {
+                                const g = global.display.get_monitor_geometry(i);
+                                monW = Math.max(monW, g.width);
+                                monH = Math.max(monH, g.height);
+                            }
+                        } catch (_e) {}
+                        return { monW: Math.max(monW, 640), monH: Math.max(monH, 480) };
+                    }
+
+                    _rebuildTargets(ds) {
+                        // FBOs are sized to the largest monitor geometry, NOT
+                        // the window: window resize/position never re-allocates
+                        // GL textures (flat VRAM), only monitor changes do.
+                        try {
+                            this._retireResources();
+                            const { monW, monH } = this._monitorDims();
+                            const bgW = Math.max(2, Math.round(monW / ds));
+                            const bgH = Math.max(2, Math.round(monH / ds));
+                            this._bgTex = Cogl.Texture2D.new_with_size(this._coglCtx, monW, monH);
+                            this._bgFb = Cogl.Offscreen.new_with_texture(this._bgTex);
+                            this._brightTex = Cogl.Texture2D.new_with_size(this._coglCtx, bgW, bgH);
+                            this._brightFb = Cogl.Offscreen.new_with_texture(this._brightTex);
+                            this._hTex = Cogl.Texture2D.new_with_size(this._coglCtx, bgW, bgH);
+                            this._hFb = Cogl.Offscreen.new_with_texture(this._hTex);
+                            this._vTex = Cogl.Texture2D.new_with_size(this._coglCtx, bgW, bgH);
+                            this._vFb = Cogl.Offscreen.new_with_texture(this._vTex);
+                            this._probeFb('Texture2D/Offscreen', !!(this._bgFb && this._brightFb && this._hFb && this._vFb));
+                            this._setupFbo(this._bgFb, this._bgTex, this._basePipeline, monW, monH);
+                            this._setupFbo(this._brightFb, this._brightTex, this._brightPipeline, bgW, bgH);
+                            this._setupFbo(this._hFb, this._hTex, this._hPipeline, bgW, bgH);
+                            this._setupFbo(this._vFb, this._vTex, this._vPipeline, bgW, bgH);
+                            this._monitorKey = `${monW}x${monH}:${ds}`;
+                            if (!this._fbProbeLogged) {
+                                this._fbProbeLogged = true;
+                                log('[plaid] spike: FBO CHAIN READY');
+                            }
+                        } catch (e) {
+                            log(`[plaid] spike: FBO build FAILED: ${e.message}`);
+                            this._fatalFail = true;
+                        }
+                    }
+
+                    _syncKernel(ds, radius) {
+                        // Uploads sigma when the kernel changes (radius or
+                        // downscale). Clamped to mutter's MAX_SIGMA (6).
+                        const sigma = Math.max(0.5, Math.min(6, (radius / ds) / 3));
+                        const key = sigma.toFixed(3);
+                        if (key === this._kernelKey) return;
+                        this._kernelKey = key;
+                        try {
+                            this._hPipeline.set_uniform_float(this._hSigmaUniform, 1, 1, [sigma]);
+                            this._vPipeline.set_uniform_float(this._vSigmaUniform, 1, 1, [sigma]);
+                        } catch (e) {
+                            log(`[plaid] blur kernel upload failed: ${e.message}`);
+                        }
+                    }
+
+                    _buildChain(w, h, ds, px, py, paintContext) {
+                        // Builds the per-frame render chain. Every node refs
+                        // only CACHED FBOs/pipelines — nothing here allocates
+                        // a GL texture (the shell can allocate blur textures
+                        // per frame in C because it frees them instantly; GJS
+                        // GC cannot, so per-frame allocation is forbidden).
+                        // The layer node COPIES the pipeline at creation, so
+                        // uniforms must be set BEFORE the nodes are created.
+                        const bw = w / ds;
+                        const bh = h / ds;
+                        if (!this._bgFb || !this._brightFb || !this._hFb || !this._vFb) return null;
+                        this._syncKernel(ds, this._radius);
+                        const monW = this._bgTex.get_width();
+                        const monH = this._bgTex.get_height();
+                        const dbw = monW / ds;
+                        const dbh = monH / ds;
+                        this._brightPipeline.set_uniform_float(this._brightUniform, 1, 1, [this._brightness]);
+                        this._brightPipeline.set_uniform_float(this._boundsUniform, 4, 1, [1, 1, w, h]);
+                        this._brightPipeline.set_uniform_float(this._radiusUniform, 1, 1, [this._cornerRadius]);
+                        // The SDF maps texcoords (0..w/monW) to window pixels:
+                        // p = tc / pixelStep must span 0..w → pixelStep = 1/monW.
+                        this._brightPipeline.set_uniform_float(this._stepUniform, 2, 1, [1 / monW, 1 / monH]);
+                        this._hPipeline.set_uniform_float(this._hStepUniform, 1, 1, [1 / dbw]);
+                        this._hPipeline.set_uniform_float(this._hDirUniform, 2, 1, [1, 0]);
+                        this._vPipeline.set_uniform_float(this._vStepUniform, 1, 1, [1 / dbh]);
+                        this._vPipeline.set_uniform_float(this._vDirUniform, 2, 1, [0, 1]);
+                        // All FBOs are MONITOR-sized; each level's content
+                        // occupies its first (w×h)/(bw×bh) pixels. Every
+                        // composite must map ONLY the content region onto its
+                        // rect via custom texture coordinates (0..w/monW).
+                        const brightLayer = new Clutter.LayerNode(this._brightFb, this._brightPipeline);
+                        brightLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: w, y2: h }),
+                            0, 0, w / monW, h / monH);
+                        const vLayer = new Clutter.LayerNode(this._vFb, this._vPipeline);
+                        vLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: bw, y2: bh }),
+                            0, 0, w / monW, h / monH);
+                        brightLayer.add_child(vLayer);
+                        const hLayer = new Clutter.LayerNode(this._hFb, this._hPipeline);
+                        hLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: bw, y2: bh }),
+                            0, 0, w / monW, h / monH);
+                        vLayer.add_child(hLayer);
+                        const bgLayer = new Clutter.LayerNode(this._bgFb, this._basePipeline);
+                        bgLayer.add_texture_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: bw, y2: bh }),
+                            0, 0, w / monW, h / monH);
+                        hLayer.add_child(bgLayer);
+                        const blitNode = new Clutter.BlitNode(paintContext.get_framebuffer());
+                        bgLayer.add_child(blitNode);
+                        blitNode.add_blit_rectangle(px, py, 0, 0, w, h);
+                        return brightLayer;
+                    }
+
+                    vfunc_paint_node(node, paintContext) {
+                        try {
+                            const actor = this.get_actor();
+                            if (!actor || !actor.get_parent()) return true;
+                            const w = Math.round(actor.width);
+                            const h = Math.round(actor.height);
+                            if (w <= 1 || h <= 1) return true;
+                            if (!this._ready) {
+                                this._probeAndBuild(paintContext);
+                                if (this._fatalFail || !this._ready) return true;
+                            }
+                            const { monW, monH } = this._monitorDims();
+                            const ds = this._downscaleFor(monW, monH, this._radius);
+                            const monKey = `${monW}x${monH}:${ds}`;
+                            if (monKey !== this._monitorKey) {
+                                const now = Date.now();
+                                if (!this._lastRebuildTime || now - this._lastRebuildTime >= 100) {
+                                    this._rebuildTargets(ds);
+                                    if (this._fatalFail) return true;
+                                    this._lastRebuildTime = now;
+                                }
+                            }
+                            let px = 0, py = 0, scale = 1;
+                            try {
+                                const pos = actor.get_transformed_position();
+                                px = pos[0];
+                                py = pos[1];
+                                const stageView = paintContext.get_stage_view();
+                                if (stageView) {
+                                    if (stageView.get_layout) {
+                                        const layout = stageView.get_layout();
+                                        if (layout) {
+                                            px -= layout.x;
+                                            py -= layout.y;
+                                        }
+                                    }
+                                    if (stageView.get_scale)
+                                        scale = stageView.get_scale();
+                                }
+                            } catch (_e) {}
+                            px *= scale;
+                            py *= scale;
+                            if (!Number.isFinite(px) || !Number.isFinite(py)) {
+                                px = 0;
+                                py = 0;
+                                if (!this._blitFailLogged) {
+                                    this._blitFailLogged = true;
+                                    log('[plaid] blur: blit position invalid — zeroed');
+                                }
+                            }
+                            const chain = this._buildChain(w, h, ds, px, py, paintContext);
+                            if (!chain) return true;
+                            node.add_child(chain);
+                            return true;
+                        } catch (e) {
+                            // Transient GL hiccups must not permanently kill
+                            // the blur — only go fatal after repeated
+                            // consecutive failures.
+                            this._paintFailCount++;
+                            if (!this._paintFailLogged) {
+                                this._paintFailLogged = true;
+                                log(`[plaid] blur effect paint failed (${this._paintFailCount}): ${e.message}`);
+                            } else if (this._paintFailCount <= 5) {
+                                log(`[plaid] blur effect paint failed (${this._paintFailCount}): ${e.message}`);
+                            }
+                            if (this._paintFailCount >= 5)
+                                this._fatalFail = true;
+                            return true;
+                        }
+                    }
+                });
+            }
+            return new PlaidBackgroundBlurEffectClass();
+        } catch (e) {
+            log(`[plaid] blur: GJS blur effect unavailable (${e.message}) — square Shell.BlurEffect fallback`);
+            return null;
+        }
     }
 
     _ensureWindowBlur(win, actor) {
@@ -4349,8 +4813,20 @@ export default class TilingWMExtension extends Extension {
                     log(`[plaid] window blur heal failed: ${e.message}`);
                     return;
                 }
-            } else {
-                this._syncBlurCornerRadius(blur);
+            } else if (blur._sibling) {
+                if (blur._fatalFail) {
+                    // The GJS blur chain died mid-session (e.g. a GL resource
+                    // error) — rebuild with the square Shell.BlurEffect.
+                    this._debugLog('blur self-heal: GJS effect fatal, falling back to Shell.BlurEffect');
+                    this._removeBlur(win);
+                    this._ensureWindowBlur(win, win.get_compositor_private() || actor);
+                    return;
+                }
+                try {
+                    const cr = this._blurCornerRadius();
+                    if (blur.corner_radius !== cr)
+                        blur.corner_radius = cr;
+                } catch (_e) {}
             }
         }
 
@@ -4360,21 +4836,9 @@ export default class TilingWMExtension extends Extension {
                 return;
             }
             try {
-                // Resolve the class defensively: property access on a freshly
-                // loaded namespace can throw in the shell's gjs even when the
-                // module loaded — fall back to Shell.BlurEffect rather than
-                // losing the blur entirely.
-                let effectClass = Shell.BlurEffect;
-                if (this._blurModule) {
-                    try {
-                        effectClass = this._blurModule.BlurEffect ||
-                            this._blurModule.GbBlurEffect || Shell.BlurEffect;
-                    } catch (e) {
-                        log(`[plaid] bundled blur class failed: ${e.message}, using Shell.BlurEffect`);
-                        effectClass = Shell.BlurEffect;
-                    }
-                }
-                blur = new effectClass();
+                // Pure-GJS rounded blur (the corner cut lives inside the
+                // effect); square Shell.BlurEffect is the fallback.
+                blur = this._createGjsBlurEffect() || new Shell.BlurEffect();
                 blur._bindings = [];
                 const sibling = new St.Widget({
                     reactive: false,
@@ -4399,7 +4863,16 @@ export default class TilingWMExtension extends Extension {
                 blur._sibling = sibling;
                 blur._sourceActor = actor;
                 this._windowBlurs.set(win, blur);
-                this._syncBlurCornerRadius(blur);
+                try {
+                    if (blur._fatalFail) {
+                        this._debugLog('blur self-heal: GJS effect failed at creation, falling back');
+                        blur = new Shell.BlurEffect();
+                        sibling.add_effect_with_name(BLUR_EFFECT_NAME, blur);
+                        blur._sibling = sibling;
+                        blur._sourceActor = actor;
+                        this._windowBlurs.set(win, blur);
+                    }
+                } catch (_e) {}
                 try {
                     blur._actorDestroyId = actor.connect('destroy', () => this._removeBlur(win));
                 } catch (_e) {}
@@ -4443,14 +4916,9 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {}
 
         try {
-            const blurMode = this._blurModule ? this._blurModule.BlurMode.BACKGROUND : Shell.BlurMode.BACKGROUND;
+            const blurMode = Shell.BlurMode.BACKGROUND;
             if (blur.mode !== blurMode)
                 blur.mode = blurMode;
-            if (this._blurModule && blur.corner_radius !== undefined) {
-                const cr = this._settings.get_int('border-radius') + 1;
-                if (blur.corner_radius !== cr)
-                    blur.corner_radius = cr;
-            }
             const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
             const radius = Math.round(Math.min(this._settings.get_int('window-blur-radius') * scale, 100));
             if (blur.radius !== radius)
@@ -4458,6 +4926,9 @@ export default class TilingWMExtension extends Extension {
             const brightness = this._settings.get_double('window-blur-brightness');
             if (blur.brightness !== brightness)
                 blur.brightness = brightness;
+            const cr = this._blurCornerRadius();
+            if (blur.corner_radius !== cr)
+                blur.corner_radius = cr;
         } catch (e) {
             log(`[plaid] window blur update failed: ${e.message}`);
         }
@@ -5867,11 +6338,8 @@ export default class TilingWMExtension extends Extension {
             this._setupPopupCheckId = 0;
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             const lines = [];
-            if (this._plaidSetupNoticeBlur)
-                lines.push('• The blur library was provisioned — log out and back in to activate it.');
             if (this._plaidSetupNoticeTerminal)
                 lines.push("• Plaid's terminal settings were added to ~/.bashrc — available in new terminals.");
-            this._plaidSetupNoticeBlur = false;
             this._plaidSetupNoticeTerminal = false;
             if (lines.length > 0)
                 this._showWarningPopup('Plaid setup complete. Log out and back in to take effect', lines.join('\n'), 'Click to dismiss');
@@ -7354,7 +7822,6 @@ export default class TilingWMExtension extends Extension {
             GLib.source_remove(this._setupPopupCheckId);
             this._setupPopupCheckId = 0;
         }
-        this._plaidSetupNoticeBlur = false;
         this._plaidSetupNoticeTerminal = false;
         if (this._backgroundAppReleaseId) {
             GLib.source_remove(this._backgroundAppReleaseId);

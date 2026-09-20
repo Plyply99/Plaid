@@ -37,12 +37,12 @@ if [ -f "$OUT/plaid@plyply99.shell-extension.zip" ]; then
 fi
 
 # gnome-extensions pack drops non-standard files; append everything it
-# skips (lib/, assets/, and the terminal-settings script).
-if [ -d "$SOURCE/lib" ] || [ -d "$SOURCE/assets" ] || [ -f "$SOURCE/plaid-terminal-settings.sh" ]; then
+# skips (assets/ and the terminal-settings script).
+if [ -d "$SOURCE/assets" ] || [ -f "$SOURCE/plaid-terminal-settings.sh" ]; then
     (cd "$SOURCE" && python3 -c "
 import zipfile, os
 out = '$OUT/plaid@plyply99.zip'
-paths = ['lib', 'assets', 'plaid-terminal-settings.sh', 'plaid-terminal-settings.fish']
+paths = ['assets', 'plaid-terminal-settings.sh', 'plaid-terminal-settings.fish']
 appended = []
 with zipfile.ZipFile(out, 'a') as z:
     existing = set(z.namelist())

@@ -6,8 +6,8 @@
         "50",
         "51"
     ],
-"version": 5110,
-    "version-name": "v51.10",
+"version": 5111,
+    "version-name": "v51.11",
     "url": "https://github.com/Plyply99/Plaid",
     "settings-schema": "org.gnome.shell.extensions.plaid"
 }

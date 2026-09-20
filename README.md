@@ -43,7 +43,7 @@ Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki).
 
 
  
-- **Window blur**: Native shell blur via the bundled Plaid blur library (forked from gnome-rounded-blur).
+- **Window blur**: Pure-GJS blur (mutter's own Gaussian kernel) with rounded corners — no bundled C library.
 
 
 [Plaid-window-blur.webm](https://github.com/user-attachments/assets/297051c7-34fd-46f8-9428-b97ab9c60ae9)
@@ -138,14 +138,13 @@ gnome-extensions install plaid@plyply99.zip
 
 While running, Plaid disables Gnome edge-tiling and maximize keybindings (restored when disabled).
 
-## The bundled blur library
+## Window blur
 
-Plaid bundles a [fork of gnome-rounded-blur](https://github.com/Plyply99/Plaid-rounded-blur)
-(GPL-3.0-or-later, derived from gnome-shell's ShellBlurEffect; original by
-[kancko](https://github.com/kancko/gnome-rounded-blur)) in `extensions/lib/`
-with license and attribution. The fork adds a configurable mutter API target
-so the library builds against GNOME 50 or 51. It provides natively rounded
-corners for the window blur, which the stock `Shell.BlurEffect` cannot do.
+Window blur is a pure-GJS `Clutter.Effect` that renders mutter's own Gaussian
+kernel (the same shader used by GNOME Shell's built-in blur) through cached
+offscreen buffers, with Plaid's rounded-corner cut in the final composite.
+No bundled C library, no extra dependencies, no restart required after
+install.
 
 ## Report bugs / contribute
 

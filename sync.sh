@@ -35,17 +35,6 @@ for file in "$SOURCE"/*; do
     sync_file "$file" "$DEST/$(basename "$file")"
 done
 
-if [ -d "$SOURCE/lib" ]; then
-    # lib/ holds subdirectories (blur50/, blur51/) — walk recursively so
-    # rebuilt blur ABIs actually propagate; a files-only loop synced nothing.
-    mkdir -p "$DEST/lib"
-    while IFS= read -r -d '' file; do
-        rel="${file#"$SOURCE/lib/"}"
-        mkdir -p "$DEST/lib/$(dirname "$rel")"
-        sync_file "$file" "$DEST/lib/$rel"
-    done < <(find "$SOURCE/lib" -type f -print0)
-fi
-
 if [ -d "$SOURCE/assets" ]; then
     mkdir -p "$DEST/assets"
     for file in "$SOURCE"/assets/*; do
