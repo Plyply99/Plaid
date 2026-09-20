@@ -46,16 +46,18 @@ _plaid_format() {
         as)
             # Portable split (bash + zsh): zsh does not word-split unquoted
             # variables, and its array-read flag differs (read -ra vs -rA).
+            # Comma-only split + trim so titles containing spaces stay intact.
             local items=()
             local _v="$value"
             if [ -n "${BASH_VERSION:-}" ]; then
-                IFS=', ' read -ra items <<< "$_v"
+                IFS=',' read -ra items <<< "$_v"
             else
-                IFS=', ' read -rA items <<< "$_v"
+                IFS=',' read -rA items <<< "$_v"
             fi
-            local item list
-            local _joined=''
+            local item _joined=''
             for item in "${items[@]}"; do
+                item="${item#"${item%%[![:space:]]*}"}"
+                item="${item%"${item##*[![:space:]]}"}"
                 [ -n "$item" ] && _joined="${_joined:+$_joined,}'$item'"
             done
             echo "[$_joined]"
@@ -152,7 +154,6 @@ _PLAID_TABLE=(
     "scratchpad-add|as|Add window to scratchpad"
     "scratchpad-remove|as|Remove window from scratchpad"
     "scratchpad-border-color|as|Scratchpad border color"
-    "logo|s|Logo during the Plaid login moment (a-tartan, b-bsp, b-thread, b-weave, c-weave, all)"
     "dropdown-terminal-command|s|Drop-down terminal command"
     "dropdown-terminal-height|i|Drop-down terminal height"
     "dropdown-terminal|as|Toggle drop-down terminal"
