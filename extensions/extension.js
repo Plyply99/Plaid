@@ -295,6 +295,7 @@ export default class TilingWMExtension extends Extension {
         this._windowBorders = new Map();
         this._scratchpadRings = new Map();
         this._windowMasks = new Map();
+        this._maskQuarantined = new Set();
         this._windowBlurs = new Map();
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
@@ -4166,6 +4167,11 @@ export default class TilingWMExtension extends Extension {
 
     _ensureWindowMask(win, actor, radius) {
         if (!this._windowMasks || !actor || !actor.add_effect_with_name) return;
+        // Mask self-heal quarantine: a texture swap rendered this window's
+        // offscreen capture empty (see _updateMaskBounds) — the mask was
+        // dropped and must NOT be re-created or the content goes invisible
+        // again. Only a rounded-corners toggle clears the quarantine.
+        if (this._maskQuarantined && this._maskQuarantined.has(win)) return;
         const target = this._unwrapMaskActor(actor, win);
         // v51.11 mechanism: the mask attaches to the X11 client child ONCE.
         // The child can be REPLACED on workspace round-trips (Steam's
@@ -4265,6 +4271,28 @@ export default class TilingWMExtension extends Extension {
     }
 
     _updateMaskBounds(win, actor, effect, radius) {
+        // Mask self-heal: X11 surfaces backed by foreign client textures
+        // (Chromium/electron GPU rendering) can swap their texture on
+        // workspace round-trips — the ClutterOffscreenEffect capture then
+        // renders EMPTY (transparent content). Drop the mask permanently
+        // for the window (square corners) instead of an invisible window;
+        // a rounded-corners toggle clears the quarantine.
+        if (win.get_client_type() === Meta.WindowClientType.X11) {
+            const target = this._unwrapMaskActor(actor, win);
+            if (target && target.get_texture) {
+                const tex = target.get_texture();
+                if (effect._texId && tex && tex !== effect._texId) {
+                    this._debugLog(`mask self-heal: texture replaced — dropping mask for ${win.get_wm_class_instance() || '?'}`);
+                    this._maskQuarantined.add(win);
+                    // Teardown inline — _removeMask would delete the
+                    // quarantine we just set.
+                    this._teardownMaskEffect(win, effect);
+                    this._windowMasks.delete(win);
+                    return;
+                }
+                effect._texId = tex;
+            }
+        }
         const buffer = win.get_buffer_rect();
         const frame = win.get_frame_rect();
         const offsetX = frame.x - buffer.x;
@@ -4287,6 +4315,16 @@ export default class TilingWMExtension extends Extension {
                 : (this._settings.get_boolean('borders-enabled')
                     ? this._settings.get_int(widthKey)
                     : 0);
+        }
+        // The widget border/ring created in _ensureWindowBorder is the live
+        // visual (gradient + rotation included — _repaintBorder animates).
+        // The mask SDF's own border/ring draw is redundant and, while the
+        // window's frame/surface geometry churns (childless X11 windows —
+        // Steam's login popup), renders misaligned with the widget → the
+        // nested double-border artifact. Zero both whenever the widget path
+        // is active (borders-enabled is exactly its gate).
+        if (this._settings && this._settings.get_boolean('borders-enabled')) {
+            borderWidth = 0;
         }
 
         const x1 = offsetX + 1;
@@ -4341,13 +4379,15 @@ export default class TilingWMExtension extends Extension {
         const scratchWin = !!(this._scratchpadWindows && this._scratchpadWindows.has(win));
         let ringWidth = 0;
         let ringColor = [0, 0, 0, 0];
+        // The widget ring (created in _ensureWindowBorder's scratch branch)
+        // is the live visual — the SDF ring is redundant (same double-draw
+        // misalignment class as the border). Zero it whenever the widget
+        // path is active.
         if (scratchWin && this._settings.get_boolean('borders-enabled')) {
-            ringWidth = Math.max(2, this._settings.get_int('active-border-width'));
             const ringHex = (this._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
-            ringColor = toRgba(ringHex);
             if (!effect._ringLogged) {
                 effect._ringLogged = true;
-                this._debugLog(`scratch ring: shader ring enabled width=${ringWidth} color=${ringHex}`);
+                this._debugLog(`scratch ring: widget ring is the live visual (${ringHex})`);
             }
         }
 
@@ -4379,6 +4419,7 @@ export default class TilingWMExtension extends Extension {
 
     _removeMask(win) {
         if (!this._windowMasks) return;
+        if (this._maskQuarantined) this._maskQuarantined.delete(win);
         const effect = this._windowMasks.get(win);
         if (!effect) return;
         this._teardownMaskEffect(win, effect);
@@ -5120,6 +5161,10 @@ export default class TilingWMExtension extends Extension {
 
     _removeAllMasks() {
         if (!this._windowMasks) return;
+        // The toggle path re-arms everything, including self-healed masks
+        // (a fresh attempt; the healer re-quarantines within a pass if the
+        // texture is still foreign).
+        if (this._maskQuarantined) this._maskQuarantined.clear();
         for (const win of [...this._windowMasks.keys()])
             this._removeMask(win);
     }
