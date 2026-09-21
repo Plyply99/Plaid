@@ -3539,7 +3539,13 @@ export default class TilingWMExtension extends Extension {
         const sig = [borderX, borderY, borderW, borderH, borderWidth,
             borderRadius, gradient ? 1 : 0, gradientDir, color1, color2, scratch ? 1 : 0].join('|');
         if (old) {
-            if (old._plaidSig === sig) return true;
+            // The window's actor can be REPLACED (X11 surface round-trips)
+            // while the geometry sig stays identical — the border would
+            // linger on the dead actor (invisible). The parent check forces
+            // a recreate on the current actor.
+            let alive = false;
+            try { alive = old.get_parent() === actor; } catch (_e) { alive = false; }
+            if (old._plaidSig === sig && alive) return true;
             try { old.destroy(); } catch (_e) {}
             this._windowBorders.delete(win);
         }
@@ -3867,6 +3873,13 @@ export default class TilingWMExtension extends Extension {
             }
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
+            const actor = win.get_compositor_private();
+            // The window's actor can be replaced mid-session; a border on
+            // the dead actor must not be poked (and is invisible anyway).
+            if (!actor || border.get_parent() !== actor) {
+                this._removeBorder(win);
+                continue;
+            }
             const buffer = win.get_buffer_rect();
             const bw = win === focusWindow ? activeWidth : inactiveWidth;
             const bx = (frame.x - buffer.x) - bw;
@@ -4316,16 +4329,6 @@ export default class TilingWMExtension extends Extension {
                     ? this._settings.get_int(widthKey)
                     : 0);
         }
-        // The widget border/ring created in _ensureWindowBorder is the live
-        // visual (gradient + rotation included — _repaintBorder animates).
-        // The mask SDF's own border/ring draw is redundant and, while the
-        // window's frame/surface geometry churns (childless X11 windows —
-        // Steam's login popup), renders misaligned with the widget → the
-        // nested double-border artifact. Zero both whenever the widget path
-        // is active (borders-enabled is exactly its gate).
-        if (this._settings && this._settings.get_boolean('borders-enabled')) {
-            borderWidth = 0;
-        }
 
         const x1 = offsetX + 1;
         const y1 = offsetY + 1;
@@ -4379,15 +4382,13 @@ export default class TilingWMExtension extends Extension {
         const scratchWin = !!(this._scratchpadWindows && this._scratchpadWindows.has(win));
         let ringWidth = 0;
         let ringColor = [0, 0, 0, 0];
-        // The widget ring (created in _ensureWindowBorder's scratch branch)
-        // is the live visual — the SDF ring is redundant (same double-draw
-        // misalignment class as the border). Zero it whenever the widget
-        // path is active.
         if (scratchWin && this._settings.get_boolean('borders-enabled')) {
+            ringWidth = Math.max(2, this._settings.get_int('active-border-width'));
             const ringHex = (this._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
+            ringColor = toRgba(ringHex);
             if (!effect._ringLogged) {
                 effect._ringLogged = true;
-                this._debugLog(`scratch ring: widget ring is the live visual (${ringHex})`);
+                this._debugLog(`scratch ring: shader ring enabled width=${ringWidth} color=${ringHex}`);
             }
         }
 
