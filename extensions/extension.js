@@ -5221,7 +5221,6 @@ export default class TilingWMExtension extends Extension {
             { key: 'cycle-layout', fn: () => this._cycleLayout() },
             { key: 'scratchpad-toggle', fn: () => this._scratchpadToggle() },
             { key: 'scratchpad-add', fn: () => this._scratchpadAdd() },
-            { key: 'scratchpad-remove', fn: () => this._scratchpadRemove() },
             { key: 'dropdown-terminal', fn: () => this._toggleDropdownTerminal() },
         ];
 
@@ -5249,7 +5248,7 @@ export default class TilingWMExtension extends Extension {
             'swap-left', 'swap-right', 'swap-up', 'swap-down',
             'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
             'toggle-float', 'toggle-tiling', 'toggle-maximize', 'center-window', 'pick-float-window',
-            'cycle-layout', 'scratchpad-toggle', 'scratchpad-add', 'scratchpad-remove',
+            'cycle-layout', 'scratchpad-toggle', 'scratchpad-add',
             'dropdown-terminal',
         ];
         for (const key of keys) {
@@ -8113,7 +8112,10 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         if (this._scratchpadWindows.has(win)) {
-            this._debugLog('scratch add: skipped (already in scratchpad)');
+            // The hotkey toggles: a window already in the scratchpad gets
+            // fully restored (unminimize, workspace, geometry, re-tile).
+            this._debugLog('scratch add: in scratchpad — toggling off');
+            this._scratchpadRemove();
             return;
         }
         const ws = win.get_workspace();
