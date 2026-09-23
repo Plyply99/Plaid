@@ -1770,6 +1770,7 @@ export default class TilingWMExtension extends Extension {
         if (tiledWindows.length === 0) {
             return;
         }
+        this._debugLog(`retile: ws=${this._wsIndex(workspace)} tiled=[${tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',')}] layout=${this._getWorkspaceLayout(workspace)} animTime=${this._getAnimationTime().toFixed(2)} animating=${this._animating}`);
 
         if (this._getAnimationTime() > 0 && !this._grabOp) {
             this._animRetile(workspace, tiledWindows);
@@ -1917,6 +1918,24 @@ export default class TilingWMExtension extends Extension {
                             s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
                     } catch (_e) {}
                     fadeIn();
+                    // Self-healing settle re-request: a fresh window's
+                    // move_resize_frame can be ignored/clamped by mutter
+                    // while it is still settling (map-time race, or the
+                    // shadow buffer wider than the screen), so all attempts
+                    // fail. By ~2s the window has settled and a normal
+                    // retile lands (the "second app fixes it" effect,
+                    // automated). One shot; the reveal above already
+                    // happened, so the window never sits hidden.
+                    const settleWin = s.win;
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        if (!settleWin || !settleWin.get_compositor_private()) return GLib.SOURCE_REMOVE;
+                        if (!this._windowWorkspaces || !this._windowWorkspaces.has(settleWin))
+                            return GLib.SOURCE_REMOVE;
+                        const ws = settleWin.get_workspace();
+                        if (ws) this._retileWorkspace(ws);
+                        return GLib.SOURCE_REMOVE;
+                    });
                     return;
                 }
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, attempt);
@@ -2069,8 +2088,14 @@ export default class TilingWMExtension extends Extension {
             }
             if (this._landingGivenUp && this._landingGivenUp.has(win)) return false;
             const f = win.get_frame_rect();
-            if (Math.abs(f.x - s.targetX) > 16 || Math.abs(f.y - s.targetY) > 16 ||
-                Math.abs(f.width - s.targetW) > 16 || Math.abs(f.height - s.targetH) > 16) {
+            // The deferred new-window placement must land PRECISELY (pure
+            // mode): the 16px tolerance silently accepted off-landings like
+            // mutter's shadow-clamped frame (8px x-offset) and never
+            // re-requested, leaving the window at wrong screen gaps. The
+            // animated tick path keeps 16px — sliding frames.
+            const tol = kind === 'new' && pure ? 4 : 16;
+            if (Math.abs(f.x - s.targetX) > tol || Math.abs(f.y - s.targetY) > tol ||
+                Math.abs(f.width - s.targetW) > tol || Math.abs(f.height - s.targetH) > tol) {
                 if (!pure) {
                     this._debugLog(`anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
                     try {
@@ -3458,8 +3483,17 @@ export default class TilingWMExtension extends Extension {
                 this._ensureWindowMask(win, actor, borderRadius + 1);
                 // Scratch windows fall through to their special border even
                 // with rounded corners (normal windows stay mask-only).
-                if (!(this._scratchpadWindows && this._scratchpadWindows.has(win)))
+                if (!(this._scratchpadWindows && this._scratchpadWindows.has(win))) {
+                    // Mask-only windows must not keep a widget border from
+                    // an earlier floating state — this path never re-creates
+                    // or updates it, so it freezes stale (double border at
+                    // the old geometry) until a full rebuild.
+                    if (this._windowBorders.has(win)) {
+                        log(`[plaid] border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
+                        this._removeBorder(win);
+                    }
                     continue;
+                }
             }
 
             const isFocused = win === focusWindow;
@@ -5092,8 +5126,36 @@ export default class TilingWMExtension extends Extension {
             const sibling = blur._sibling;
             const source = blur._sourceActor;
             if (!sibling || !source) continue;
-            if (sibling.get_parent() !== global.window_group ||
-                source.get_parent() !== global.window_group) continue;
+            // The sibling's BindConstraints/bindings follow the source actor
+            // and go dead when it is detached or replaced (surface
+            // round-trips) — the sibling then freezes at the old geometry
+            // and shows blur outside the window. Re-attach it to the CURRENT
+            // actor instead of silently skipping (the old parent-check
+            // `continue` never logged and never healed).
+            const current = win.get_compositor_private();
+            if (!current || current.get_parent() !== global.window_group) continue;
+            const sourceDead = source.get_parent() !== global.window_group ||
+                current !== source;
+            const siblingDead = sibling.get_parent() !== global.window_group;
+            if (sourceDead || siblingDead) {
+                if (!blur._reAttachPending) {
+                    log(`[plaid] blur: ${sourceDead ? 'source detached' : 'sibling detached'} → deferred re-attach (${win.get_wm_class_instance() || '?'})`);
+                    blur._reAttachPending = true;
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        blur._reAttachPending = false;
+                        if (!this._windowBlurs || !this._windowBlurs.has(win)) return GLib.SOURCE_REMOVE;
+                        try {
+                            this._removeBlur(win);
+                            this._ensureWindowBlur(win, win.get_compositor_private() || current);
+                        } catch (e) {
+                            log(`[plaid] blur: deferred re-attach failed: ${e.message}`);
+                        }
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+                continue;
+            }
             try {
                 const sW = sibling.get_width();
                 const sH = sibling.get_height();
