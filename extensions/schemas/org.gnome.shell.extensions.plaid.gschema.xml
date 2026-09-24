@@ -9,38 +9,39 @@
       <description>Enable or disable the tiling window manager</description>
     </key>
 
-    <key name="gap" type="i">
+    <key name="inside-gap" type="i">
       <default>4</default>
       <range min="0" max="50"/>
-      <summary>Gap between windows in pixels</summary>
+      <summary>Inside gaps in pixels</summary>
+      <description>Spacing between tiled windows</description>
     </key>
 
-    <key name="single-gap-top" type="i">
+    <key name="outside-gap-top" type="i">
       <default>4</default>
       <range min="0" max="200"/>
-      <summary>Top gap around a single window</summary>
-      <description>Gap between a single tiled window and the top screen edge (0 = no gap)</description>
+      <summary>Top outside gap in pixels</summary>
+      <description>Spacing between tiled windows and the top screen edge (0 = no gap)</description>
     </key>
 
-    <key name="single-gap-bottom" type="i">
+    <key name="outside-gap-bottom" type="i">
       <default>4</default>
       <range min="0" max="200"/>
-      <summary>Bottom gap around a single window</summary>
-      <description>Gap between a single tiled window and the bottom screen edge (0 = no gap)</description>
+      <summary>Bottom outside gap in pixels</summary>
+      <description>Spacing between tiled windows and the bottom screen edge (0 = no gap)</description>
     </key>
 
-    <key name="single-gap-left" type="i">
+    <key name="outside-gap-left" type="i">
       <default>4</default>
       <range min="0" max="200"/>
-      <summary>Left gap around a single window</summary>
-      <description>Gap between a single tiled window and the left screen edge (0 = no gap)</description>
+      <summary>Left outside gap in pixels</summary>
+      <description>Spacing between tiled windows and the left screen edge (0 = no gap)</description>
     </key>
 
-    <key name="single-gap-right" type="i">
+    <key name="outside-gap-right" type="i">
       <default>4</default>
       <range min="0" max="200"/>
-      <summary>Right gap around a single window</summary>
-      <description>Gap between a single tiled window and the right screen edge (0 = no gap)</description>
+      <summary>Right outside gap in pixels</summary>
+      <description>Spacing between tiled windows and the right screen edge (0 = no gap)</description>
     </key>
 
     <key name="layout" type="s">
