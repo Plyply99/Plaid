@@ -1440,6 +1440,7 @@ export default class TilingWMExtension extends Extension {
             win._plaidInvisibleTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
                 win._plaidInvisibleTimer = 0;
                 if (this._destroyed) return GLib.SOURCE_REMOVE;
+                this._debugLog(`backstop reveal: ${win.get_wm_class_instance() || '?'} ws=${this._wsIndex(win.get_workspace())} tiled=${this._windowWorkspaces.has(win)} frame=(${Math.round(win.get_frame_rect().x)},${Math.round(win.get_frame_rect().y)},${Math.round(win.get_frame_rect().width)},${Math.round(win.get_frame_rect().height)})`);
                 if (this._pendingWarp) this._pendingWarp.delete(win);
                 try {
                     const a = win.get_compositor_private();
@@ -1471,7 +1472,7 @@ export default class TilingWMExtension extends Extension {
             if (!win._plaidSignalsConnected) this._connectWindowSignals(win);
             return;
         }
-        this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()}`);
+        this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()} ws=${this._wsIndex(win.get_workspace())} type=${win.get_window_type()}`);
         // Lock-cycle resumes register windows that are already on screen and
         // tiled — the new-window fade-in (opacity 0 → landing audit → fade
         // back) would make every window vanish and reappear at unlock and
@@ -1588,7 +1589,18 @@ export default class TilingWMExtension extends Extension {
             this._updateBorders();
             this._convertMaximizedToGaps(win);
             this._trackFloatGeometry(win);
-            this._maybeReassertSlot(win);
+            // Settle window (event-driven client-resize correction): a
+            // freshly placed window can be re-sized by the client itself
+            // (Firefox's session restore) — correct it the INSTANT the
+            // size-changed fires, with the tight tolerance + direct
+            // re-place. After the window settles, the normal (16px/retile)
+            // path takes over so user resizes are free.
+            if (win._plaidSettleUntil && win._plaidSettleUntil > Date.now()) {
+                this._debugLog(`settle event: ${win.get_wm_class_instance() || '?'} remaining=${Math.round((win._plaidSettleUntil - Date.now()) / 1000)}s`);
+                this._maybeReassertSlot(win, 4, 'direct');
+            } else {
+                this._maybeReassertSlot(win);
+            }
         }) });
         sigIds.push({ emitter: win, id: win.connect('notify::wm-class', () => {
             this._onWindowIdentityChanged(win);
@@ -1862,6 +1874,37 @@ export default class TilingWMExtension extends Extension {
                 try { GLib.source_remove(s.win._plaidInvisibleTimer); } catch (_e) {}
                 s.win._plaidInvisibleTimer = 0;
             }
+            // Settle window: some clients (Firefox's session restore) re-apply
+            // their remembered geometry AFTER the placement. The size-changed
+            // hook catches it when the event reaches us, but the event path
+            // proved unreliable for this case (the journal showed only the
+            // backstop ever correcting), so a fine-grained poll is the
+            // dependable monitor: every 400ms for the 6s window, re-check
+            // the slot with the tight tolerance + direct re-place. The
+            // restore lands ~1-2s in → corrected within ~400ms of it (a
+            // quick flicker, no multi-second wait). Cost: ~15 trivial ticks
+            // per newly opened window, settle-window-only. The poll is NOT
+            // stopped on the first in-slot tick — a restore landing between
+            // ticks would be missed.
+            s.win._plaidSettleUntil = Date.now() + 6000;
+            if (s.win._plaidSettlePollId) {
+                try { GLib.source_remove(s.win._plaidSettlePollId); } catch (_e) {}
+                s.win._plaidSettlePollId = 0;
+            }
+            s.win._plaidSettlePollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+                const w = s.win;
+                if (this._destroyed || !w || !w.get_compositor_private() ||
+                    !this._windowWorkspaces || !this._windowWorkspaces.has(w)) {
+                    if (w) w._plaidSettlePollId = 0;
+                    return GLib.SOURCE_REMOVE;
+                }
+                if (!w._plaidSettleUntil || Date.now() > w._plaidSettleUntil) {
+                    w._plaidSettlePollId = 0;
+                    return GLib.SOURCE_REMOVE;
+                }
+                try { this._maybeReassertSlot(w, 4, 'direct'); } catch (_e) {}
+                return GLib.SOURCE_CONTINUE;
+            });
             this._scheduleBorders();
             let faded = false;
             const finishFade = () => {
@@ -2128,10 +2171,15 @@ export default class TilingWMExtension extends Extension {
                     // (it must not force-reveal a window that later moves to
                     // an inactive workspace) and re-attach flair that the
                     // pending-warp state skipped.
-                    if (win._plaidInvisibleTimer) {
-                        try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
-                        win._plaidInvisibleTimer = 0;
-                    }
+if (win._plaidInvisibleTimer) {
+            try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+            win._plaidInvisibleTimer = 0;
+        }
+        if (win._plaidSettlePollId) {
+            try { GLib.source_remove(win._plaidSettlePollId); } catch (_e) {}
+            win._plaidSettlePollId = 0;
+        }
+        win._plaidSettleUntil = 0;
                     this._scheduleBorders();
                     this._updateBorders();
                 }
@@ -3356,6 +3404,7 @@ export default class TilingWMExtension extends Extension {
 
     _onWindowIdentityChanged(win) {
         if (this._destroyed || !win) return;
+        this._debugLog(`identity: ${win.get_wm_class_instance() || '?'} appId=${win.get_gtk_application_id ? (win.get_gtk_application_id() || '?') : '?'} ws=${this._wsIndex(win.get_workspace())} managed=${this._windowWorkspaces.has(win)}`);
         // Backstop for the Extensions app / prefs window: its wm-class and GTK
         // app id can resolve AFTER the window was already added to the tiler.
         // If it identifies as the Extensions app now, un-tile it and restore
@@ -5613,11 +5662,11 @@ export default class TilingWMExtension extends Extension {
                 return false;
             });
             this._checkDynamicWorkspaces();
-            if (this._settings.get_boolean('tiling-popup'))
+            if (this._settings.get_boolean('workspace-popup'))
                 this._showPopup('Tiling Enabled');
         } else {
             this._restoreSavedPositions();
-            if (this._settings.get_boolean('tiling-popup'))
+            if (this._settings.get_boolean('workspace-popup'))
                 this._showPopup('Tiling Disabled');
         }
     }
@@ -8665,6 +8714,15 @@ export default class TilingWMExtension extends Extension {
     _windowSlotRect(win, ws, layout, workArea, gap) {
         if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
         if (layout === 'floating') return null;
+        // A single tiled window's slot IS its placement rect — the layouts
+        // place the lone window via _singleWindowRect (workArea minus the
+        // single-gap-* settings). The slot must agree EXACTLY or the
+        // re-assert/audit machinery sees a phantom mismatch (or, for
+        // dwindle, no slot at all — the BSP tree is never built for a
+        // single window, so the tree branch returned null and every settle
+        // re-assert silently no-oped while the window sat off-slot).
+        if (this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w)).length === 1)
+            return this._singleWindowRect(workArea);
         const areaX = workArea.x + gap;
         const areaY = workArea.y + gap;
         const areaW = workArea.width - gap * 2;
@@ -8689,10 +8747,6 @@ export default class TilingWMExtension extends Extension {
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         const idx = tiled.indexOf(win);
         if (idx === -1) return null;
-        if (tiled.length === 1) {
-            const r = { x: areaX, y: areaY, w: areaW, h: areaH };
-            return r;
-        }
 
         const masterRatio = this._getMasterRatio(ws);
         const numStack = tiled.length - 1;
@@ -8807,7 +8861,7 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _maybeReassertSlot(win) {
+    _maybeReassertSlot(win, tol = 16, mode = 'retile') {
         if (this._destroyed || !this._settings) return;
         if (!this._settings.get_boolean('enabled')) return;
         if (this._grabOp) return;
@@ -8824,9 +8878,20 @@ export default class TilingWMExtension extends Extension {
             this._slotReassertTimes.set(win, now);
         }
         if (this._animating) {
-            const ws = win.get_workspace();
-            if (ws && this._queuedAnimWorkspaces) this._queuedAnimWorkspaces.add(ws);
-            return;
+            // Direct mode must NOT queue: the settle re-assert of a freshly
+            // placed window can be starved by other workspaces' retile
+            // animation churn (ws1's constant 1s animations) — the queued
+            // ws drains into another animated retile that re-loses the
+            // client-resize race. A direct re-place is safe mid-animation
+            // (it only moves one window; it does not touch the retile
+            // machinery).
+            if (mode === 'direct') {
+                // fall through to the direct check below
+            } else {
+                const ws = win.get_workspace();
+                if (ws && this._queuedAnimWorkspaces) this._queuedAnimWorkspaces.add(ws);
+                return;
+            }
         }
         const ws = win.get_workspace();
         if (!ws) return;
@@ -8841,10 +8906,37 @@ export default class TilingWMExtension extends Extension {
         if (!slot) return;
         const f = win.get_frame_rect();
         if (f.width === 0 || f.height === 0) return;
-        if (Math.abs(f.width - slot.w) > 16 || Math.abs(f.height - slot.h) > 16 ||
-            Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16) {
-            this._debugLog(`slot re-assert: ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
-            this._scheduleRetile(ws);
+        let off = Math.abs(f.width - slot.w) > tol || Math.abs(f.height - slot.h) > tol ||
+            Math.abs(f.x - slot.x) > tol || Math.abs(f.y - slot.y) > tol;
+        if (!off && win.get_client_type() !== Meta.WindowClientType.X11) {
+            // Surface divergence: a Wayland client (Firefox's session
+            // restore) can re-commit its buffer at a SMALLER size after the
+            // placement while the compositor keeps the FRAME at the placed
+            // geometry — the frame rect then lies about the visible window
+            // (every frame-based check passes, the content renders short).
+            // A healthy Wayland buffer ≥ frame (shadow margins); buffer <
+            // frame = the client shrank its surface → treat as off-slot.
+            // (X11 SSD frames legitimately exceed the buffer — excluded.)
+            const buffer = win.get_buffer_rect();
+            if (buffer.width > 0 && (buffer.width < f.width || buffer.height < f.height)) {
+                this._debugLog(`slot re-assert (surface): ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+                off = true;
+            }
+        }
+        if (off) {
+            if (mode === 'direct') {
+                // Direct re-place: forces a fresh configure the client must
+                // obey (the maximize-keybind path) — silent, unanimated, no
+                // verify/float machinery, so it cannot re-lose the race.
+                this._debugLog(`slot re-assert: ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+                try {
+                    win.move_resize_frame(true, slot.x, slot.y, slot.w, slot.h);
+                    this._scheduleBorders();
+                } catch (_e) {}
+            } else {
+                this._debugLog(`slot re-assert: ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+                this._scheduleRetile(ws);
+            }
         }
     }
 
