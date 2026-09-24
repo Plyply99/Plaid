@@ -136,8 +136,7 @@ set -g _PLAID_TABLE \
     'follow-focus|b|Move cursor to focused window' \
     'pointer-focus|b|Focus window under the mouse (focus on hover)' \
     'mouse-resize|b|Enable mouse-based resize and swap' \
-    'workspace-popup|b|Show workspace popup' \
-    'tiling-popup|b|Show tiling popup' \
+    'workspace-popup|b|Show popups' \
     'pick-mode|b|Pick mode active' \
     'pick-mode-class|s|Captured window class' \
     'pick-mode-title|s|Captured window title' \

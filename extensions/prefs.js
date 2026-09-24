@@ -58,10 +58,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             _('Focus the window under the mouse (works across monitors)'));
         this._addSwitchRow(group, settings, 'mouse-resize', _('Mouse Resize and Swap'),
             _('Drag window edges to resize splits, drag title bar to swap windows'));
-        this._addSwitchRow(group, settings, 'workspace-popup', _('Show Workspace Popup'),
-            _('Show workspace number and layout when switching workspaces'));
-        this._addSwitchRow(group, settings, 'tiling-popup', _('Show Tiling Popup'),
-            _('Show a popup when tiling is toggled on or off'));
+        this._addSwitchRow(group, settings, 'workspace-popup', _('Show Popups'),
+            _('Show popups when switching workspaces and when tiling is toggled on or off'));
         this._addSwitchRow(group, settings, 'release-check-enabled', _('Auto Update'),
             _('Install updates automatically — they load on your next login.'));
         this._addSwitchRow(group, settings, 'init-overlay-enabled', _('Show Init Overlay'),
