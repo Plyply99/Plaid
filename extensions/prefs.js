@@ -67,12 +67,12 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         this._addSwitchRow(group, settings, 'debug', _('Debug Logging'),
             _('Verbose diagnostics to the system journal — only enable when troubleshooting.'));
 
-        this._addSpinRow(group, settings, 'gap', _('Window Gap'),
-            _('Gap between windows in pixels'), 0, 50, 1, 5);
+        this._addSpinRow(group, settings, 'inside-gap', _('Inside Gaps'),
+            _('Spacing between windows in pixels'), 0, 50, 1, 5);
 
         const singleEdgeRow = new Adw.ActionRow({
-            title: _('Single Window Edges'),
-            subtitle: _('Gap between a single tiled window and each screen edge'),
+            title: _('Outside Gaps'),
+            subtitle: _('Spacing between windows and each screen edge'),
         });
         const edgeGrid = new Gtk.Grid({
             column_spacing: 8,
@@ -81,10 +81,10 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             hexpand: true,
         });
         const edgeLabels = [
-            ['single-gap-top', _('Top')],
-            ['single-gap-bottom', _('Bottom')],
-            ['single-gap-left', _('Left')],
-            ['single-gap-right', _('Right')],
+            ['outside-gap-top', _('Top')],
+            ['outside-gap-bottom', _('Bottom')],
+            ['outside-gap-left', _('Left')],
+            ['outside-gap-right', _('Right')],
         ];
         edgeLabels.forEach(([key, label], idx) => {
             const row = Math.floor(idx / 2);

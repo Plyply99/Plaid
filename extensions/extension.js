@@ -1000,12 +1000,11 @@ export default class TilingWMExtension extends Extension {
             this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
             this._retileAll();
         }));
-        this._addSignal(this._settings, this._settings.connect('changed::gap', () => this._retileAll()));
-        this._addSignal(this._settings, this._settings.connect('changed::scratchpad-border-color', () => this._updateBorders()));
-        this._addSignal(this._settings, this._settings.connect('changed::single-gap-top', () => this._retileAll()));
-        this._addSignal(this._settings, this._settings.connect('changed::single-gap-bottom', () => this._retileAll()));
-        this._addSignal(this._settings, this._settings.connect('changed::single-gap-left', () => this._retileAll()));
-        this._addSignal(this._settings, this._settings.connect('changed::single-gap-right', () => this._retileAll()));
+this._addSignal(this._settings, this._settings.connect('changed::inside-gap', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::outside-gap-top', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::outside-gap-bottom', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::outside-gap-left', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::outside-gap-right', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::enabled', () => this._onTilingEnabledChanged()));
         this._addSignal(this._settings, this._settings.connect('changed::layout', () => {
             // The new default must apply to every workspace that has no
@@ -1524,7 +1523,7 @@ export default class TilingWMExtension extends Extension {
                     const slot = this._windowSlotRect(win, wsNow,
                         this._getWorkspaceLayout(wsNow),
                         wsNow.get_work_area_for_monitor(global.display.get_primary_monitor()),
-                        this._settings.get_int('gap'));
+                        this._settings.get_int('inside-gap'));
                     if (slot && win.get_compositor_private())
                         win.move_resize_frame(true, slot.x, slot.y, slot.w, slot.h);
                 }
@@ -1994,7 +1993,7 @@ export default class TilingWMExtension extends Extension {
         if (layout === 'floating') return;
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiled.length === 0) return;
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
@@ -2038,7 +2037,7 @@ export default class TilingWMExtension extends Extension {
             if (!win || !ws) return;
             const layout = this._getWorkspaceLayout(ws);
             if (layout === 'floating') return;
-            const gap = this._settings.get_int('gap');
+            const gap = this._settings.get_int('inside-gap');
             const monitor = global.display.get_primary_monitor();
             const workArea = ws.get_work_area_for_monitor(monitor);
             if (!workArea || workArea.width === 0) return;
@@ -2093,7 +2092,7 @@ export default class TilingWMExtension extends Extension {
         if (layout === 'floating') return;
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiled.length === 0) return;
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
@@ -2473,7 +2472,7 @@ if (win._plaidInvisibleTimer) {
     }
 
     _retileMasterStack(workspace, tiledWindows, skipWindow = null) {
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
         if (!workArea) return;
@@ -2487,10 +2486,12 @@ if (win._plaidInvisibleTimer) {
             return;
         }
 
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
+        const area = this._outsideArea(workArea);
+        if (!area) return;
+        const areaX = area.x;
+        const areaY = area.y;
+        const areaW = area.w;
+        const areaH = area.h;
         this._clampMasterStackRatios(workspace, tiledWindows, areaW, gap, false);
         const masterRatio = this._getMasterRatio(workspace);
         const masterW = Math.floor((areaW - gap) * masterRatio);
@@ -2571,7 +2572,7 @@ if (win._plaidInvisibleTimer) {
     }
 
     _retileCenteredMasterStack(workspace, tiledWindows, skipWindow = null) {
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
         if (!workArea) return;
@@ -2585,10 +2586,12 @@ if (win._plaidInvisibleTimer) {
             return;
         }
 
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
+        const area = this._outsideArea(workArea);
+        if (!area) return;
+        const areaX = area.x;
+        const areaY = area.y;
+        const areaW = area.w;
+        const areaH = area.h;
         this._clampMasterStackRatios(workspace, tiledWindows, areaW, gap, true);
         const numStack = numWindows - 1;
         const leftCount = Math.ceil(numStack / 2);
@@ -2735,7 +2738,7 @@ if (win._plaidInvisibleTimer) {
         const monitor = global.display.get_primary_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
         if (!workArea) return;
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const areaW = workArea.width - gap * 2;
         const layout = this._getWorkspaceLayout(workspace);
         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
@@ -2763,7 +2766,7 @@ if (win._plaidInvisibleTimer) {
     }
 
     _computeMasterStackDropTarget(ws, px, py) {
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return -1;
@@ -3063,7 +3066,7 @@ if (win._plaidInvisibleTimer) {
     }
 
     _bspInsertForWorkspace(ws, win) {
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
@@ -3224,7 +3227,7 @@ if (win._plaidInvisibleTimer) {
     }
 
     _retileDwindle(workspace, tiledWindows) {
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
         if (!workArea) return;
@@ -3237,10 +3240,12 @@ if (win._plaidInvisibleTimer) {
         }
 
         let tree = this._bspGetTree(workspace);
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
+        const area = this._outsideArea(workArea);
+        if (!area) return;
+        const areaX = area.x;
+        const areaY = area.y;
+        const areaW = area.w;
+        const areaH = area.h;
 
         if (tree) {
             const treeWins = this._bspCollectWindows(tree);
@@ -3271,7 +3276,7 @@ if (win._plaidInvisibleTimer) {
 
         this._treeMinSizes(tree);
         this._clampTreeToMinSizes(tree, areaW, areaH, gap);
-        this._bspLayout(tree, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+        this._bspLayout(tree, areaX, areaY, areaW, areaH, gap);
     }
 
     _moveWindow(win, x, y, w, h) {
@@ -3295,18 +3300,26 @@ if (win._plaidInvisibleTimer) {
         }
     }
 
-    _singleWindowRect(workArea) {
+    _outsideArea(workArea) {
+        // The tiling area: the work area inset by the per-edge OUTSIDE gaps
+        // (spacing between windows and the screen edges) — the same rect
+        // whether one window or many (the multi-window layouts tile inside
+        // it; the single-window placement IS it).
         if (!this._settings) return null;
-        const top = this._settings.get_int('single-gap-top');
-        const bottom = this._settings.get_int('single-gap-bottom');
-        const left = this._settings.get_int('single-gap-left');
-        const right = this._settings.get_int('single-gap-right');
+        const top = this._settings.get_int('outside-gap-top');
+        const bottom = this._settings.get_int('outside-gap-bottom');
+        const left = this._settings.get_int('outside-gap-left');
+        const right = this._settings.get_int('outside-gap-right');
         return {
             x: workArea.x + left,
             y: workArea.y + top,
             w: Math.max(1, workArea.width - left - right),
             h: Math.max(1, workArea.height - top - bottom),
         };
+    }
+
+    _singleWindowRect(workArea) {
+        return this._outsideArea(workArea);
     }
 
     _convertMaximizedToGaps(win) {
@@ -8521,7 +8534,7 @@ if (win._plaidInvisibleTimer) {
                 const dx = curX - this._grabStartX;
                 const dy = curY - this._grabStartY;
 
-                const gap = this._settings.get_int('gap');
+                const gap = this._settings.get_int('inside-gap');
                 const monitor = global.display.get_primary_monitor();
                 const workArea = ws.get_work_area_for_monitor(monitor);
                 if (!workArea) return GLib.SOURCE_CONTINUE;
@@ -8680,7 +8693,7 @@ if (win._plaidInvisibleTimer) {
     _moveTiledExcept(skipWindow) {
         const ws = skipWindow.get_workspace();
         if (!ws) return;
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
@@ -8711,22 +8724,22 @@ if (win._plaidInvisibleTimer) {
         return r;
     }
 
-    _windowSlotRect(win, ws, layout, workArea, gap) {
+    _windowSlotRect(win, ws, layout, workArea, insideGap) {
         if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
         if (layout === 'floating') return null;
         // A single tiled window's slot IS its placement rect — the layouts
-        // place the lone window via _singleWindowRect (workArea minus the
-        // single-gap-* settings). The slot must agree EXACTLY or the
-        // re-assert/audit machinery sees a phantom mismatch (or, for
-        // dwindle, no slot at all — the BSP tree is never built for a
-        // single window, so the tree branch returned null and every settle
-        // re-assert silently no-oped while the window sat off-slot).
+        // place the lone window via _singleWindowRect (the work area inset
+        // by the per-edge outside-gap-* settings). The slot must agree
+        // EXACTLY or the re-assert/audit machinery sees a phantom mismatch
+        // (or, for dwindle, no slot at all — the BSP tree is never built
+        // for a single window, so the tree branch returned null and every
+        // settle re-assert silently no-oped while the window sat off-slot).
         if (this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w)).length === 1)
             return this._singleWindowRect(workArea);
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
+        const area = this._outsideArea(workArea);
+        if (!area) return null;
+        const { x: areaX, y: areaY, w: areaW, h: areaH } = area;
+        const gap = insideGap;
         if (areaW <= 0 || areaH <= 0) return null;
 
         if (layout === 'dwindle') {
@@ -8817,7 +8830,7 @@ if (win._plaidInvisibleTimer) {
             if (this._destroyed || !this._grabOp || !win) return;
             const ws = win.get_workspace();
             if (!ws) return;
-            const gap = this._settings.get_int('gap');
+            const gap = this._settings.get_int('inside-gap');
             const monitor = global.display.get_primary_monitor();
             let workArea = null;
             try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
@@ -8895,7 +8908,7 @@ if (win._plaidInvisibleTimer) {
         }
         const ws = win.get_workspace();
         if (!ws) return;
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         let workArea = null;
         try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
@@ -9123,7 +9136,7 @@ if (win._plaidInvisibleTimer) {
     }
 
     _showMasterStackPreview(ws, targetIdx) {
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
@@ -9177,7 +9190,7 @@ if (win._plaidInvisibleTimer) {
         const tree = this._bspGetTree(ws);
         if (!tree) return null;
 
-        const gap = this._settings.get_int('gap');
+        const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return null;
@@ -9256,7 +9269,7 @@ if (win._plaidInvisibleTimer) {
                 }
             }
 
-            const gap = this._settings.get_int('gap');
+            const gap = this._settings.get_int('inside-gap');
             let newTree = this._bspRemove(tree, window);
             if (newTree.type === 'empty') newTree = null;
 
