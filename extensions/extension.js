@@ -619,9 +619,16 @@ export default class TilingWMExtension extends Extension {
             try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
             this._pickFocusId = null;
         }
-        for (const id of (this._pendingRetileIds || new Map()).values())
-            GLib.source_remove(id);
-        if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
+        if (_lockModeId) {
+            // Unpaired shell-lifetime signal: the handler captures `this`
+            // (the extension instance) for the life of the shell otherwise.
+            try { Main.sessionMode.disconnect(_lockModeId); } catch (_e) {}
+            _lockModeId = 0;
+        }
+        // NOTE: pending retile/border sources are removed by
+        // _disconnectSignals() below — removing them here too made GLib log
+        // "Source ID not found" (double remove). disable() runs
+        // synchronously, so nothing can dispatch between here and there.
         if (this._stackSettleId) {
             GLib.source_remove(this._stackSettleId);
             this._stackSettleId = 0;
@@ -943,6 +950,9 @@ export default class TilingWMExtension extends Extension {
                     this._bspTrees.delete(workspace);
                     this._workspaceLayouts.delete(this._wsIndex(workspace));
                     this._lastFocusedPerWorkspace.delete(workspace);
+                    // Workspace-keyed, workspace-object key — a retained
+                    // GJS wrapper per removed workspace otherwise.
+                    this._lastRetileTimes?.delete(workspace);
                     this._scheduleSaveLayouts();
                 }
             }
@@ -1592,10 +1602,18 @@ export default class TilingWMExtension extends Extension {
         if (this._mismatchFrames) this._mismatchFrames.delete(win);
         if (this._slotReassertTimes) this._slotReassertTimes.delete(win);
         if (this._pendingWarp) this._pendingWarp.delete(win);
+        if (this._newWindowSet) this._newWindowSet.delete(win);
         if (win._plaidInvisibleTimer) {
             try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
             win._plaidInvisibleTimer = 0;
         }
+        if (win._plaidSettlePollId) {
+            // The poll self-stops next tick via the _windowWorkspaces guard,
+            // but remove it eagerly so no source id outlives the window.
+            try { GLib.source_remove(win._plaidSettlePollId); } catch (_e) {}
+            win._plaidSettlePollId = 0;
+        }
+        win._plaidSettleUntil = 0;
         if (this._maximizeToggleRects) this._maximizeToggleRects.delete(win);
         this._savedRects.delete(win);
         this._scratchpadWindows.delete(win);
@@ -2157,15 +2175,17 @@ export default class TilingWMExtension extends Extension {
             const monitor = global.display.get_primary_monitor();
             const workArea = ws.get_work_area_for_monitor(monitor);
             if (!workArea || workArea.width === 0) return;
-            const areaW = workArea.width - gap * 2;
-            const areaH = workArea.height - gap * 2;
+            const area = this._outsideArea(workArea);
+            if (!area) return;
+            const areaW = area.w;
+            const areaH = area.h;
             const f = win.get_frame_rect();
             const min = this._getWindowMinSize(win);
             const minSrc = min.w > 0 || min.h > 0 ? `min=${min.w}x${min.h}` : 'min=none';
             if (layout === 'dwindle') {
                 const tree = this._bspGetTree(ws);
                 if (!tree) return;
-                this._adjustForConstraints(tree, null, true, workArea.x + gap, workArea.y + gap, areaW, areaH, gap);
+                this._adjustForConstraints(tree, null, true, area.x, area.y, areaW, areaH, gap);
             } else if (layout === 'master-stack' || layout === 'centered-master-stack') {
                 const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                 if (tiled.length < 2) return;
@@ -2330,6 +2350,11 @@ export default class TilingWMExtension extends Extension {
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             if (this._landingGivenUp && this._landingGivenUp.has(win)) return GLib.SOURCE_REMOVE;
+            // Window-liveness: _removeWindow prunes the given-up set on
+            // close, so that guard no longer covers a window closed within
+            // this 200ms window — touching a finalized Meta.Window here
+            // throws inside the source callback.
+            if (!win.get_compositor_private()) return GLib.SOURCE_REMOVE;
             const ws = win.get_workspace();
             if (ws) {
                 this._debugLog(`anim: landing retry ${n} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized}`);
@@ -2856,7 +2881,9 @@ export default class TilingWMExtension extends Extension {
         const workArea = workspace.get_work_area_for_monitor(monitor);
         if (!workArea) return;
         const gap = this._settings.get_int('inside-gap');
-        const areaW = workArea.width - gap * 2;
+        const area = this._outsideArea(workArea);
+        if (!area) return;
+        const areaW = area.w;
         const layout = this._getWorkspaceLayout(workspace);
         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
 
@@ -2888,17 +2915,21 @@ export default class TilingWMExtension extends Extension {
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return -1;
 
-        if (px < workArea.x || px > workArea.x + workArea.width ||
-            py < workArea.y || py > workArea.y + workArea.height)
+        const area = this._outsideArea(workArea);
+        if (!area) return -1;
+        const areaX = area.x;
+        const areaY = area.y;
+        const areaW = area.w;
+        const areaH = area.h;
+
+        // Drop zones live inside the outside-gapped area — a pointer in the
+        // outside-gap strip selects nothing.
+        if (px < areaX || px > areaX + areaW || py < areaY || py > areaY + areaH)
             return -1;
 
         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
         if (tiled.length === 0) return -1;
 
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
         const numStack = tiled.length - 1;
 
         if (numStack === 0) return 0;
@@ -3194,10 +3225,12 @@ export default class TilingWMExtension extends Extension {
             if (existing.includes(win)) return;
         }
 
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
+        const area = this._outsideArea(workArea);
+        if (!area) return;
+        const areaX = area.x;
+        const areaY = area.y;
+        const areaW = area.w;
+        const areaH = area.h;
 
         if (tree) {
             const [px, py] = global.get_pointer();
@@ -3711,9 +3744,11 @@ export default class TilingWMExtension extends Extension {
             if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
         }
 
-        if (this._settings.get_boolean('gradient-borders') &&
-            this._settings.get_int('border-animation-speed') > 0)
-            this._startBorderAnimation();
+        // The border animation is armed by _syncBorderAnimation() below with the
+        // full condition (gradient + speed + live borders/masks). A standalone
+        // start here (without the maps check) armed the tick on every pass
+        // even with empty maps — start log → sync stops it → next pass:
+        // a per-pass `border animation: start` log pair.
 
         if (!roundedCorners || borderRadius <= 0)
             this._removeAllMasks();
@@ -3972,9 +4007,12 @@ export default class TilingWMExtension extends Extension {
             const animated = period > 0;
             let theta = 0;
             if (animated) {
-                const stSettings = St.Settings.get();
-                const slow = Math.max(0.1, stSettings.slow_down_factor);
-                theta = (((Date.now() / period) * slow) % 1) * Math.PI * 2;
+                // Rotation is driven by border-animation-speed ALONE —
+                // slow_down_factor is deliberately not applied here (it is
+                // an accessibility lever for placement animations via
+                // _getAnimationTime; applying it to rotation made the
+                // phase advance FASTER — inverted polarity).
+                theta = ((Date.now() / period) % 1) * Math.PI * 2;
             }
 
             const cr = border.get_context();
@@ -4049,10 +4087,9 @@ export default class TilingWMExtension extends Extension {
                 this._stopBorderAnimation();
                 return GLib.SOURCE_REMOVE;
             }
-            const stSettings = St.Settings.get();
-            const slow = Math.max(0.1, stSettings.slow_down_factor);
+            // Rotation follows border-animation-speed alone (see _repaintBorder).
             const period = this._borderRotationMs(this._settings.get_int('border-animation-speed'));
-            const theta = period > 0 ? (((Date.now() / period) * slow) % 1) * Math.PI * 2 : 0;
+            const theta = period > 0 ? ((Date.now() / period) % 1) * Math.PI * 2 : 0;
             for (const effect of this._windowMasks.values()) {
                 try { effect.setTheta(theta); } catch (_e) {}
             }
@@ -4564,7 +4601,7 @@ export default class TilingWMExtension extends Extension {
         const y2 = offsetY + actor.height + bh;
 
         if (!this._settings) {
-            effect.updateMask(x1, y1, x2, y2, radius, borderWidth, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, [0, 0, 0, 0]);
+            effect.updateMask(x1, y1, x2, y2, radius, borderWidth, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, 0, [0, 0, 0, 0]);
             return;
         }
 
@@ -4586,9 +4623,8 @@ export default class TilingWMExtension extends Extension {
         const period = this._borderRotationMs(speed);
         if (period > 0 && this._settings.get_boolean('gradient-borders')) {
             mode = 3;
-            const stSettings = St.Settings.get();
-            const slow = Math.max(0.1, stSettings.slow_down_factor);
-            theta = (((Date.now() / period) * slow) % 1) * Math.PI * 2;
+            // Rotation follows border-animation-speed alone (see _repaintBorder).
+            theta = ((Date.now() / period) % 1) * Math.PI * 2;
         } else {
             const dir = this._settings.get_string('gradient-direction');
             if (dir === 'horizontal')
@@ -5401,8 +5437,11 @@ export default class TilingWMExtension extends Extension {
                     Math.abs(sH - aH) > aH * 0.15 + 64;
                 if (mismatched) {
                     changed = true;
-                    log(`[plaid] blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
                     if (!blur._reAttachPending) {
+                        // Inside the guard: _syncBlurStacking runs on EVERY
+                        // restacked — logging here unguarded spammed the
+                        // journal once per restack while a mismatch persisted.
+                        log(`[plaid] blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
                         blur._reAttachPending = true;
                         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                             if (this._destroyed) return GLib.SOURCE_REMOVE;
@@ -7425,8 +7464,8 @@ export default class TilingWMExtension extends Extension {
         }
         if (overlay) {
             try { overlay.destroy(); } catch (_e) {}
+            log('[plaid] background app: init overlay dismissed');
         }
-        log('[plaid] background app: init overlay dismissed');
     }
 
     _launchBackgroundApp() {
@@ -8752,10 +8791,12 @@ export default class TilingWMExtension extends Extension {
                 if (layout === 'dwindle') {
                     const tree = this._bspGetTree(ws);
                     if (tree) {
-                        const areaX = workArea.x + gap;
-                        const areaY = workArea.y + gap;
-                        const areaW = workArea.width - gap * 2;
-                        const areaH = workArea.height - gap * 2;
+                        const area = this._outsideArea(workArea);
+                        if (!area) return GLib.SOURCE_CONTINUE;
+                        const areaX = area.x;
+                        const areaY = area.y;
+                        const areaW = area.w;
+                        const areaH = area.h;
 
                         this._treeMinSizes(tree);
                         if (this._grabResizeNodeW) {
@@ -8793,8 +8834,10 @@ export default class TilingWMExtension extends Extension {
                         this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
                     }
                 } else if (layout === 'master-stack' || layout === 'centered-master-stack') {
-                    const areaW = workArea.width - gap * 2;
-                    const areaH = workArea.height - gap * 2;
+                    const area = this._outsideArea(workArea);
+                    if (!area) return GLib.SOURCE_CONTINUE;
+                    const areaW = area.w;
+                    const areaH = area.h;
 
                     if (this._grabWidthSign !== 0) {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
@@ -8914,7 +8957,9 @@ export default class TilingWMExtension extends Extension {
             if (!tree) return;
             const treeWins = this._bspCollectWindows(tree);
             if (!treeWins.includes(skipWindow)) return;
-            this._bspLayout(tree, workArea.x + gap, workArea.y + gap, workArea.width - gap * 2, workArea.height - gap * 2, gap, skipWindow);
+            const area = this._outsideArea(workArea);
+            if (!area) return;
+            this._bspLayout(tree, area.x, area.y, area.w, area.h, gap, skipWindow);
         } else {
             const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
             if (tiled.length <= 1) return;
@@ -9093,11 +9138,15 @@ export default class TilingWMExtension extends Extension {
         // Timestamp gate: size-changed fires per move/resize step and the
         // full slot computation is O(n²) per retile — skip re-checks for the
         // same window within 250ms (the retile verify covers the rest).
+        // NOTE: the gate is only READ here — the timestamp is recorded
+        // AFTER the animating block below, so a retile-mode call that only
+        // queues (and does no work) no longer refreshes the gate and starve
+        // a direct correction queued behind it. Consecutive acting calls
+        // stay debounced (the client-fight protection).
         const now = Date.now();
         if (this._slotReassertTimes) {
             const last = this._slotReassertTimes.get(win);
             if (last && now - last < 250) return;
-            this._slotReassertTimes.set(win, now);
         }
         if (this._animating) {
             // Direct mode must NOT queue: the settle re-assert of a freshly
@@ -9115,6 +9164,7 @@ export default class TilingWMExtension extends Extension {
                 return;
             }
         }
+        if (this._slotReassertTimes) this._slotReassertTimes.set(win, now);
         const ws = win.get_workspace();
         if (!ws) return;
         const gap = this._settings.get_int('inside-gap');
@@ -9350,10 +9400,12 @@ export default class TilingWMExtension extends Extension {
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return;
 
-        const areaX = workArea.x + gap;
-        const areaY = workArea.y + gap;
-        const areaW = workArea.width - gap * 2;
-        const areaH = workArea.height - gap * 2;
+        const area = this._outsideArea(workArea);
+        if (!area) return;
+        const areaX = area.x;
+        const areaY = area.y;
+        const areaW = area.w;
+        const areaH = area.h;
         const masterRatio = this._getMasterRatio(ws);
         const layout = this._getWorkspaceLayout(ws);
 
@@ -9404,14 +9456,17 @@ export default class TilingWMExtension extends Extension {
         const workArea = ws.get_work_area_for_monitor(monitor);
         if (!workArea) return null;
 
-        if (px < workArea.x || px > workArea.x + workArea.width ||
-            py < workArea.y || py > workArea.y + workArea.height)
-            return null;
+        const area = this._outsideArea(workArea);
+        if (!area) return null;
+        const ax = area.x;
+        const ay = area.y;
+        const aw = area.w;
+        const ah = area.h;
 
-        const ax = workArea.x + gap;
-        const ay = workArea.y + gap;
-        const aw = workArea.width - gap * 2;
-        const ah = workArea.height - gap * 2;
+        // Drop zones live inside the outside-gapped area — a pointer in the
+        // outside-gap strip selects nothing.
+        if (px < ax || px > ax + aw || py < ay || py > ay + ah)
+            return null;
 
         this._bspTagGeometry(tree, ax, ay, aw, ah, gap);
         return this._bspFindLeafAtPoint(tree, ax, ay, aw, ah, px, py, gap);
