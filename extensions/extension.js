@@ -265,15 +265,20 @@ export default class TilingWMExtension extends Extension {
         const wasEnabled = _enabledThisShell;
         _enabledThisShell = true;
         try {
-            // Meta.is_wayland_compositor does not exist on GNOME 50/51 —
-            // the old check was inert and the Wayland-only rejection never
-            // fired. Detect via the backend: get_wayland_display() is
-            // non-null on Wayland, NULL on X11. Failures default to
-            // permissive (never block a real Wayland session).
+            // Meta.is_wayland_compositor does not exist on GNOME 50/51 (the
+            // old check was inert — the rejection never fired), and neither
+            // Backend.get_wayland_display nor WaylandCompositor.get_default
+            // are introspectable. The working chain: the backend's context
+            // exposes get_wayland_compositor() — non-null on Wayland, NULL
+            // on X11. Any failure defaults to permissive (never block a
+            // real Wayland session).
             let isWayland = true;
             try {
-                if (global.backend.get_wayland_display)
-                    isWayland = !!global.backend.get_wayland_display();
+                if (global.backend.get_context) {
+                    const ctx = global.backend.get_context();
+                    if (ctx && typeof ctx.get_wayland_compositor === 'function')
+                        isWayland = !!ctx.get_wayland_compositor();
+                }
             } catch (_e) {}
             if (!isWayland) {
                 this._notifyCritical('Plaid', 'Plaid requires Wayland — the extension is disabled on X11.');
