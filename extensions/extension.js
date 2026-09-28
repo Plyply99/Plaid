@@ -156,7 +156,10 @@ const MASK_SNIPPET_CODE = `
     cogl_color_out *= opacity;
 `;
 
-const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook ? Cogl.SnippetHook.FRAGMENT : Shell.SnippetHook.FRAGMENT;
+// Shell.SnippetHook (the old fallback arm) does not exist on GNOME 50/51 —
+// referencing it threw at MODULE LOAD if Cogl.SnippetHook were ever absent.
+// Optional chaining keeps the load safe; the creation paths handle undefined.
+const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook?.FRAGMENT;
 
 // Custom background blur (v51.11, pure GJS): reimplements Shell.BlurEffect's
 // BACKGROUND-mode paint chain (blit stage-beneath → FBO → blur node → final
@@ -216,7 +219,7 @@ const BLUR_SNIPPET_CODE = `
 // where cogl_sampler is declared; the plain FRAGMENT hook fails to compile
 // ("cogl_sampler undeclared", observed on GNOME 50). Writes cogl_texel via
 // set_replace, coefficients computed incrementally (GPU Gems ch. 40).
-const BLUR_LOOKUP_HOOK = Cogl.SnippetHook ? Cogl.SnippetHook.TEXTURE_LOOKUP : Shell.SnippetHook.TEXTURE_LOOKUP;
+const BLUR_LOOKUP_HOOK = Cogl.SnippetHook?.TEXTURE_LOOKUP;
 
 const BLUR_KERNEL_DECLARATIONS = `
 uniform float sigma;
@@ -262,7 +265,17 @@ export default class TilingWMExtension extends Extension {
         const wasEnabled = _enabledThisShell;
         _enabledThisShell = true;
         try {
-            if (Meta.is_wayland_compositor && !Meta.is_wayland_compositor()) {
+            // Meta.is_wayland_compositor does not exist on GNOME 50/51 —
+            // the old check was inert and the Wayland-only rejection never
+            // fired. Detect via the backend: get_wayland_display() is
+            // non-null on Wayland, NULL on X11. Failures default to
+            // permissive (never block a real Wayland session).
+            let isWayland = true;
+            try {
+                if (global.backend.get_wayland_display)
+                    isWayland = !!global.backend.get_wayland_display();
+            } catch (_e) {}
+            if (!isWayland) {
                 this._notifyCritical('Plaid', 'Plaid requires Wayland — the extension is disabled on X11.');
                 log('[plaid] disabled: Wayland-only (X11 session detected)');
                 return;
@@ -307,7 +320,6 @@ export default class TilingWMExtension extends Extension {
         this._windowWSIndices = new Map();
         this._slotReassertTimes = new Map();
         this._workspaceLayouts = new Map();
-        this._currentDefaultLayout = this._settings.get_string('layout');
         this._lastRetileTimes = new Map();
         this._masterRatios = new Map();
         this._stackRatios = new Map();
@@ -1067,7 +1079,6 @@ export default class TilingWMExtension extends Extension {
             // explicit override — _getWorkspaceLayout already resolves
             // live → persisted → default, so workspaces without a live
             // entry fall through to the new default automatically.
-            this._currentDefaultLayout = this._settings.get_string('layout');
             const activeWs = global.workspace_manager.get_active_workspace();
             if (activeWs)
                 this._retileWorkspace(activeWs);
@@ -6131,7 +6142,6 @@ export default class TilingWMExtension extends Extension {
                 });
             }
         };
-        this._layoutPopupDismiss = dismissPopup;
 
         if (onActivate) {
             popup.connect('button-press-event', () => {
@@ -6252,7 +6262,7 @@ export default class TilingWMExtension extends Extension {
             if (!this._warningPopup) {
                 this._debugLog('workspace popup: showing warning');
                 this._showWarningPopup('Workspace Popup Hidden',
-                    'Another extension is also suppressing this popup — both manage this behavior. Adjust either one to change it.',
+                    'Just Perfection also manages the workspace popup — workspace-switch popups may be suppressed. Plaid’s tiling popups are unaffected.',
                     'Click to dismiss');
             }
         } else {
@@ -7773,23 +7783,6 @@ export default class TilingWMExtension extends Extension {
         return !!current && current.marker === marker && current.set.has(pid);
     }
 
-    _commandTokenMatches(win, command) {
-        if (!command) return false;
-        const instance = (win.get_wm_class_instance() || '').toLowerCase();
-        const cls = (win.get_wm_class() || '').toLowerCase();
-        if (!instance && !cls) return false;
-        for (const raw of command.trim().split(/\s+/)) {
-            if (!raw || raw.startsWith('-')) continue;
-            let token = raw;
-            const slash = token.lastIndexOf('/');
-            if (slash >= 0) token = token.slice(slash + 1);
-            token = token.toLowerCase();
-            if (!token || token.length < 2) continue;
-            if (instance.includes(token) || cls.includes(token)) return true;
-        }
-        return false;
-    }
-
     _handleBackgroundAppWindowCreated(win) {
         if (!win || win.get_window_type() !== Meta.WindowType.NORMAL) return false;
         if (this._backgroundAppPending && this._tryClaimBackgroundApp(win)) return true;
@@ -7868,9 +7861,9 @@ export default class TilingWMExtension extends Extension {
         this._debugLog('background app: clone mode (parked window + background clone)');
         const deferredPark = () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
-            this._debugLog('[plaid] background app: deferred park firing');
+            this._debugLog('background app: deferred park firing');
             if (win !== this._backgroundAppWin) {
-                this._debugLog('[plaid] background app: deferred park skipped (window no longer the bg app)');
+                this._debugLog('background app: deferred park skipped (window no longer the bg app)');
                 return GLib.SOURCE_REMOVE;
             }
             // Defer the park out of the login burst: the workspace mutation,
@@ -7898,7 +7891,7 @@ export default class TilingWMExtension extends Extension {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
                 if (this._destroyed) return GLib.SOURCE_REMOVE;
                 this._raiseBackgroundAppClone();
-                this._debugLog('[plaid] background app: clone re-raised after startup settle');
+                this._debugLog('background app: clone re-raised after startup settle');
                 return GLib.SOURCE_REMOVE;
             });
             this._requestBackgroundAppInitDismiss();
@@ -7912,7 +7905,7 @@ export default class TilingWMExtension extends Extension {
                         try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
                         this._backgroundAppFirstFrameId = 0;
                     }
-                    this._debugLog('[plaid] background app: first-frame fired, scheduling park in 3s');
+                    this._debugLog('background app: first-frame fired, scheduling park in 3s');
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, deferredPark);
                 });
             }
@@ -7991,7 +7984,7 @@ export default class TilingWMExtension extends Extension {
         if (!mon || mon.width === 0) return;
 
         if (!this._backgroundAppParkingWs) {
-            this._debugLog('[plaid] background app: park deferred (no parking ws yet, scheduling reservation)');
+            this._debugLog('background app: park deferred (no parking ws yet, scheduling reservation)');
             this._scheduleBackgroundAppReservation();
             // Retry until the reservation completes (bounded) — the window
             // must never be left unparked on the user's workspace.
@@ -8255,12 +8248,12 @@ export default class TilingWMExtension extends Extension {
         if (!this._backgroundAppClone) {
             const actor = win.get_compositor_private();
             if (!actor) {
-                this._debugLog('[plaid] background app: clone skipped (no compositor actor)');
+                this._debugLog('background app: clone skipped (no compositor actor)');
                 return;
             }
             const bg = Main.layoutManager._backgroundGroup;
             if (!bg) {
-                this._debugLog('[plaid] background app: clone skipped (no background group)');
+                this._debugLog('background app: clone skipped (no background group)');
                 return;
             }
             try {
@@ -8284,13 +8277,13 @@ export default class TilingWMExtension extends Extension {
     _positionBackgroundAppClone() {
         const clone = this._backgroundAppClone;
         if (!clone) {
-            this._debugLog('[plaid] background app: clone position skipped (no clone)');
+            this._debugLog('background app: clone position skipped (no clone)');
             return;
         }
         const monitor = global.display.get_primary_monitor();
         const mon = global.display.get_monitor_geometry(monitor);
         if (!mon || mon.width === 0) {
-            this._debugLog('[plaid] background app: clone position skipped (monitor geometry unavailable)');
+            this._debugLog('background app: clone position skipped (monitor geometry unavailable)');
             return;
         }
         try {
