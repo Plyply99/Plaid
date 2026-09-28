@@ -622,6 +622,10 @@ export default class TilingWMExtension extends Extension {
         for (const id of (this._pendingRetileIds || new Map()).values())
             GLib.source_remove(id);
         if (this._pendingBorderId) GLib.source_remove(this._pendingBorderId);
+        if (this._stackSettleId) {
+            GLib.source_remove(this._stackSettleId);
+            this._stackSettleId = 0;
+        }
         this._stopLiveResizeLoop();
         this._disconnectGrabBoundaryHooks();
         // A disable mid-grab would otherwise leave _grabOp set: every retile
@@ -855,6 +859,7 @@ export default class TilingWMExtension extends Extension {
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
+                        if (this._destroyed || !this._settings) return;
                         doRaise();
                         doRestore();
                         if (this._settings.get_boolean('follow-focus') &&
@@ -865,6 +870,7 @@ export default class TilingWMExtension extends Extension {
                     });
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                        if (this._destroyed || !this._settings) return false;
                         doRaise();
                         doRestore();
                         if (this._settings.get_boolean('follow-focus') &&
@@ -969,6 +975,45 @@ export default class TilingWMExtension extends Extension {
             try { this._reassertFloatingTransients(); } catch (_e) {}
             try { this._updateBorders(); } catch (_e) {}
             try { this._auditWorkspaceLandings(ws); } catch (_e) {}
+            // Post-switch settle POLL: XWayland windows commit their surface AFTER
+            // the switch choreography — their visibility flip and the reveal
+            // sink happen with no further `restacked`, so the blur glue +
+            // visibility sync + float raise never re-run: the float stays
+            // sunk with a stale blur sibling painting over the stack until
+            // focus forces a restack. A fixed delayed pass made the wrong
+            // state visible for the whole delay (janky 300ms snap), so poll
+            // instead: every 50ms for 1.5s re-run the cheap pair (glue +
+            // re-assert), bounding any correction to ≤50ms after the state
+            // actually changes. No early-out: the reveal ordering can re-sink a
+            // float after an apparently-quiet tick, so keep re-asserting for
+            // the whole window. The heavy borders pass runs
+            // ONLY at the end when something was actually corrected (an
+            // unconditional pass forces a mask re-upload + stage
+            // queue_redraw — a visible flash on calm switches); mid-window
+            // geometry changes hit borders naturally via size-changed.
+            // One poll per switch (re-armed), cleaned up in disable().
+            if (this._stackSettleId) {
+                try { GLib.source_remove(this._stackSettleId); } catch (_e) {}
+                this._stackSettleId = 0;
+            }
+            let settleTicks = 0;
+            let settleChanged = false;
+            this._stackSettleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                if (this._destroyed || ++settleTicks > 30) {
+                    this._stackSettleId = 0;
+                    // Borders refresh ONLY when the poll corrected something:
+                    // an unconditional pass re-uploads mask uniforms +
+                    // stage queue_redraw — a visible flash on calm switches
+                    // where nothing needed fixing.
+                    if (!this._destroyed && settleChanged) {
+                        try { this._updateBorders(); } catch (_e) {}
+                    }
+                    return GLib.SOURCE_REMOVE;
+                }
+                try { if (this._syncBlurStackingNow()) settleChanged = true; } catch (_e) {}
+                try { if (this._reassertFloatingTransients()) settleChanged = true; } catch (_e) {}
+                return GLib.SOURCE_CONTINUE;
+            });
             const windows = this._getWindowsForWorkspace(ws);
             if (windows.length === 0) return;
             let target = this._lastFocusedPerWorkspace.get(ws);
@@ -1000,11 +1045,12 @@ export default class TilingWMExtension extends Extension {
             this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
             this._retileAll();
         }));
-this._addSignal(this._settings, this._settings.connect('changed::inside-gap', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::inside-gap', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::outside-gap-top', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::outside-gap-bottom', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::outside-gap-left', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::outside-gap-right', () => this._retileAll()));
+        this._addSignal(this._settings, this._settings.connect('changed::scratchpad-border-color', () => this._updateBorders()));
         this._addSignal(this._settings, this._settings.connect('changed::enabled', () => this._onTilingEnabledChanged()));
         this._addSignal(this._settings, this._settings.connect('changed::layout', () => {
             // The new default must apply to every workspace that has no
@@ -1667,7 +1713,21 @@ this._addSignal(this._settings, this._settings.connect('changed::inside-gap', ()
                 this._trackFloatGeometry(win);
             }),
         ];
-        ids.push(win.connect('unmanaged', () => this._disconnectFloatHooks(win)));
+        ids.push(win.connect('unmanaged', () => {
+            this._disconnectFloatHooks(win);
+            // Floats never pass through _removeWindow — prune the per-window
+            // state their flair created, or every closed float/popup leaks a
+            // widget, an effect, and map entries for the session (and the
+            // stale border map keeps the gradient animation tick alive with
+            // no live windows).
+            try { this._removeBorder(win); } catch (_e) {} // border + ring + mask + quarantine
+            this._floatMaxRects?.delete(win);
+            this._gappedMaxSet?.delete(win);
+            this._maximizeToggleRects?.delete(win);
+            this._scratchpadWindows?.delete(win);
+            this._toggleFloatWindows?.delete(win);
+            this._savedRects?.delete(win);
+        }));
         this._floatHooks.set(win, ids);
     }
 
@@ -1695,15 +1755,34 @@ this._addSignal(this._settings, this._settings.connect('changed::inside-gap', ()
     _reassertFloatingTransients() {
         try {
             if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled'))
-                return;
+                return false;
+            let moved = false;
             const index = (w) => {
                 const a = w.get_compositor_private();
+                // get_child_index() does not exist on Clutter.Actor in
+                // GNOME 50/51 — the helper threw on every call (swallowed
+                // by the outer catch) and this whole routine was dead.
+                // get_children() returns a fresh array, so indexOf tracks
+                // live order — required because raises inside this routine
+                // mutate the child order (a prebuilt map would go stale).
                 return a && a.get_parent() === global.window_group
-                    ? global.window_group.get_child_index(a) : -1;
+                    ? global.window_group.get_children().indexOf(a) : -1;
             };
-            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
-                const ws = global.workspace_manager.get_workspace_by_index(i);
-                const order = ws.list_windows();
+            // ACTIVE WORKSPACE ONLY: raising/reordering windows on inactive
+            // (hidden) workspaces mutates window_group child order →
+            // ::children-changed → a full stage queue_redraw → every
+            // offscreen mask/blur re-renders — a visible flash on the
+            // workspace being switched TO, even though the reordered actors
+            // are on the leaving workspace (the "unfocused float → redraw
+            // jank" case: an unfocused float sits below the top tile, so
+            // every switch re-raised it and repainted the whole stage).
+            // Inactive-workspace floats are re-asserted when their
+            // workspace activates (ws-changed + restacked + the 50ms
+            // settle poll), so scoping to the active workspace loses
+            // nothing.
+            const activeWs = global.workspace_manager.get_active_workspace();
+            if (activeWs) {
+                const order = activeWs.list_windows();
                 // The tiled stack = windows Plaid actually manages AND that
                 // are not floating. Everything else — float-listed windows,
                 // transients, and UNMANAGED windows (non-NORMAL types like
@@ -1723,6 +1802,20 @@ this._addSignal(this._settings, this._settings.connect('changed::inside-gap', ()
                     if (tiled.includes(win) || win === this._backgroundAppWin) continue;
                     const a = win.get_compositor_private();
                     if (!a || a.get_parent() !== global.window_group) continue;
+                    // Pre-stage raises even for HIDDEN floats (minimized DDT/scratch,
+                    // a not-yet-committed XWayland window): reordering a
+                    // hidden actor changes no pixels, and at ws-switch time
+                    // we're inside mutter's switch animation (repaints are
+                    // masked there) — so raising BEFORE the show is free,
+                    // while raising AFTER it (the old `!a.visible` skip
+                    // forced a post-show raise) caused a visible stage
+                    // repaint — the "X11 float arrival flash". The float
+                    // then shows already above the tiles: no pop, no
+                    // correction repaint. The sibling-overlap risk this
+                    // skip used to guard is owned by the visibility sync in
+                    // _syncBlurStackingNow (a hidden source keeps its
+                    // sibling hidden). The active-workspace-only scope above
+                    // already excludes hidden floats on other workspaces.
                     let topTiledIdx = -1;
                     let topTiledActor = null;
                     for (const t of tiled) {
@@ -1732,8 +1825,24 @@ this._addSignal(this._settings, this._settings.connect('changed::inside-gap', ()
                             topTiledActor = t.get_compositor_private();
                         }
                     }
-                    if (topTiledActor && index(win) < topTiledIdx)
-                        global.window_group.set_child_above_sibling(a, topTiledActor);
+                    if (topTiledActor && index(win) < topTiledIdx) {
+                        // win.raise() (mutter-native) instead of a Clutter
+                        // set_child_above_sibling: a Clutter reorder emits
+                        // ::children-changed → full-stage queue_redraw —
+                        // the whole screen re-renders (every blur/mask
+                        // offscreen re-captures) as an extra frame at a
+                        // quiet moment = the "switch arrival flash". A
+                        // mutter raise carries REGIONAL damage (smooth, like
+                        // a focus click) and — crucially — updates MUTTER'S
+                        // OWN internal z, so the reveal choreography can't
+                        // undo it (the Clutter-only reorder fought mutter's
+                        // z on every restack — the root of the float-sink
+                        // tug-of-war). raise() is one-shot, unlike
+                        // make_above (the persistent above-state that broke
+                        // Qt popups historically).
+                        win.raise();
+                        moved = true;
+                    }
                 }
                 // Transients above their floating parents.
                 for (const win of order) {
@@ -1742,6 +1851,10 @@ this._addSignal(this._settings, this._settings.connect('changed::inside-gap', ()
                     const a = win.get_compositor_private();
                     const pa = parent.get_compositor_private();
                     if (!a || !pa || a.get_parent() !== global.window_group) continue;
+                    // Same pre-stage + mutter-native rationale as loop 1: raise() puts
+                    // the transient at the top of the stack (above its
+                    // parent too) with regional damage and a persistent
+                    // mutter z.
                     if (index(win) >= 0 && index(win) < index(parent)) {
                         try {
                             if (this._stackDiagnostics && !this._stackDiagnostics.has(win.get_id())) {
@@ -1749,11 +1862,14 @@ this._addSignal(this._settings, this._settings.connect('changed::inside-gap', ()
                                 log(`[plaid] stack reassert: transient ${win.get_id()} re-positioned above ${parent.get_wm_class_instance() || '?'}`);
                             }
                         } catch (_e) {}
-                        global.window_group.set_child_above_sibling(a, pa);
+                        win.raise();
+                        moved = true;
                     }
                 }
             }
+            return moved;
         } catch (_e) {}
+        return false;
     }
 
     _retileAll() {
@@ -2170,15 +2286,16 @@ this._addSignal(this._settings, this._settings.connect('changed::inside-gap', ()
                     // (it must not force-reveal a window that later moves to
                     // an inactive workspace) and re-attach flair that the
                     // pending-warp state skipped.
-if (win._plaidInvisibleTimer) {
-            try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
-            win._plaidInvisibleTimer = 0;
-        }
-        if (win._plaidSettlePollId) {
-            try { GLib.source_remove(win._plaidSettlePollId); } catch (_e) {}
-            win._plaidSettlePollId = 0;
-        }
-        win._plaidSettleUntil = 0;
+                    //
+                    // The settle poll is deliberately NOT cancelled here:
+                    // this function also runs on the 'tiled' verify path of
+                    // every animated retile, where killing an armed settle
+                    // poll would silently skip the client-resize correction
+                    // for give-up windows. The poll self-expires at 6s.
+                    if (win._plaidInvisibleTimer) {
+                        try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+                        win._plaidInvisibleTimer = 0;
+                    }
                     this._scheduleBorders();
                     this._updateBorders();
                 }
@@ -3546,13 +3663,28 @@ if (win._plaidInvisibleTimer) {
                 // Scratch windows fall through to their special border even
                 // with rounded corners (normal windows stay mask-only).
                 if (!(this._scratchpadWindows && this._scratchpadWindows.has(win))) {
-                    // Mask-only windows must not keep a widget border from
-                    // an earlier floating state — this path never re-creates
-                    // or updates it, so it freezes stale (double border at
-                    // the old geometry) until a full rebuild.
-                    if (this._windowBorders.has(win)) {
+                    // Mask-only WINDOWS (not floats) must not keep a widget
+                    // border from an earlier floating state — this path never
+                    // re-creates or updates it, so it freezes stale (double
+                    // border at the old geometry) until a full rebuild.
+                    // FLOATS are excluded: their widget border is LIVE (made
+                    // by the floating flair loop) — purging it every pass
+                    // churned widgets + logged unconditionally, and
+                    // _removeBorder → _removeMask cleared the mask quarantine
+                    // — re-opening the empty-capture hole the self-heal
+                    // exists to prevent for registered-then-floated X11
+                    // windows. Border-only teardown: keep the mask alive.
+                    if (!this._isFloating(win) && this._windowBorders.has(win)) {
                         log(`[plaid] border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
-                        this._removeBorder(win);
+                        try { this._windowBorders.get(win).destroy(); } catch (_e) {}
+                        this._windowBorders.delete(win);
+                        if (this._scratchpadRings) {
+                            const ring = this._scratchpadRings.get(win);
+                            if (ring) {
+                                try { ring.destroy(); } catch (_e) {}
+                                this._scratchpadRings.delete(win);
+                            }
+                        }
                     }
                     continue;
                 }
@@ -4959,12 +5091,32 @@ if (win._plaidInvisibleTimer) {
                                 const pos = actor.get_transformed_position();
                                 px = pos[0];
                                 py = pos[1];
-                                const stageView = paintContext.get_stage_view();
-                                if (stageView && stageView.get_layout) {
-                                    const layout = stageView.get_layout();
-                                    if (layout) {
-                                        px -= layout.x;
-                                        py -= layout.y;
+                                // The blit must be VIEW-relative (each monitor
+                                // renders into its own stage view). On GNOME 51
+                                // paintContext.get_stage_view() is introspectable;
+                                // on GNOME 50 the C symbol exists but is missing
+                                // from the typelib, so fall back to subtracting
+                                // the actor's monitor origin (equivalent for the
+                                // view containing the actor).
+                                if (typeof paintContext.get_stage_view === 'function') {
+                                    const stageView = paintContext.get_stage_view();
+                                    if (stageView && stageView.get_layout) {
+                                        const layout = stageView.get_layout();
+                                        if (layout) {
+                                            px -= layout.x;
+                                            py -= layout.y;
+                                        }
+                                    }
+                                } else {
+                                    const n = global.display.get_n_monitors();
+                                    for (let i = 0; i < n; i++) {
+                                        const g = global.display.get_monitor_geometry(i);
+                                        if (px >= g.x && px < g.x + g.width &&
+                                            py >= g.y && py < g.y + g.height) {
+                                            px -= g.x;
+                                            py -= g.y;
+                                            break;
+                                        }
                                     }
                                 }
                             } catch (_e) {}
@@ -5176,7 +5328,8 @@ if (win._plaidInvisibleTimer) {
     }
 
     _syncBlurStackingNow() {
-        if (!this._windowBlurs) return;
+        if (!this._windowBlurs) return false;
+        let changed = false;
         const monitors = global.display.get_n_monitors();
         let monitorW = 0, monitorH = 0;
         for (let i = 0; i < monitors; i++) {
@@ -5188,6 +5341,23 @@ if (win._plaidInvisibleTimer) {
             const sibling = blur._sibling;
             const source = blur._sourceActor;
             if (!sibling || !source) continue;
+            // The sibling's `visible` GObject binding can be lost silently
+            // (creation is wrapped in catch, source actor replacement drops
+            // it) and it never explicitly covered `minimized` — a wrongly
+            // visible sibling of a HIDDEN window (minimized DDT/scratch,
+            // off-workspace float) paints blur over whatever sits below it,
+            // which became visible once the float re-assert started raising
+            // floats above the tiles. Force the effective hidden state at
+            // this choke point (runs on every restacked, incl. every
+            // workspace switch and raise). Placed before the detached-source
+            // guards so it applies during transitions too. Conditional so
+            // quiet ticks write nothing (property writes of the same value
+            // are silent in Clutter, but be explicit).
+            const wantVisible = source.visible && !win.minimized;
+            if (sibling.visible !== wantVisible) {
+                sibling.visible = wantVisible;
+                changed = true;
+            }
             // The sibling's BindConstraints/bindings follow the source actor
             // and go dead when it is detached or replaced (surface
             // round-trips) — the sibling then freezes at the old geometry
@@ -5200,6 +5370,9 @@ if (win._plaidInvisibleTimer) {
                 current !== source;
             const siblingDead = sibling.get_parent() !== global.window_group;
             if (sourceDead || siblingDead) {
+                // A re-attach rebuilds the sibling with fresh constraints —
+                // counts as a change (the settle poll refreshes borders once).
+                changed = true;
                 if (!blur._reAttachPending) {
                     log(`[plaid] blur: ${sourceDead ? 'source detached' : 'sibling detached'} → deferred re-attach (${win.get_wm_class_instance() || '?'})`);
                     blur._reAttachPending = true;
@@ -5227,6 +5400,7 @@ if (win._plaidInvisibleTimer) {
                     Math.abs(sW - aW) > aW * 0.15 + 64 ||
                     Math.abs(sH - aH) > aH * 0.15 + 64;
                 if (mismatched) {
+                    changed = true;
                     log(`[plaid] blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
                     if (!blur._reAttachPending) {
                         blur._reAttachPending = true;
@@ -5244,10 +5418,28 @@ if (win._plaidInvisibleTimer) {
                         });
                     }
                 } else {
-                    global.window_group.set_child_below_sibling(sibling, source);
+                    // The real invariant is sibling-BELOW-float, not
+                    // "directly below": the sibling is constraint-bound to
+                    // the float's exact rect, so a float raised above it
+                    // COVERS it (invisible) — reordering in that case is
+                    // pointless AND emits ::children-changed → full-stage
+                    // queue_redraw → the whole screen re-renders (the
+                    // switch-arrival flash). Only fix the genuinely broken
+                    // case: the sibling ABOVE its float (sink/overlay —
+                    // the blur would paint over the stack).
+                    // (Fresh array per window: reorders during this call
+                    // invalidate earlier indices.)
+                    const kids = global.window_group.get_children();
+                    const si = kids.indexOf(sibling);
+                    const ai = kids.indexOf(source);
+                    if (si !== -1 && ai !== -1 && si > ai) {
+                        global.window_group.set_child_below_sibling(sibling, source);
+                        changed = true;
+                    }
                 }
             } catch (_e) {}
         }
+        return changed;
     }
 
     _removeBlur(win) {
@@ -7318,7 +7510,12 @@ if (win._plaidInvisibleTimer) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 if (!ws) continue;
                 for (const win of ws.list_windows()) {
-                    if (win && win.is_client_window() && this._matchesBackgroundApp(win))
+                    // NOTE: is_client_window() does not exist in GNOME 50/51 —
+                    // the old predicate threw on every iteration (swallowed by
+                    // the outer catch) and this loop never ran, so the bg-app
+                    // was never adopted on lock-cycle resume. The marker match
+                    // below is precise enough on its own.
+                    if (win && this._matchesBackgroundApp(win))
                         return true;
                 }
             }
@@ -7376,7 +7573,6 @@ if (win._plaidInvisibleTimer) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 if (!ws) continue;
                 for (const w of ws.list_windows()) {
-                    if (!w || !w.is_client_window()) continue;
                     let pid = 0;
                     try { pid = w.get_pid(); } catch (_e) {}
                     if (pid > 0 && this._procEnvironHasMarker(pid, 'PLAID_BGAPP=1'))
@@ -7390,7 +7586,7 @@ if (win._plaidInvisibleTimer) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
                 if (!ws) continue;
                 for (const w of ws.list_windows()) {
-                    if (w && w.is_client_window() && this._matchesBackgroundApp(w))
+                    if (w && this._matchesBackgroundApp(w))
                         return w;
                 }
             }
@@ -8364,8 +8560,21 @@ if (win._plaidInvisibleTimer) {
     _computeGrabGraceThreshold() {
         try {
             const [px, py] = global.get_pointer();
-            const monitorIdx = global.display.get_monitor_at_point(px, py);
-            const mon = global.display.get_monitor_geometry(monitorIdx);
+            // get_monitor_at_point() does not exist on Meta.Display in
+            // GNOME 50/51 — the old call threw (swallowed) and the grace
+            // was pinned at 10px on every monitor. Find the monitor by
+            // geometry containment instead.
+            let mon = null;
+            const n = global.display.get_n_monitors();
+            for (let i = 0; i < n; i++) {
+                const g = global.display.get_monitor_geometry(i);
+                if (px >= g.x && px < g.x + g.width && py >= g.y && py < g.y + g.height) {
+                    mon = g;
+                    break;
+                }
+            }
+            if (!mon)
+                mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
             const minDim = Math.min(mon.width, mon.height);
             return Math.max(10, Math.min(30, Math.round(minDim / 100)));
         } catch (_e) {
