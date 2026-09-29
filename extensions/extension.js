@@ -30,6 +30,33 @@ const BORDER_CORNER_SEG_STEP = 4;
 const MASK_EFFECT_NAME = 'plaid-corner-mask';
 const BLUR_EFFECT_NAME = 'plaid-window-blur';
 
+// Every Plaid keybinding settings key — the single source of truth for
+// registration (_registerKeybindings), removal (_removeKeybindings), and the
+// "which GNOME shortcuts must yield" check in _disableMutterDefaults.
+const PLAID_KEYBIND_KEYS = [
+    'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
+    'swap-left', 'swap-right', 'swap-up', 'swap-down',
+    'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
+    'toggle-float', 'toggle-tiling', 'toggle-maximize', 'center-window',
+    'pick-float-window', 'cycle-layout',
+    'scratchpad-toggle', 'scratchpad-add', 'dropdown-terminal',
+];
+
+// Canonical form of an accelerator for comparison: '<Shift><Super>h' and
+// '<Super><Shift>h' are the same shortcut (GTK, mutter, and users write the
+// modifier order differently) — lowercased sorted modifiers + key.
+function normalizeAccel(combo) {
+    try {
+        const parts = combo.replace(/[<>]/g, ' ').trim().split(/\s+/);
+        if (parts.length === 0) return combo;
+        const key = parts[parts.length - 1].toLowerCase();
+        const mods = parts.slice(0, -1).map((m) => m.toLowerCase()).sort();
+        return mods.length ? `<${mods.join('><')}>${key}` : key;
+    } catch (_e) {
+        return combo;
+    }
+}
+
 // The GNOME Shell re-enables extensions after every screen unlock, which
 // re-runs enable(). The login splash is a brand moment for real logins only
 // (fresh shell process = fresh module), so a module-level flag survives the
@@ -422,6 +449,7 @@ export default class TilingWMExtension extends Extension {
         this._dropPreview = null;
 
         this._disableMutterDefaults();
+        this._migrateKeybindingDefaults();
         this._dropOverlay = new St.Widget({
             reactive: false,
             visible: true,
@@ -745,6 +773,7 @@ export default class TilingWMExtension extends Extension {
         this._stopBorderAnimation();
         this._disconnectSignals();
         this._destroyFloatPickDialog();
+        this._destroyConflictDialog();
         this._removeKeybindings();
         this._settings = null;
         this._floatingClasses = null;
@@ -798,9 +827,15 @@ export default class TilingWMExtension extends Extension {
     _disableMutterDefaults() {
         // SILENT MUTTER TAMPERING NOTE (documented so readers don't mistake this for a bug):
         // these keys are modified while Plaid is active so edge-tiling and maximize
-        // shortcuts never fight our layouts.  They are restored to their pre-plaid state
-        // on disable(); Gio.Settings writes silently ignore invalid values, so there is no
-        // risk of partial failure — the null guards below already make that explicit.
+        // shortcuts never fight our layouts.  Below that, a CONDITIONAL yield unbinds
+        // minimize / unmaximize / toggle-tiled-left/right — but ONLY when a Plaid
+        // keybind holds the exact same combo (modifier order ignored): hjkl-default
+        // installs yield minimize (Super+H), PlaidOS (seeded arrows) yields
+        // toggle-tiled/maximize, and a combo nobody uses stays untouched (PlaidOS
+        // keeps Super+H minimize because no Plaid key wants it). Everything is
+        // restored to its pre-plaid state on disable(); Gio.Settings writes silently
+        // ignore invalid values, so there is no risk of partial failure — the null
+        // guards below already make that explicit.
         try {
             this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
             this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
@@ -820,6 +855,43 @@ export default class TilingWMExtension extends Extension {
             }
         } catch (e) {
             log(`[plaid] mutter defaults disable failed: ${e.message}`);
+        }
+        this._savedYieldKeys = [];
+        try {
+            const held = new Set();
+            for (const key of PLAID_KEYBIND_KEYS) {
+                try {
+                    for (const combo of this._settings.get_strv(key)) {
+                        if (combo) held.add(normalizeAccel(combo));
+                    }
+                } catch (_e) {}
+            }
+            try {
+                this._mutterKbSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter.keybindings' });
+            } catch (_e) {
+                this._mutterKbSettings = null;
+            }
+            const candidates = [
+                [this._wmKeybindings, 'minimize'],
+                [this._wmKeybindings, 'unmaximize'],
+                [this._mutterKbSettings, 'toggle-tiled-left'],
+                [this._mutterKbSettings, 'toggle-tiled-right'],
+            ];
+            for (const [settings, key] of candidates) {
+                if (!settings) continue;
+                try {
+                    const current = settings.get_strv(key);
+                    if (current.some((combo) => held.has(normalizeAccel(combo)))) {
+                        this._savedYieldKeys.push({ settings, key, value: current });
+                        settings.set_strv(key, []);
+                        log(`[plaid] yielded GNOME shortcut: ${key} (same combo as a Plaid keybind) — restored on disable`);
+                    }
+                } catch (e) {
+                    log(`[plaid] yield ${key} failed: ${e.message}`);
+                }
+            }
+        } catch (e) {
+            log(`[plaid] conditional keybind yield failed: ${e.message}`);
         }
     }
 
@@ -842,6 +914,60 @@ export default class TilingWMExtension extends Extension {
                 log(`[plaid] wm toggle-maximized restore unavailable: ${e.message}`);
             }
             this._wmKeybindings = null;
+        }
+        if (this._savedYieldKeys) {
+            for (const y of this._savedYieldKeys) {
+                try { y.settings.set_strv(y.key, y.value); } catch (_e) {}
+            }
+            this._savedYieldKeys = null;
+        }
+        this._mutterKbSettings = null;
+    }
+
+    _migrateKeybindingDefaults() {
+        // One-time default migration (v51.17 moved the scratchpad defaults to
+        // GNOME-compatible combos): existing installs must keep the binds
+        // they've been using. get_user_value() reads the USER dconf layer
+        // only — a fresh install has nothing there (not even PlaidOS's system
+        // seed, which lives in the system layer), while any past prefs change
+        // or persisted layout proves an existing install. Pinning writes our
+        // own schema keys only; a per-key null check guarantees customized
+        // keys are never touched. Documented edge: an existing install with
+        // ZERO user-layer writes is indistinguishable from fresh and picks up
+        // the new defaults (called out in the v51.17 release notes). Runs
+        // once — the flag makes it idempotent, and a failed run (flag not
+        // written) retries safely because a successful pin is no longer null.
+        try {
+            if (this._settings.get_boolean('keybind-migration-done')) return;
+            let hasUserKeys = false;
+            for (const key of this._settings.settings_schema.list_keys()) {
+                try {
+                    if (this._settings.get_user_value(key) !== null) {
+                        hasUserKeys = true;
+                        break;
+                    }
+                } catch (_e) {}
+            }
+            if (hasUserKeys) {
+                const oldDefaults = {
+                    'scratchpad-add': ['<Super><Shift>Escape'],
+                    'scratchpad-toggle': ['<Super>Escape'],
+                };
+                const pinned = [];
+                for (const [key, value] of Object.entries(oldDefaults)) {
+                    if (this._settings.get_user_value(key) === null) {
+                        this._settings.set_strv(key, value);
+                        pinned.push(key);
+                    }
+                }
+                log(`[plaid] keybind migration: existing install — kept old scratchpad defaults` +
+                    (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
+            } else {
+                log('[plaid] keybind migration: fresh install — new scratchpad defaults active');
+            }
+            this._settings.set_boolean('keybind-migration-done', true);
+        } catch (e) {
+            log(`[plaid] keybind migration failed: ${e.message}`);
         }
     }
 
@@ -5739,18 +5865,149 @@ export default class TilingWMExtension extends Extension {
         }
         if (failures > 0)
             log(`[plaid] keybindings registered: ${bindings.length - failures}/${bindings.length} ok (${failures} failed)`);
+        this._checkKeybindingConflicts(bindings);
+    }
+
+    _checkKeybindingConflicts(bindings) {
+        // Combo-collision detector (the scratchpad-add vs mutter's
+        // cancel-input-capture saga, 2026-09-29): two settings bindings
+        // sharing one combo make grab registration a per-login RACE — the
+        // winner takes the combo and the loser's key silently dies for the
+        // whole session (works one relog, dead the next, identical code).
+        // Scan at enable: journal every collision, and surface cross-schema
+        // ones in a dialog whose Fix-now writes the other side — settings
+        // are only ever written on that explicit click, never silently.
+        try {
+            // Combos are compared in normalizeAccel form — '<Shift><Super>h'
+            // and '<Super><Shift>h' are the same shortcut (systems write
+            // modifier orders differently; a plain string compare misses it).
+            const ourCombos = new Map(); // normalized -> { orig, owners }
+            for (const { key } of bindings) {
+                let combos = [];
+                try { combos = this._settings.get_strv(key); } catch (_e) {}
+                for (const combo of combos) {
+                    if (!combo) continue;
+                    const norm = normalizeAccel(combo);
+                    let entry = ourCombos.get(norm);
+                    if (!entry) {
+                        entry = { orig: combo, owners: [] };
+                        ourCombos.set(norm, entry);
+                    }
+                    entry.owners.push(key);
+                }
+            }
+            for (const entry of ourCombos.values()) {
+                if (entry.owners.length > 1)
+                    log(`[plaid] keybinding CONFLICT: ${entry.owners.join(' + ')} all use '${entry.orig}' — remap one of them in prefs`);
+            }
+            const ownSchema = this._settings.schema_id;
+            const conflicts = [];
+            for (const schemaId of Gio.Settings.list_schemas()) {
+                if (schemaId === ownSchema) continue;
+                let settings;
+                try { settings = new Gio.Settings({ schema_id: schemaId }); } catch (_e) { continue; }
+                let keys;
+                try { keys = settings.settings_schema.list_keys(); } catch (_e) { continue; }
+                for (const keyName of keys) {
+                    let value;
+                    try { value = settings.get_value(keyName); } catch (_e) { continue; }
+                    if (!value || value.get_type_string() !== 'as') continue;
+                    let combos;
+                    try { combos = value.deep_unpack(); } catch (_e) { continue; }
+                    for (const combo of combos) {
+                        const entry = ourCombos.get(normalizeAccel(combo));
+                        if (!entry) continue;
+                        log(`[plaid] keybinding CONFLICT: ${entry.owners.join(' + ')} '${entry.orig}' also bound by ` +
+                            `${schemaId} ${keyName} — grab race can kill the Plaid key for a session; ` +
+                            `unbind one side: gsettings set ${schemaId} ${keyName} '[]' (or remap in Plaid prefs)`);
+                        conflicts.push({ owners: entry.owners, combo: entry.orig, schemaId, keyName });
+                    }
+                }
+            }
+            if (conflicts.length)
+                this._showConflictDialog(conflicts);
+        } catch (e) {
+            log(`[plaid] keybinding conflict scan failed: ${e.message}`);
+        }
+    }
+
+    _showConflictDialog(conflicts) {
+        // Mirrors _showFloatPickDialog's lifecycle: ref on this, teardown
+        // helper, disable() hook. Open is deferred ~2s so it lands after
+        // login settle (and never fights a startup modal).
+        this._destroyConflictDialog();
+        try {
+            const dialog = new ModalDialog();
+            this._conflictDialog = dialog;
+
+            const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style: 'spacing: 10px;' });
+            content.add_child(new St.Label({
+                text: _('Shortcut conflict'),
+                style: 'font-weight: bold; font-size: 14px;',
+            }));
+            for (const c of conflicts) {
+                const other = c.schemaId.startsWith('org.gnome.') ? _('GNOME') : c.schemaId;
+                const line = new St.Label({
+                    text: _('Plaid and %s both want %s. One of them may randomly stop working.')
+                        .replace('%s', other)
+                        .replace('%s', c.combo),
+                });
+                line.clutter_text.set_line_wrap(true);
+                content.add_child(line);
+            }
+            dialog.contentLayout.add_child(content);
+
+            dialog.setButtons([
+                {
+                    label: _('Let Plaid use it'),
+                    key: Clutter.KEY_f,
+                    action: () => {
+                        for (const c of conflicts) {
+                            try {
+                                new Gio.Settings({ schema_id: c.schemaId }).set_strv(c.keyName, []);
+                                log(`[plaid] keybinding conflict fixed: unbound ${c.schemaId} ${c.keyName} (was '${c.combo}')`);
+                            } catch (e) {
+                                log(`[plaid] keybinding conflict fix failed: ${e.message}`);
+                            }
+                        }
+                        this._destroyConflictDialog();
+                        this._showPopup(_('Shortcut fixed'),
+                            conflicts.length === 1
+                                ? _('Plaid now uses %s').replace('%s', conflicts[0].combo)
+                                : _('Plaid now uses its own shortcuts'));
+                    },
+                },
+                {
+                    label: _('Not now'),
+                    key: Clutter.KEY_Escape,
+                    action: () => this._destroyConflictDialog(),
+                },
+            ]);
+
+            this._conflictDialogId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                this._conflictDialogId = 0;
+                if (this._destroyed || !this._conflictDialog) return GLib.SOURCE_REMOVE;
+                try { dialog.open(); } catch (_e) {}
+                return GLib.SOURCE_REMOVE;
+            });
+        } catch (e) {
+            log(`[plaid] conflict dialog failed: ${e.message}`);
+        }
+    }
+
+    _destroyConflictDialog() {
+        if (this._conflictDialogId) {
+            try { GLib.source_remove(this._conflictDialogId); } catch (_e) {}
+            this._conflictDialogId = 0;
+        }
+        if (this._conflictDialog) {
+            try { this._conflictDialog.close(); } catch (_e) {}
+            this._conflictDialog = null;
+        }
     }
 
     _removeKeybindings() {
-        const keys = [
-            'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
-            'swap-left', 'swap-right', 'swap-up', 'swap-down',
-            'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
-            'toggle-float', 'toggle-tiling', 'toggle-maximize', 'center-window', 'pick-float-window',
-            'cycle-layout', 'scratchpad-toggle', 'scratchpad-add',
-            'dropdown-terminal',
-        ];
-        for (const key of keys) {
+        for (const key of PLAID_KEYBIND_KEYS) {
             Main.wm.removeKeybinding(key);
         }
     }
