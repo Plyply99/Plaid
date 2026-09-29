@@ -3616,6 +3616,17 @@ export default class TilingWMExtension extends Extension {
         // choreography (actor.visible=false + mask uniform 0) when its
         // identity resolved late to floating — nothing else reveals it, so
         // it would sit invisible until the 2.5s safety timer. Reveal now.
+        // GUARD: a DELIBERATELY minimized window (the scratch layer, or the
+        // user's own minimize) must never be force-shown by an identity /
+        // title notify — GTK re-applies titles on state changes, so this
+        // reveal un-minimized scratch windows within milliseconds of the
+        // scratch-add's minimize (the "add does nothing" bug: hide →
+        // instant re-show → net zero on screen).
+        if (win.minimized) {
+            this._debugLog(`float reveal skipped (minimized): ${win.get_wm_class_instance() || '?'}`);
+            return;
+        }
+        this._debugLog(`float reveal: ${win.get_wm_class_instance() || '?'}`);
         try {
             if (this._pendingWarp) this._pendingWarp.delete(win);
             const a = win.get_compositor_private();
@@ -3707,39 +3718,48 @@ export default class TilingWMExtension extends Extension {
             if (blurEnabled && !(this._pendingWarp && this._pendingWarp.has(win)))
                 this._ensureWindowBlur(win, actor);
 
+            const isFocused = win === focusWindow;
+            const scratch = !!(this._scratchpadWindows && this._scratchpadWindows.has(win));
+
             if (roundedCorners && borderRadius > 0) {
+                // Stale-widget purge FIRST (was after the mask): updateMask
+                // zeroes the SDF border while a widget still exists, so the
+                // old order left a borderless gap between the mask pass and
+                // the purge — now the widget is gone before the mask draws.
+                // Mask-only WINDOWS (not floats) must not keep a widget
+                // border from an earlier floating state — this path never
+                // re-creates or updates it, so it freezes stale (double
+                // border at the old geometry) until a full rebuild.
+                // FLOATS are excluded: their widget border is LIVE (made
+                // by the floating flair loop) — purging it every pass
+                // churned widgets + logged unconditionally, and
+                // _removeBorder → _removeMask cleared the mask quarantine
+                // — re-opening the empty-capture hole the self-heal
+                // exists to prevent for registered-then-floated X11
+                // windows. Border-only teardown: keep the mask alive.
+                if (!scratch && !this._isFloating(win) && this._windowBorders.has(win)) {
+                    log(`[plaid] border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
+                    try { this._windowBorders.get(win).destroy(); } catch (_e) {}
+                    this._windowBorders.delete(win);
+                    if (this._scratchpadRings) {
+                        const ring = this._scratchpadRings.get(win);
+                        if (ring) {
+                            try { ring.destroy(); } catch (_e) {}
+                            this._scratchpadRings.delete(win);
+                        }
+                    }
+                }
+                // Widget before mask (same ordering rule as the floating
+                // loop) for the scratch fall-through.
+                if (scratch && bordersEnabled)
+                    this._ensureWindowBorder(win, actor, frame, isFocused);
                 this._ensureWindowMask(win, actor, borderRadius + 1);
                 // Scratch windows fall through to their special border even
                 // with rounded corners (normal windows stay mask-only).
-                if (!(this._scratchpadWindows && this._scratchpadWindows.has(win))) {
-                    // Mask-only WINDOWS (not floats) must not keep a widget
-                    // border from an earlier floating state — this path never
-                    // re-creates or updates it, so it freezes stale (double
-                    // border at the old geometry) until a full rebuild.
-                    // FLOATS are excluded: their widget border is LIVE (made
-                    // by the floating flair loop) — purging it every pass
-                    // churned widgets + logged unconditionally, and
-                    // _removeBorder → _removeMask cleared the mask quarantine
-                    // — re-opening the empty-capture hole the self-heal
-                    // exists to prevent for registered-then-floated X11
-                    // windows. Border-only teardown: keep the mask alive.
-                    if (!this._isFloating(win) && this._windowBorders.has(win)) {
-                        log(`[plaid] border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
-                        try { this._windowBorders.get(win).destroy(); } catch (_e) {}
-                        this._windowBorders.delete(win);
-                        if (this._scratchpadRings) {
-                            const ring = this._scratchpadRings.get(win);
-                            if (ring) {
-                                try { ring.destroy(); } catch (_e) {}
-                                this._scratchpadRings.delete(win);
-                            }
-                        }
-                    }
+                if (!scratch)
                     continue;
-                }
             }
 
-            const isFocused = win === focusWindow;
             if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
         }
 
@@ -3754,10 +3774,14 @@ export default class TilingWMExtension extends Extension {
             const frame = win.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) continue;
             if (blurEnabled) this._ensureWindowBlur(win, actor);
+            const isFocused = win === focusWindow;
+            // Order matters: create the WIDGET border before the mask —
+            // _updateMaskBounds zeroes the SDF border when a renderable
+            // widget exists, so creating the widget first avoids a
+            // first-pass (or transition-pass) transient double border.
+            if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
             if (roundedCorners && borderRadius > 0)
                 this._ensureWindowMask(win, actor, borderRadius + 1);
-            const isFocused = win === focusWindow;
-            if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
         }
 
         // The border animation is armed by _syncBorderAnimation() below with the
@@ -3780,6 +3804,46 @@ export default class TilingWMExtension extends Extension {
 
     _ensureWindowBorder(win, actor, frame, isFocused) {
         if (!frame || frame.width === 0 || frame.height === 0) return false;
+        // Rounded corners: exactly-one-border. Wayland — the mask attaches
+        // to the window ACTOR, so this widget (its child) would be captured
+        // and clipped by the SDF shape — it can never render (only a ~1px
+        // AA hairline at the clip edge survived, and its existence raced
+        // the mask's updateMask — the DDT border flip-flop). The SDF is the
+        // sole border for Wayland windows.
+        // X11 — the mask attaches to the surface CHILD, so the widget (on
+        // the actor) escapes the capture and renders:
+        //   - surface child exists (the mask will attach this pass) AND the
+        //     widget's stroke would fall outside the allocation (zero-shadow
+        //     electron windows: frame == buffer → offset < width → the
+        //     widget rendered outside the window NEXT TO the SDF = the
+        //     double): the SDF is the border → refuse the widget.
+        //   - stroke fits (shadowed X11): the widget IS the border.
+        //   - childless (no surface yet): no mask this pass → the widget is
+        //     the only border → create it as a placeholder (renders
+        //     unmasked); when the surface arrives the rule above swaps it to
+        //     the SDF — the removal runs BEFORE the mask attach in the same
+        //     pass, so no double and no borderless gap.
+        // Leftovers are removed BORDER-ONLY (_removeWidgetBorder — never
+        // destroys the mask, unlike _removeBorder).
+        if (this._settings.get_boolean('rounded-corners') &&
+            this._settings.get_int('border-radius') > 0) {
+            if (win.get_client_type() !== Meta.WindowClientType.X11) {
+                this._removeWidgetBorder(win);
+                return false;
+            }
+            if (this._unwrapMaskActor(actor, win)) {
+                const effWidth = isFocused
+                    ? this._settings.get_int('active-border-width')
+                    : this._settings.get_int('inactive-border-width');
+                const buffer = win.get_buffer_rect();
+                if ((frame.x - buffer.x) < effWidth ||
+                    (frame.y - buffer.y) < effWidth) {
+                    this._removeWidgetBorder(win);
+                    return false;
+                }
+            }
+            // childless → fall through: create the placeholder widget
+        }
         const activeWidth = this._settings.get_int('active-border-width');
         const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
         const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#62a0ea';
@@ -3920,7 +3984,11 @@ export default class TilingWMExtension extends Extension {
             this._removeBlur(win);
 
         if (bordersEnabled && !this._ensureWindowBorder(win, actor, frame, true))
-            this._removeBorder(win);
+            // Border-only: this follows a fresh _ensureWindowMask — the old
+            // _removeBorder here also destroyed the mask it just attached
+            // (and killed the DDT's rounded corners when the border gate
+            // declined the widget).
+            this._removeWidgetBorder(win);
     }
 
     _debugLog(...args) {
@@ -4110,7 +4178,16 @@ export default class TilingWMExtension extends Extension {
                 try { effect.setTheta(theta); } catch (_e) {}
             }
             for (const border of this._windowBorders.values()) {
-                try { border.queue_redraw(); } catch (_e) {}
+                // St.DrawingArea only emits `repaint` when ITS queue_repaint
+                // set needs_repaint — Clutter's queue_redraw paints the
+                // cached texture without running the cairo handler, so the
+                // widget gradient never rotated (masked by the SDF being
+                // the visible border on masked windows). queue_repaint
+                // performs the Clutter redraw internally. Plain St.Widgets
+                // have no queue_repaint and nothing to animate.
+                try {
+                    if (border.queue_repaint) border.queue_repaint();
+                } catch (_e) {}
             }
             return GLib.SOURCE_CONTINUE;
         });
@@ -4179,7 +4256,7 @@ export default class TilingWMExtension extends Extension {
                 }
             }
             if (border.queue_repaint) {
-                try { border.queue_redraw(); } catch (_e) {}
+                try { border.queue_repaint(); } catch (_e) {}
             }
         }
     }
@@ -4194,6 +4271,22 @@ export default class TilingWMExtension extends Extension {
                 try { ring.destroy(); } catch (_e) {}
             }
             this._scratchpadRings.clear();
+        }
+    }
+
+    _removeWidgetBorder(win) {
+        // Border-only teardown: destroy the widget border + scratch ring
+        // WITHOUT touching the mask (unlike _removeBorder, which also
+        // destroys the mask — correct for fullscreen/clear paths, wrong
+        // for callers that just (re)attached the mask or want the SDF
+        // border to take over).
+        if (this._windowBorders.has(win)) {
+            try { this._windowBorders.get(win).destroy(); } catch (_e) {}
+            this._windowBorders.delete(win);
+        }
+        if (this._scratchpadRings && this._scratchpadRings.has(win)) {
+            try { this._scratchpadRings.get(win).destroy(); } catch (_e) {}
+            this._scratchpadRings.delete(win);
         }
     }
 
@@ -4611,6 +4704,26 @@ export default class TilingWMExtension extends Extension {
                     : 0);
         }
 
+        // Exactly-one-border invariant — CLIENT-TYPE RULE:
+        // X11: the mask attaches to the surface CHILD, so the widget (on
+        // the actor, a sibling of the surface) escapes the mask's capture
+        // and renders — the widget IS the border; zero the SDF's own draw
+        // or both render (the nested double on floating XWayland windows;
+        // offsets = frame−buffer ≥ borderWidth puts the widget over the
+        // shadow at the frame's edge).
+        // Wayland: the mask attaches to the ACTOR, so the widget (its
+        // child) is captured and CLIPPED by the SDF shape (it sits in the
+        // shadow margin or outside the allocation) — it can never show
+        // through, and zeroing the SDF here left NEITHER border visible
+        // (only a ~1px AA sliver — and a per-pass flip-flop depending on
+        // whether the widget existed when updateMask ran). The SDF is
+        // always the border for Wayland windows. Tiled windows have no
+        // widget (mask-only) → SDF unchanged.
+        if (this._windowBorders.has(win) &&
+            win.get_client_type() === Meta.WindowClientType.X11 &&
+            offsetX >= borderWidth && offsetY >= borderWidth)
+            borderWidth = 0;
+
         const x1 = offsetX + 1;
         const y1 = offsetY + 1;
         const x2 = offsetX + actor.width + bw;
@@ -4672,6 +4785,21 @@ export default class TilingWMExtension extends Extension {
             }
         }
 
+        // Same invariant + client-type rule for the scratch ring: the widget
+        // ring (created by _ensureWindowBorder) is only visible on X11
+        // (outside the mask's capture); for Wayland it is clipped by the
+        // SDF shape, so the shader ring must stay.
+        if (this._scratchpadRings && this._scratchpadRings.has(win) &&
+            ringWidth > 0 &&
+            win.get_client_type() === Meta.WindowClientType.X11 &&
+            offsetX >= borderWidth + ringWidth && offsetY >= borderWidth + ringWidth) {
+            ringWidth = 0;
+            ringColor = [0, 0, 0, 0];
+        }
+
+        if (this._scratchpadWindows && this._scratchpadWindows.has(win)) {
+            this._debugLog(`mask uniforms: ${win.get_wm_class_instance() || '?'} ring=${ringWidth} bw=${borderWidth} eff=${effect.get_actor() ? 'attached' : 'DETACHED'}`);
+        }
         effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor);
     }
 
@@ -6127,6 +6255,7 @@ export default class TilingWMExtension extends Extension {
         popup.set_position(0, 0);
         popup.set_size(maxX, maxY);
         Main.layoutManager.uiGroup.add_child(popup);
+        this._debugLog(`popup shown: ${title}`);
 
         const dismissPopup = () => {
             if (this._layoutPopupHideId) {
@@ -8490,6 +8619,10 @@ export default class TilingWMExtension extends Extension {
             try { win.minimize(); } catch (_e) {
                 try { win.minimized = true; } catch (_e2) {}
             }
+            {
+                const a = win.get_compositor_private();
+                this._debugLog(`scratch add: after minimize minimized=${win.minimized} actorVisible=${a ? a.visible : '?'}`);
+            }
             this._scratchpadVisible = false;
             this._retileWorkspace(ws);
             this._showPopup('Added to Scratchpad');
@@ -8569,7 +8702,12 @@ export default class TilingWMExtension extends Extension {
             win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
             this._retileWorkspace(saved.workspace);
             this._showPopup('Removed from Scratchpad');
-        } catch (_e) {}
+        } catch (e) {
+            // Was a silent catch: an exception here (e.g. a dead saved
+            // workspace from dynamic-workspace churn) left the toggle-off
+            // with NO restore and NO popup — "the key does nothing".
+            log(`[plaid] scratch remove failed: ${e.message}`);
+        }
     }
 
     // --- Grab-Based Mouse Resize & Swap ---
