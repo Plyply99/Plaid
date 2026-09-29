@@ -8692,6 +8692,18 @@ export default class TilingWMExtension extends Extension {
         if (!saved) return;
         this._scratchpadWindows.delete(win);
         this._toggleFloatWindows.delete(win);
+        // Destroy the scratch RING here, where membership ends. The sig-gate
+        // in _ensureWindowBorder destroys the BORDER widget on the
+        // scratch→normal signature flip but never the ring (it lives only in
+        // _scratchpadRings) — on a shadowed X11 window (gate lets the widget
+        // through) it was orphaned on the actor forever ("Fallout 76 QC:
+        // yellow border won't go away"). Placement matters: an entry sweep in
+        // _ensureWindowBorder was tried first and correlated with the
+        // scratchpad keybind handler dying — keep this cleanup HERE.
+        if (this._scratchpadRings && this._scratchpadRings.has(win)) {
+            try { this._scratchpadRings.get(win).destroy(); } catch (_e) {}
+            this._scratchpadRings.delete(win);
+        }
         try {
             try { win.unminimize(); } catch (_e) {
                 try { win.minimized = false; } catch (_e2) {}
