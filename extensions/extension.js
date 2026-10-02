@@ -2200,6 +2200,8 @@ export default class TilingWMExtension extends Extension {
             finishFade();
         };
         let tries = 0;
+        let lastFrameKey = null;
+        let sameFrameCount = 0;
         const attempt = () => {
             if (this._destroyed) return;
             try {
@@ -2209,8 +2211,10 @@ export default class TilingWMExtension extends Extension {
                 }
                 s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
             } catch (_e) {}
+            let frameKey = null;
             try {
                 const f = s.win.get_frame_rect();
+                frameKey = `${f.x},${f.y},${f.width},${f.height}`;
                 this._debugLog(`place: moved frame=(${Math.round(f.x)},${Math.round(f.y)},${Math.round(f.width)},${Math.round(f.height)}) ` +
                     `target=(${Math.round(s.targetX)},${Math.round(s.targetY)},${Math.round(s.targetW)},${Math.round(s.targetH)})`);
             } catch (_e) {}
@@ -2229,8 +2233,28 @@ export default class TilingWMExtension extends Extension {
                 // finish at the target regardless.
                 tries++;
                 this._debugLog(`place: attempt ${tries} mismatch`);
-                if (tries > 15) {
-                    this._debugLog('anim: new-window placement gave up after retries — finishing at target');
+                // Provably-ignored move: the frame is byte-identical across
+                // consecutive attempts while the verify keeps failing —
+                // mutter/Qt are not honoring geometry ops at all (the
+                // map-time settling race; the 2026-10-02 goverlay trace
+                // burned all 16 retries on a frozen frame, keeping the
+                // window invisible ~1.7s for nothing). Stop retrying and
+                // take the give-up path NOW: reveal at the spawn geometry,
+                // then the settle poll + the 2s re-retile land it the
+                // moment mutter wakes up. Windows whose frame MOVES between
+                // attempts keep the full budget and stay hidden — normal
+                // placement polish is unchanged.
+                if (frameKey !== null && frameKey === lastFrameKey) {
+                    sameFrameCount++;
+                } else {
+                    sameFrameCount = 0;
+                }
+                lastFrameKey = frameKey;
+                const frozen = sameFrameCount >= 2;
+                if (tries > 15 || frozen) {
+                    this._debugLog(frozen
+                        ? `anim: new-window placement frozen after ${tries} identical frames — finishing at spawn`
+                        : 'anim: new-window placement gave up after retries — finishing at target');
                     try {
                         if (s.win && s.win.get_compositor_private())
                             s.win.move_resize_frame(true, s.targetX, s.targetY, s.targetW, s.targetH);
@@ -2324,10 +2348,11 @@ export default class TilingWMExtension extends Extension {
             const f = win.get_frame_rect();
             const min = this._getWindowMinSize(win);
             const minSrc = min.w > 0 || min.h > 0 ? `min=${min.w}x${min.h}` : 'min=none';
+            let changed = false;
             if (layout === 'dwindle') {
                 const tree = this._bspGetTree(ws);
                 if (!tree) return;
-                this._adjustForConstraints(tree, null, true, area.x, area.y, areaW, areaH, gap);
+                changed = this._adjustForConstraints(tree, null, true, area.x, area.y, areaW, areaH, gap, 0);
             } else if (layout === 'master-stack' || layout === 'centered-master-stack') {
                 const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                 if (tiled.length < 2) return;
@@ -2335,7 +2360,11 @@ export default class TilingWMExtension extends Extension {
                     const basis = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
                     if (basis > 0) {
                         const ratio = this._getMasterRatio(ws);
-                        this._masterRatios.set(this._wsIndex(ws), Math.min(0.95, Math.max(ratio, f.width / basis)));
+                        const nr = Math.min(0.95, Math.max(ratio, f.width / basis));
+                        if (nr !== ratio) {
+                            this._masterRatios.set(this._wsIndex(ws), nr);
+                            changed = true;
+                        }
                     }
                 } else {
                     const idx = tiled.indexOf(win) - 1;
@@ -2351,13 +2380,19 @@ export default class TilingWMExtension extends Extension {
                             total += w;
                         }
                         const curH = total > 0 ? Math.floor(totalStackH * weights[idx] / total) : 0;
-                        if (curH > 0 && f.height > curH + 1)
+                        if (curH > 0 && f.height > curH + 1) {
                             stackRatios.set(idx, weights[idx] * (f.height / curH));
+                            changed = true;
+                        }
                     }
                 }
             } else {
                 return;
             }
+            // Report and persist ONLY on a real ratio change: the old
+            // unconditional log claimed "bent" even when every clamp was a
+            // no-op (it misled the 2026-10-02 triage).
+            if (!changed) return;
             log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
             this._scheduleSaveLayouts();
         } catch (_e) {}
@@ -3474,46 +3509,56 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _adjustForConstraints(node, parent, isFirst, x, y, w, h, gap) {
+    _adjustForConstraints(node, parent, isFirst, x, y, w, h, gap, parentAxis) {
         if (!node) return false;
         if (node.type === 'leaf') {
             if (!parent || !node.window) return false;
             const f = node.window.get_frame_rect();
             if (f.width === 0 || f.height === 0) return false;
+            // parentAxis is the PARENT split's usable span (its w/h minus the
+            // inner gap), passed down by the recursion. The ratio lives on
+            // the parent, so the bend math must be sized against that full
+            // span. The old code used the leaf's OWN allocated slot as the
+            // axis — `1 - frame/ownSlot` for a second child goes negative
+            // whenever the frame exceeds its (too-small) slot, clamping the
+            // ratio to 0.05 (and a stale mid-animation first-child frame
+            // clamps it to 0.95): the 2026-10-02 goverlay/emacs oscillation
+            // that produced 95px slots and a give-up float.
+            const axisSize = parentAxis;
+            if (axisSize <= 0) return false;
+            // "Changed" means the RATIO moved, not that the frame exceeded
+            // its slot: a frame over the slot with the ratio already clamped
+            // at a bound (0.05/0.95) is a no-op the caller must not log or
+            // persist (the frame exceeded its slot but nothing bent).
+            const before = parent.ratio;
             if (parent.direction === 'h' && f.width > node._w + 1) {
-                const axisSize = w - gap;
-                if (axisSize <= 0) return false;
                 if (isFirst) {
                     parent.ratio = Math.min(0.95, Math.max(parent.ratio, f.width / axisSize));
                 } else {
                     parent.ratio = Math.max(0.05, Math.min(parent.ratio, 1 - f.width / axisSize));
                 }
-                return true;
-            }
-            if (parent.direction === 'v' && f.height > node._h + 1) {
-                const axisSize = h - gap;
-                if (axisSize <= 0) return false;
+            } else if (parent.direction === 'v' && f.height > node._h + 1) {
                 if (isFirst) {
                     parent.ratio = Math.min(0.95, Math.max(parent.ratio, f.height / axisSize));
                 } else {
                     parent.ratio = Math.max(0.05, Math.min(parent.ratio, 1 - f.height / axisSize));
                 }
-                return true;
             }
-            return false;
+            return parent.ratio !== before;
         }
         if (node.type !== 'split') return false;
         const isH = node.direction === 'h';
         const axisSize = isH ? w : h;
         const split = Math.floor((axisSize - gap) * node.ratio);
         const secondSize = axisSize - split - gap;
+        const childAxis = axisSize - gap;
         let changed = false;
         if (isH) {
-            changed = this._adjustForConstraints(node.first, node, true, x, y, split, h, gap) || changed;
-            changed = this._adjustForConstraints(node.second, node, false, x + split + gap, y, secondSize, h, gap) || changed;
+            changed = this._adjustForConstraints(node.first, node, true, x, y, split, h, gap, childAxis) || changed;
+            changed = this._adjustForConstraints(node.second, node, false, x + split + gap, y, secondSize, h, gap, childAxis) || changed;
         } else {
-            changed = this._adjustForConstraints(node.first, node, true, x, y, w, split, gap) || changed;
-            changed = this._adjustForConstraints(node.second, node, false, x, y + split + gap, w, secondSize, gap) || changed;
+            changed = this._adjustForConstraints(node.first, node, true, x, y, w, split, gap, childAxis) || changed;
+            changed = this._adjustForConstraints(node.second, node, false, x, y + split + gap, w, secondSize, gap, childAxis) || changed;
         }
         return changed;
     }
