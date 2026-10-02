@@ -1,4 +1,4 @@
-# Plaid — A polished, fluid Tiling window manager for Gnome 50+
+# Plaid — A Tiling window manager for Gnome 50+
 
 <p align="center">
   <img src="extensions/assets/plaid-logo.svg" alt="Plaid" width="160">
@@ -6,7 +6,7 @@
 
 
 
-Plaid is a tiling window manager for GNOME Shell. Tiling, borders, rounded corners, window blur and plenty more.
+Plaid is a tiling window manager for GNOME Shell. Tiling, borders, true rounded corners, window blur and plenty more.
 
 Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki).
 
