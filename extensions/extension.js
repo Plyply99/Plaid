@@ -188,6 +188,36 @@ const MASK_SNIPPET_CODE = `
 // Optional chaining keeps the load safe; the creation paths handle undefined.
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook?.FRAGMENT;
 
+// SDF border/clip rect for the corner mask, in ACTOR-local coordinates.
+// SHARED by _updateMaskBounds (uniform upload) and the GNOME 50 GLSLEffect's
+// vfunc_paint_target — that vfunc RE-DERIVES `bounds` on EVERY paint, so it
+// is the authoritative source on GNOME 50: a raw formula there silently
+// stomps any clamp applied at upload time (the 2026-10-02 pascube
+// square-outside/rounded-inside top corners — updateMask's clamped
+// borderedAreaBounds vs paint_target's unclamped bounds = mismatched rects).
+// The rect is the frame rect in actor/buffer coordinates; healthy windows
+// (frame ⊆ buffer: equal for shadowless Wayland, inset for CSD shadows) land
+// strictly INSIDE the actor. A client can commit a surface SMALLER than its
+    // frame (pascube (GTK3): buffer 37px shorter at the TOP with
+    // bottoms flush) — the raw formula then puts y1 ABOVE the capture: top
+// border and top rounding arc draw outside the captured surface (outer edge
+// cut square by the framebuffer edge, content top corners left unclipped).
+// Clamp to the actor bounds: no-op for every healthy window, hugs the
+// visible surface for divergent ones.
+function maskSdfRect(win, actor) {
+    const buffer = win.get_buffer_rect();
+    const frame = win.get_frame_rect();
+    const offsetX = frame.x - buffer.x;
+    const offsetY = frame.y - buffer.y;
+    const bw = frame.width - buffer.width;
+    const bh = frame.height - buffer.height;
+    const x1 = Math.max(1, offsetX + 1);
+    const y1 = Math.max(1, offsetY + 1);
+    const x2 = Math.max(x1, Math.min(actor.width, offsetX + actor.width + bw));
+    const y2 = Math.max(y1, Math.min(actor.height, offsetY + actor.height + bh));
+    return [x1, y1, x2, y2];
+}
+
 // Custom background blur (v51.11, pure GJS): reimplements Shell.BlurEffect's
 // BACKGROUND-mode paint chain (blit stage-beneath → FBO → blur node → final
 // composite) with the rounded-corner SDF built into the final pipeline —
@@ -1756,6 +1786,7 @@ export default class TilingWMExtension extends Extension {
             win._plaidSettlePollId = 0;
         }
         win._plaidSettleUntil = 0;
+        win._plaidSurfaceStrikes = 0;
         if (this._maximizeToggleRects) this._maximizeToggleRects.delete(win);
         this._savedRects.delete(win);
         this._scratchpadWindows.delete(win);
@@ -4544,21 +4575,18 @@ export default class TilingWMExtension extends Extension {
                         try {
                             const actor = this.get_actor();
                             if (actor && this._metaWin && this._metaWin.get_frame_rect) {
-                                const buffer = this._metaWin.get_buffer_rect();
-                                const frame = this._metaWin.get_frame_rect();
-                                const offsetX = frame.x - buffer.x;
-                                const offsetY = frame.y - buffer.y;
-                                const bw = frame.width - buffer.width;
-                                const bh = frame.height - buffer.height;
                                 const w = Math.max(1, actor.width);
                                 const h = Math.max(1, actor.height);
                                 const loc = this._uniformLocations;
-                                this.set_uniform_float(loc.bounds, 4, [
-                                    offsetX + 1,
-                                    offsetY + 1,
-                                    offsetX + actor.width + bw,
-                                    offsetY + actor.height + bh,
-                                ]);
+                                // SAME clamped rect as _updateMaskBounds — this
+                                // per-paint re-derivation is authoritative on
+                                // GNOME 50 (the GLSLEffect path), so a raw
+                                // formula here stomps the clamp uploaded by
+                                // updateMask (the 2026-10-02 pascube
+                                // square-outside/rounded-inside corners: bounds
+                                // top at −36 vs borderedArea top at 4).
+                                this.set_uniform_float(loc.bounds, 4,
+                                    maskSdfRect(this._metaWin, actor));
                                 this.set_uniform_float(loc.pixelStep, 2, [1 / w, 1 / h]);
                             }
                         } catch (e) {
@@ -4895,10 +4923,9 @@ export default class TilingWMExtension extends Extension {
             offsetX >= borderWidth && offsetY >= borderWidth)
             borderWidth = 0;
 
-        const x1 = offsetX + 1;
-        const y1 = offsetY + 1;
-        const x2 = offsetX + actor.width + bw;
-        const y2 = offsetY + actor.height + bh;
+        // Shared clamped rect — see maskSdfRect() at module top for the
+        // pascube divergence rule and why BOTH uniform paths must use it.
+        const [x1, y1, x2, y2] = maskSdfRect(win, actor);
 
         if (!this._settings) {
             effect.updateMask(x1, y1, x2, y2, radius, borderWidth, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, 0, [0, 0, 0, 0]);
@@ -5614,12 +5641,29 @@ export default class TilingWMExtension extends Extension {
             try {
                 const buffer = win.get_buffer_rect();
                 const frame = win.get_frame_rect();
-                const offsets = [
-                    frame.x - buffer.x,
-                    frame.y - buffer.y,
-                    frame.width - buffer.width,
-                    frame.height - buffer.height,
-                ];
+                // Sibling rect = intersection(frame, buffer), expressed
+                // relative to the constraint source (the window actor —
+                // mutter keeps it == the buffer rect). Healthy windows
+                // (frame ⊆ buffer: CSD shadows) → the intersection IS the
+                // frame → byte-identical to the old frame−buffer offsets,
+                // the blur sits behind the frame inside the shadow. A
+                // client committing a surface SMALLER than its frame
+                // (pascube: 37px top inset) would otherwise push the
+                // sibling ABOVE the window — a visible blurred band 37px
+                // taller than the window ("border bigger than the window",
+                // 2026-10-02). The blur must never paint outside the
+                // window: clamp to the intersection.
+                const ix = Math.max(frame.x, buffer.x);
+                const iy = Math.max(frame.y, buffer.y);
+                const iw = Math.min(frame.x + frame.width, buffer.x + buffer.width) - ix;
+                const ih = Math.min(frame.y + frame.height, buffer.y + buffer.height) - iy;
+                // Offsets are relative to the constraint SOURCE (the actor
+                // the BindConstraints were created with, stored on the
+                // effect) — not necessarily the actor passed to this call.
+                const src = blur._sourceActor || actor;
+                const offsets = iw > 0 && ih > 0
+                    ? [ix - src.x, iy - src.y, iw - src.width, ih - src.height]
+                    : [0, 0, 0, 0];
                 const constraints = blur._sibling.get_constraints();
                 constraints.forEach((c, i) => {
                     if (c instanceof Clutter.BindConstraint)
@@ -7154,7 +7198,12 @@ export default class TilingWMExtension extends Extension {
             if (!this._canPointerFocusWindow(target)) return;
             if (target === global.display.focus_window) return;
             if (target === this._backgroundAppWin) return;
-            if (this._scratchpadWindows && this._scratchpadWindows.has(target)) return;
+            // Scratchpad members are NOT excluded (the v50.65 early-return
+            // removed 2026-10-02): a SHOWN scratchpad window is an ordinary
+            // visible float on the active workspace — hover focus must treat
+            // it like any other window. Hidden scratch windows never reach
+            // here: the scan skips minimized windows (that is where the
+            // protection against overlapping hidden windows lives).
             this._debugLog(`pointer focus: ${target.get_wm_class_instance() || '?'} title=${target.get_title() || '?'}`);
             target.focus(global.get_current_time());
         } catch (e) {
@@ -8944,6 +8993,21 @@ export default class TilingWMExtension extends Extension {
             for (const win of this._scratchpadWindows.keys()) {
                 try {
                     if (!win.get_compositor_private()) continue;
+                    // Remember where the window IS at hide time (GNOME
+                    // semantics): moves/resizes made while the scratchpad
+                    // was visible are captured here, so the next show —
+                    // and a later remove — restore the LAST position
+                    // instead of the add-time one.
+                    const entry = this._scratchpadWindows.get(win);
+                    if (entry) {
+                        const f = win.get_frame_rect();
+                        if (f.width > 0 && f.height > 0) {
+                            entry.x = f.x;
+                            entry.y = f.y;
+                            entry.w = f.width;
+                            entry.h = f.height;
+                        }
+                    }
                     try { win.minimize(); } catch (_e) {
                         try { win.minimized = true; } catch (_e2) {}
                     }
@@ -8963,19 +9027,35 @@ export default class TilingWMExtension extends Extension {
                     if (win.get_workspace() !== activeWs) {
                         try { win.change_workspace(activeWs); } catch (_e) {}
                     }
+                    // Restore the remembered geometry (captured at add, and
+                    // refreshed at every hide) BEFORE the window unminimizes
+                    // so it reappears exactly in place. The old code
+                    // re-centered every scratchpad window here — stacking
+                    // them all in the middle of the screen and throwing the
+                    // position away. Fallback to centering only when the
+                    // entry is unusable or the remembered rect is entirely
+                    // off-screen (its monitor unplugged since it was hidden).
+                    const entry = this._scratchpadWindows.get(win);
+                    const frame = win.get_frame_rect();
+                    let restored = false;
+                    if (entry && entry.w > 0 && entry.h > 0) {
+                        if (this._rectOnScreen({ x: entry.x, y: entry.y, w: entry.w, h: entry.h })) {
+                            try {
+                                win.move_resize_frame(true, entry.x, entry.y, entry.w, entry.h);
+                                restored = true;
+                            } catch (_e) {}
+                        }
+                    }
+                    if (!restored && workArea && frame.width > 0 && frame.height > 0) {
+                        win.move_resize_frame(true,
+                            workArea.x + Math.floor((workArea.width - frame.width) / 2),
+                            workArea.y + Math.floor((workArea.height - frame.height) / 2),
+                            frame.width, frame.height);
+                    }
                     try { win.unminimize(); } catch (_e) {
                         try { win.minimized = false; } catch (_e2) {}
                     }
                     try { win.raise(); } catch (_e) {}
-                    if (workArea) {
-                        const frame = win.get_frame_rect();
-                        if (frame.width > 0 && frame.height > 0) {
-                            win.move_resize_frame(true,
-                                workArea.x + Math.floor((workArea.width - frame.width) / 2),
-                                workArea.y + Math.floor((workArea.height - frame.height) / 2),
-                                frame.width, frame.height);
-                        }
-                    }
                     if (!firstWin) firstWin = win;
                 } catch (_e) {}
             }
@@ -8985,6 +9065,17 @@ export default class TilingWMExtension extends Extension {
             }
             this._showPopup('Scratchpad Shown');
         }
+    }
+
+    _rectOnScreen(r) {
+        const n = global.display.get_n_monitors();
+        for (let i = 0; i < n; i++) {
+            const g = global.display.get_monitor_geometry(i);
+            if (r.x < g.x + g.width && r.x + r.w > g.x &&
+                r.y < g.y + g.height && r.y + r.h > g.y)
+                return true;
+        }
+        return false;
     }
 
     _scratchpadRemove() {
@@ -9013,7 +9104,16 @@ export default class TilingWMExtension extends Extension {
             if (saved.workspace && win.get_workspace() !== saved.workspace) {
                 try { win.change_workspace(saved.workspace); } catch (_e) {}
             }
-            win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
+            // The remove/toggle-off key always runs on a VISIBLE, active
+            // window — it is already at its remembered (or user-adjusted)
+            // position, so keep it there. The old unconditional re-apply of
+            // the saved rect yanked a moved-while-shown window back to a
+            // stale rect. Only fall back to the saved rect if the frame is
+            // unusable (degenerate = can't tell where the window is).
+            const f = win.get_frame_rect();
+            if (f.width <= 0 || f.height <= 0) {
+                win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
+            }
             this._retileWorkspace(saved.workspace);
             this._showPopup('Removed from Scratchpad');
         } catch (e) {
@@ -9641,8 +9741,30 @@ export default class TilingWMExtension extends Extension {
             // (X11 SSD frames legitimately exceed the buffer — excluded.)
             const buffer = win.get_buffer_rect();
             if (buffer.width > 0 && (buffer.width < f.width || buffer.height < f.height)) {
-                this._debugLog(`slot re-assert (surface): ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
+                // Strike bound: the frame is ALREADY in slot here (this
+                // branch only runs when the frame check passed), so the
+                // correction below is a fresh configure of the identical
+                // rect — the Firefox-restore client obeys it (surface
+                // heals → counter resets), but a client that structurally
+                // never fills its frame (pascube (GTK3): committing a
+                // surface 37px shorter than the frame, top
+                // inset only, from first placement) makes every re-place a
+                // no-op: without the bound the settle window burns ~12
+                // futile moves + log lines fighting a fight it cannot win.
+                const strikes = (win._plaidSurfaceStrikes || 0) + 1;
+                win._plaidSurfaceStrikes = strikes;
+                if (strikes > 3) {
+                    if (strikes === 4)
+                        this._debugLog(`surface divergence: accepting client geometry for ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height})`);
+                    return;
+                }
+                this._debugLog(`slot re-assert (surface): ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h}) (strike ${strikes}/3)`);
                 off = true;
+            } else {
+                // Surface (re)covered the frame — forget past strikes so a
+                // later genuine shrink (Firefox restore round 2) gets a
+                // fresh correction budget.
+                win._plaidSurfaceStrikes = 0;
             }
         }
         if (off) {

@@ -224,7 +224,9 @@ Test checklist:
 - [ ] Background App on AND off — focus still works (parked window + parking
       workspace excluded from the resolver)
 - [ ] Drop-down terminal never takes hover focus (intended)
-- [ ] Scratchpad windows never take hover focus
+- [ ] Scratchpad windows take hover focus when SHOWN (changed 2026-10-02 —
+      the v50.65 exclusion was removed); hidden (minimized) ones still never
+      intercept hover
 - [ ] Toggle off — no behavior change; click focus mode unaffected
 - [ ] Journal hygiene: `pointer focus: <win>` only with debug on, no `apply
       failed` / `tick failed`
