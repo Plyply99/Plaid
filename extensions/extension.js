@@ -386,9 +386,11 @@ export default class TilingWMExtension extends Extension {
         this._masterRatios = new Map();
         this._stackRatios = new Map();
         this._bspTrees = new Map();
+        this._dwindleLeafSigs = new Map();
         this._lastFocusedPerWorkspace = new Map();
         this._savedRects = new Map();
         this._workspaceLayoutsSaveId = 0;
+        this._saveDirtySince = 0;
         // Persisted per-workspace layouts/ratios are slot rules parsed at
         // enable and consulted at use time — timing-independent (no workspace
         // objects exist yet at this point, which is fine: the rules key on
@@ -628,6 +630,7 @@ export default class TilingWMExtension extends Extension {
             log(`[plaid] tiling state restore failed: ${e.message}`);
             // Fall back to a clean rebuild if anything went wrong.
             this._bspTrees = new Map();
+            this._dwindleLeafSigs = new Map();
             this._workspaceOrders = new Map();
             this._windowWorkspaces = new Map();
             this._windowWSIndices = new Map();
@@ -670,6 +673,7 @@ export default class TilingWMExtension extends Extension {
             this._workspaceLayoutsSaveId = 0;
         }
         try { this._savePersistedLayouts(); } catch (_e) {}
+        this._saveDirtySince = 0;
         // Stash the exact tiling state on any in-shell disable (lock cycle OR
         // manual toggle) so the re-enable restores it instead of rebuilding
         // trees from the stack order — which would shuffle windows on the
@@ -828,6 +832,7 @@ export default class TilingWMExtension extends Extension {
         this._masterRatios = null;
         this._stackRatios = null;
         this._bspTrees = null;
+        this._dwindleLeafSigs = null;
         this._lastRetileTimes = null;
         this._lastFocusedPerWorkspace = null;
         this._lastRealFocusedWindow = null;
@@ -1228,6 +1233,9 @@ export default class TilingWMExtension extends Extension {
             this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
             this._retileAll();
         }));
+        this._addSignal(this._settings, this._settings.connect('changed::workspace-dwindle-trees', () => {
+            this._persistedDwindleByIndex = this._parsePersistedDwindleShapes();
+        }));
         this._addSignal(this._settings, this._settings.connect('changed::inside-gap', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::outside-gap-top', () => this._retileAll()));
         this._addSignal(this._settings, this._settings.connect('changed::outside-gap-bottom', () => this._retileAll()));
@@ -1528,10 +1536,33 @@ export default class TilingWMExtension extends Extension {
     // --- Per-workspace layout/ratio persistence (across logins) ---
 
     _scheduleSaveLayouts() {
-        if (this._workspaceLayoutsSaveId) return;
-        this._workspaceLayoutsSaveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+        // Trailing (quiet-period) debounce: every change RESETS the timer,
+        // so exactly ONE write lands 10s after interaction STOPS. The old
+        // fixed-500ms-from-first-event window wrote to dconf every ~500ms
+        // during sustained resize/retile activity (253 writes in 2 days;
+        // 1/sec bursts in the 2026-10-04 resize-testing journal).
+        if (this._destroyed || !this._settings) return;
+        const now = Date.now();
+        if (!this._saveDirtySince) this._saveDirtySince = now;
+        // Starvation cap: under back-to-back activity the quiet timer keeps
+        // getting reset — force a save once we've been continuously dirty
+        // for 60s, so a crash loses at most ~60s of layout changes.
+        // (disable() flushes synchronously regardless.)
+        if (now - this._saveDirtySince >= 60000) {
+            if (this._workspaceLayoutsSaveId) {
+                GLib.source_remove(this._workspaceLayoutsSaveId);
+                this._workspaceLayoutsSaveId = 0;
+            }
+            this._saveDirtySince = 0;
+            this._savePersistedLayouts();
+            return;
+        }
+        if (this._workspaceLayoutsSaveId)
+            GLib.source_remove(this._workspaceLayoutsSaveId);
+        this._workspaceLayoutsSaveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
             this._workspaceLayoutsSaveId = 0;
             if (this._destroyed || !this._settings) return GLib.SOURCE_REMOVE;
+            this._saveDirtySince = 0;
             this._savePersistedLayouts();
             return GLib.SOURCE_REMOVE;
         });
@@ -1542,6 +1573,7 @@ export default class TilingWMExtension extends Extension {
             const layouts = [];
             const masterRatios = [];
             const stackRatios = [];
+            const dwindleRaw = new Map(this._persistedDwindleRaw || []);
             const n = global.workspace_manager.get_n_workspaces();
             for (let i = 1; i < n; i++) {
                 const ws = global.workspace_manager.get_workspace_by_index(i);
@@ -1560,11 +1592,44 @@ export default class TilingWMExtension extends Extension {
                         idx.push(`${k}:${v}`);
                     stackRatios.push(`${i}:${idx.join(',')}`);
                 }
+                // Dwindle trees are in-memory only — serialize the shape+
+                // ratios (no window refs) so resized arrangements (e.g. a
+                // big Steam + narrow friends strip) survive logins.
+                //
+                // MERGE, don't rebuild (2026-10-04 — the steam/ws3 failure):
+                // the old full-strv rewrite dropped every workspace with no
+                // live tree at save time — at boot the FIRST save (triggered
+                // by ws1's windows) deleted ws3's shape before Steam had even
+                // opened, so steam+friends came back 50/50 while ws1
+                // restored fine. Mid-session churn had the same effect in
+                // reverse: a collapsed single-leaf tree degraded a good
+                // shape to 'l'/'e' (logout window kills, steam client
+                // restarts, friends closing). Rule: only a live 2+-window
+                // tree (a real arrangement) may overwrite an entry; no
+                // tree / leaf / empty PRESERVES the previously-saved shape.
+                const tree = this._bspTrees.get(ws);
+                if (tree && tree.type === 'split' &&
+                    this._getWorkspaceLayout(ws) === 'dwindle')
+                    dwindleRaw.set(i, this._dwindleShapeToString(tree));
             }
             this._settings.set_strv('workspace-layouts', layouts);
             this._settings.set_strv('workspace-master-ratios', masterRatios);
             this._settings.set_strv('workspace-stack-ratios', stackRatios);
-            this._debugLog(`persisted layouts: ${layouts.length} ws, ${masterRatios.length} master, ${stackRatios.length} stack`);
+            // Write merged dwindle shapes: non-split leftovers (stale 'l'/'e'
+            // products of the old code) are filtered out, entries for
+            // workspaces beyond the current count survive, and the raw map
+            // is re-synced to exactly what we wrote.
+            const dwindleTrees = [];
+            for (const [i, shape] of dwindleRaw) {
+                const node = this._dwindleShapeFromString(shape);
+                if (node && node.type === 'split')
+                    dwindleTrees.push(`${i}:${shape}`);
+            }
+            dwindleTrees.sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+            this._settings.set_strv('workspace-dwindle-trees', dwindleTrees);
+            this._persistedDwindleRaw = new Map(
+                dwindleTrees.map(e => [parseInt(e, 10), e.substring(e.indexOf(':') + 1)]));
+            this._debugLog(`persisted layouts: ${layouts.length} ws, ${masterRatios.length} master, ${stackRatios.length} stack, ${dwindleTrees.length} dwindle`);
         } catch (e) {
             log(`[plaid] persist layouts failed: ${e.message}`);
         }
@@ -1580,6 +1645,7 @@ export default class TilingWMExtension extends Extension {
         this._persistedLayoutByIndex = new Map();
         this._persistedMasterByIndex = new Map();
         this._persistedStackByIndex = new Map();
+        this._persistedDwindleByIndex = this._parsePersistedDwindleShapes();
         try {
             const layouts = this._settings.get_strv('workspace-layouts') || [];
             for (const entry of layouts) {
@@ -1614,10 +1680,108 @@ export default class TilingWMExtension extends Extension {
                 if (map.size > 0)
                     this._persistedStackByIndex.set(idx, map);
             }
-            this._debugLog(`persisted rules: ${this._persistedLayoutByIndex.size} layouts, ${this._persistedMasterByIndex.size} master, ${this._persistedStackByIndex.size} stack`);
+            this._debugLog(`persisted rules: ${this._persistedLayoutByIndex.size} layouts, ${this._persistedMasterByIndex.size} master, ${this._persistedStackByIndex.size} stack, ${this._persistedDwindleByIndex.size} dwindle`);
         } catch (e) {
             log(`[plaid] load persisted layout rules failed: ${e.message}`);
         }
+    }
+
+    _parsePersistedDwindleShapes() {
+        // "index:shape" slot rules, same keying as workspace-layouts:
+        // "whatever workspace occupies slot N uses dwindle shape S". The
+        // shape carries ONLY structure + ratios (no window refs) — leaves
+        // are placeholders; live windows are matched by position at
+        // reconcile time. The raw strings are kept alongside (in
+        // _persistedDwindleRaw) so saves can MERGE instead of rebuilding —
+        // see _savePersistedLayouts.
+        const map = new Map();
+        const raw = new Map();
+        try {
+            for (const entry of (this._settings.get_strv('workspace-dwindle-trees') || [])) {
+                const sep = entry.indexOf(':');
+                if (sep <= 0) continue;
+                const idx = parseInt(entry.substring(0, sep), 10);
+                if (idx <= 0 || !Number.isInteger(idx)) continue;
+                const shapeStr = entry.substring(sep + 1);
+                const shape = this._dwindleShapeFromString(shapeStr);
+                if (shape) {
+                    map.set(idx, shape);
+                    raw.set(idx, shapeStr);
+                }
+            }
+        } catch (e) {
+            log(`[plaid] parse dwindle shapes failed: ${e.message}`);
+        }
+        this._persistedDwindleRaw = raw;
+        return map;
+    }
+
+    _dwindleShapeToString(node) {
+        // Prefix encoding: l=leaf, e=empty, split = dir+ratio(child,child)
+        // e.g. "h0.8480(l,l)" — one ':' per entry (the index separator).
+        if (!node || node.type === 'empty') return 'e';
+        if (node.type === 'leaf') return 'l';
+        if (node.type !== 'split') return 'e';
+        const ratio = Number.isFinite(node.ratio) ? node.ratio : 0.5;
+        return `${node.direction === 'v' ? 'v' : 'h'}${ratio.toFixed(4)}` +
+            `(${this._dwindleShapeToString(node.first)},${this._dwindleShapeToString(node.second)})`;
+    }
+
+    _dwindleShapeFromString(str) {
+        // Minimal recursive-descent parser for the encoding above. Leaves
+        // are PLACEHOLDERS ({type:'leaf'} with no window) — only split
+        // nodes' direction+ratio are ever consumed (by reconcile).
+        if (typeof str !== 'string' || str.length === 0) return null;
+        let i = 0;
+        const parseNode = () => {
+            if (i >= str.length) return null;
+            const c = str[i];
+            if (c === 'l') { i++; return { type: 'leaf' }; }
+            if (c === 'e') { i++; return { type: 'empty' }; }
+            if (c !== 'h' && c !== 'v') return null;
+            const dir = c;
+            i++;
+            const start = i;
+            while (i < str.length && /[0-9.]/.test(str[i])) i++;
+            const ratio = parseFloat(str.substring(start, i));
+            if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return null;
+            if (str[i] !== '(') return null;
+            i++;
+            const first = parseNode();
+            if (!first || str[i] !== ',') return null;
+            i++;
+            const second = parseNode();
+            if (!second || str[i] !== ')') return null;
+            i++;
+            return { type: 'split', direction: dir, ratio, first, second };
+        };
+        try {
+            const node = parseNode();
+            return node && i === str.length ? node : null;
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    _reconcileTreeRatios(saved, live) {
+        // Copy saved split ratios into the LIVE tree wherever the two
+        // structures correspond (same direction down the path). A direction
+        // mismatch means this branch's history diverged (different window
+        // aspect / insert order) — stop descending there and keep the live
+        // ratios. Never touches leaves. Returns true when anything changed.
+        if (!saved || !live) return false;
+        if (saved.type !== 'split' || live.type !== 'split') return false;
+        if (saved.direction !== live.direction) return false;
+        let changed = false;
+        const r = Number(saved.ratio);
+        if (Number.isFinite(r) && r > 0.02 && r < 0.98 &&
+            Math.abs(live.ratio - r) > 0.0005) {
+            live.ratio = r;
+            changed = true;
+        }
+        changed = this._reconcileTreeRatios(saved.first, live.first) || changed;
+        changed = this._reconcileTreeRatios(saved.second, live.second) || changed;
+        return changed;
     }
 
     _markPendingWindowInvisible(win, actor) {
@@ -3640,6 +3804,23 @@ export default class TilingWMExtension extends Extension {
                 }
             }
             this._bspTrees.set(workspace, tree);
+        }
+
+        // Restore saved split ratios ONLY when the window set changed
+        // (fresh session build, a window opened, or one closed). A plain
+        // retile after a manual resize has the same leaf signature → no
+        // reconcile → live ratios are never stomped; the resize itself
+        // already scheduled a save (retiles are the save trigger), so the
+        // saved shape stays current for the next window-set change.
+        if (tree && this._dwindleLeafSigs) {
+            const sig = tiledWindows.map(w => w.get_id()).join(',');
+            if (this._dwindleLeafSigs.get(workspace) !== sig) {
+                this._dwindleLeafSigs.set(workspace, sig);
+                const savedShape = this._persistedDwindleByIndex &&
+                    this._persistedDwindleByIndex.get(this._wsIndex(workspace));
+                if (savedShape && this._reconcileTreeRatios(savedShape, tree))
+                    this._debugLog(`dwindle: restored saved split ratios (ws=${this._wsIndex(workspace)}, windows=${tiledWindows.length})`);
+            }
         }
 
         this._treeMinSizes(tree);
@@ -10135,6 +10316,10 @@ export default class TilingWMExtension extends Extension {
             else
                 this._retileMasterStack(ws, tiledOnly);
         }
+        // A drop-swap restructured the tree/order directly (not every path
+        // here goes through _doRetileWorkspace) — persist the new
+        // arrangement (debounced) so it survives a login.
+        this._scheduleSaveLayouts();
     }
 
 }

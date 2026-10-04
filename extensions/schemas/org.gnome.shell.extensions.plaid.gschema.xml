@@ -212,6 +212,13 @@
       <description>Entries in the form "class:WxH" (e.g. steam:1364x810). Used when a window's minimum size is not reported by the compositor, so tiled slots never target narrower sizes than the window can take</description>
     </key>
 
+    <!-- Per-workspace dwindle tree shapes (persisted split ratios) -->
+    <key name="workspace-dwindle-trees" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Persisted dwindle split arrangements per workspace</summary>
+      <description>Entries in the form "index:shape" where shape encodes the tree's split directions and ratios (e.g. 3:h0.8480(l,l)). Restored when a workspace's window set changes so resized arrangements survive logins</description>
+    </key>
+
     <!-- Keybindings: Window Movement -->
     <key name="move-focus-left" type="as">
       <default><![CDATA[['<Super>h']]]></default>
