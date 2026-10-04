@@ -48,6 +48,8 @@ bottom; fill the status table; paste the journal excerpts back.
 ### Floating layout
 - [x] `Super+C` cycles to Floating (popup shows "Layout: Floating")
 - [x] New windows fade in at GNOME's placement, cursor warps to them
+- [x] Float-listed apps (nautilus/Settings/Characters) open at their
+      remembered size — never auto-maximized on map (changed 2026-10-04)
 - [x] Windows keep positions — no re-tiling, no slot-snapping on resize
 - [x] Move-focus (H/J/K/L) navigates spatially; resize grows/shrinks the
       focused window; swap is inert

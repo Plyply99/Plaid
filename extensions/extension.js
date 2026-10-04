@@ -1911,7 +1911,23 @@ export default class TilingWMExtension extends Extension {
             } catch (_e) {}
             try {
                 const wsNow = win.get_workspace();
-                if (wsNow && !this._isFloating(win)) {
+                // Placement guard: a window whose identity is still
+                // unresolved (no wm-class, no GTK app id) may be float-listed
+                // — the class resolves AFTER window-created for flatpaks and
+                // for native apps whose /usr/bin/name misses the float-list
+                // token (e.g. org.gnome.nautilus vs /usr/bin/nautilus), so
+                // _shouldManage registered it as tiled. Pre-mapping it at
+                // the single-window full-area slot makes mutter AUTO-MAXIMIZE
+                // it on map (placement area > 80% of the work area —
+                // MAX_UNMAXIMIZED_WINDOW_AREA in core/place.c), and the later
+                // float flip cannot restore the remembered size (the restore
+                // refuses maximized windows). Unresolved windows are placed
+                // by the first-frame retile, after identity resolution —
+                // float-listed ones are then never touched by the tiler and
+                // open at their own remembered geometry.
+                const idKnown = !!(win.get_wm_class_instance() ||
+                    (win.get_gtk_application_id ? win.get_gtk_application_id() : ''));
+                if (wsNow && idKnown && !this._isFloating(win)) {
                     const slot = this._windowSlotRect(win, wsNow,
                         this._getWorkspaceLayout(wsNow),
                         wsNow.get_work_area_for_monitor(global.display.get_primary_monitor()),
@@ -3993,6 +4009,13 @@ export default class TilingWMExtension extends Extension {
                 this._bspTrees.set(ws, this._bspRemove(tree, win));
                 this._retileWorkspace(ws);
             }
+        }
+        // The window may be in the maximized state from mutter's map-time
+        // auto-maximize (a pre-map full-area slot > 80% of the work area) —
+        // _restoreFloatNaturalRect refuses maximized windows, so undo the
+        // state first, then restore the spawn rect captured at _addWindow.
+        if (win.is_maximized()) {
+            try { win.unmaximize(); } catch (_e) {}
         }
         this._restoreFloatNaturalRect(win);
         // Reveal: the window can be pending-hidden from the tiled
