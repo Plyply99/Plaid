@@ -408,6 +408,12 @@ export default class TilingWMExtension extends Extension {
         this._savedRects = new Map();
         this._workspaceLayoutsSaveId = 0;
         this._saveDirtySince = 0;
+        // Explicit zero-init (2026-10-04 audit): disable() reads these
+        // BEFORE any assignment; an undefined field was only accidentally
+        // safe (falsey) — any future truthy default would double-remove a
+        // source id.
+        this._stackSettleId = 0;
+        this._pickFocusId = null;
         // Persisted per-workspace layouts/ratios are slot rules parsed at
         // enable and consulted at use time — timing-independent (no workspace
         // objects exist yet at this point, which is fine: the rules key on
@@ -1090,10 +1096,6 @@ export default class TilingWMExtension extends Extension {
                     });
                 }
             } else if (this._isFloating(win)) {
-                const doRaise = () => {
-                    if (this._destroyed) return;
-                    const ws = win.get_workspace();
-                };
                 const doRestore = () => {
                     if (this._destroyed) return;
                     this._restoreFloatNaturalRect(win);
@@ -1103,7 +1105,6 @@ export default class TilingWMExtension extends Extension {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
                         if (this._destroyed || !this._settings) return;
-                        doRaise();
                         doRestore();
                         if (this._settings.get_boolean('follow-focus') &&
                             win.get_window_type() === Meta.WindowType.NORMAL)
@@ -1114,7 +1115,6 @@ export default class TilingWMExtension extends Extension {
                 } else {
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         if (this._destroyed || !this._settings) return false;
-                        doRaise();
                         doRestore();
                         if (this._settings.get_boolean('follow-focus') &&
                             win.get_window_type() === Meta.WindowType.NORMAL)
@@ -1791,7 +1791,13 @@ export default class TilingWMExtension extends Extension {
         if (node.type === 'leaf') return 'l';
         if (node.type !== 'split') return 'e';
         const ratio = Number.isFinite(node.ratio) ? node.ratio : 0.5;
-        return `${node.direction === 'v' ? 'v' : 'h'}${ratio.toFixed(4)}` +
+        // Clamp before toFixed(4): a ratio ≥ 0.99995 serializes to "1.0000"
+        // (and ≤ 0.00005 to "0.0000") which _dwindleShapeFromString REJECTS
+        // (ratio must be strictly between 0 and 1) — the whole entry was
+        // silently dropped from the written strv, losing the saved shape
+        // (2026-10-04 audit).
+        const r = Math.min(0.9999, Math.max(0.0001, ratio));
+        return `${node.direction === 'v' ? 'v' : 'h'}${r.toFixed(4)}` +
             `(${this._dwindleShapeToString(node.first)},${this._dwindleShapeToString(node.second)})`;
     }
 
@@ -2698,7 +2704,13 @@ export default class TilingWMExtension extends Extension {
             if (!changed) return;
             log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
             this._scheduleSaveLayouts();
-        } catch (_e) {}
+        } catch (e) {
+            // The whole bend used to be swallowed silently — any exception
+            // (e.g. a finalized window's get_frame_rect) killed the min-size
+            // bend with zero trace while the window sat off-slot
+            // (2026-10-04 audit).
+            log(`[plaid] pinned adjust failed: ${e.message}`);
+        }
     }
 
     _verifyAnimationLanding(s, kind, pure = false) {
@@ -3454,7 +3466,11 @@ export default class TilingWMExtension extends Extension {
                         return 1 + i;
                     y += h + gap;
                 }
-                return 1;
+                // Drop below the last left-column window targets the LAST
+                // column window (the drop lands at the column's bottom) —
+                // the old first-window fallback was inconsistent with the
+                // right column and the flat stack (2026-10-04 audit).
+                return leftCount;
             }
 
             if (px > masterX + masterW && rightStackX > 0 && rightCount > 0) {
@@ -3475,7 +3491,9 @@ export default class TilingWMExtension extends Extension {
                         return 1 + leftCount + i;
                     y += h + gap;
                 }
-                return 1 + leftCount;
+                // Same as the left column: below the column = its LAST
+                // window (the flat-stack semantics).
+                return 1 + leftCount + rightCount - 1;
             }
         } else {
             const masterW = Math.floor((areaW - gap) * masterRatio);
@@ -3721,7 +3739,18 @@ export default class TilingWMExtension extends Extension {
         if (tree) {
             const [px, py] = global.get_pointer();
             this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
-            const target = this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap);
+            // Leaf-pick only when the pointer is INSIDE the tiling area —
+            // a pointer on a secondary monitor (or over a panel) used to be
+            // resolved against the primary gapped area to an ARBITRARY leaf
+            // (the top-left-most), landing the new window in a slot
+            // unrelated to where the user works; the append-at-end fallback
+            // matches the plain new-window behavior instead
+            // (2026-10-04 audit).
+            const inside = px >= areaX && px < areaX + areaW &&
+                py >= areaY && py < areaY + areaH;
+            const target = inside
+                ? this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap)
+                : null;
             if (target) {
                 tree = this._bspReplaceLeaf(tree, target, win);
             } else {
@@ -4235,7 +4264,11 @@ export default class TilingWMExtension extends Extension {
                 this._removeBorder(win);
                 continue;
             }
-            if (this._grabOp && win === this._getActiveWindow()) continue;
+            // The grab skip must compare against the GRABBED window — the focus
+            // window can differ mid-grab (hover-focus during a drag), and
+            // the grabbed-but-unfocused window then got stale mask uniforms
+            // for the whole grab (2026-10-04 audit).
+            if (this._grabOp && this._grabWindow && win === this._grabWindow) continue;
             const actor = win.get_compositor_private();
             if (!actor) continue;
             const frame = win.get_frame_rect();
@@ -4294,7 +4327,13 @@ export default class TilingWMExtension extends Extension {
         for (const win of ws.list_windows()) {
             if (win.get_window_type() !== Meta.WindowType.NORMAL) continue;
             if (!this._isFloating(win)) continue;
-            if (win.is_fullscreen()) { this._removeMask(win); this._removeBlur(win); continue; }
+            // The tiled fullscreen branch drops border+mask+blur; the float branch
+            // missed the WIDGET border (and scratch ring) — a floating
+            // window entering fullscreen kept its colored frame + ring
+            // rendered on top of the fullscreen content (X11 floats; the
+            // mask is gone there so the widget is unclipped)
+            // (2026-10-04 audit).
+            if (win.is_fullscreen()) { this._removeMask(win); this._removeBlur(win); this._removeBorder(win); continue; }
             const actor = win.get_compositor_private();
             if (!actor) continue;
             const frame = win.get_frame_rect();
@@ -6485,7 +6524,12 @@ export default class TilingWMExtension extends Extension {
     _findDirectionalTarget(win, direction, windows) {
         const f = win.get_frame_rect();
         let best = null;
-        let bestOverlap = -1;
+        // bestOverlap starts at 0 (not -1): the acceptance test requires
+        // overlap > bestOverlap + 5, so the OLD -1 made the first candidate
+        // need overlap > 4 — tall narrow panes sharing only a few pixels of
+        // edge were unnavigable by the focus/swap keybinds even when they
+        // were the only neighbor in that direction (2026-10-04 audit).
+        let bestOverlap = 0;
         let bestDist = Infinity;
         let bestPerp = Infinity;
         let bestHeight = -1;
@@ -6684,12 +6728,22 @@ export default class TilingWMExtension extends Extension {
         this._bspFindPath(tree, focused, path);
 
         for (let i = path.length - 1; i >= 0; i--) {
-            if ((path[i].direction === 'h') === targetIsHorizontal) {
+            const split = path[i];
+            if ((split.direction === 'h') === targetIsHorizontal) {
                 const monitor = global.display.get_primary_monitor();
                 const workArea = workspace.get_work_area_for_monitor(monitor);
                 if (!workArea) return;
-                const axisSize = targetIsHorizontal ? workArea.width : workArea.height;
-                path[i].ratio = Math.max(0.15, Math.min(0.85, path[i].ratio + delta / axisSize));
+                // Scale the delta by the split's OWN span (tagged by
+                // _bspTagGeometry during layout) so a deep-nested split
+                // moves by the same RELATIVE amount as a top-level one —
+                // the old full-work-area divisor made the resize feel
+                // shallower at depth and shift with the gap settings
+                // (2026-10-04 audit).
+                const axisSize = targetIsHorizontal
+                    ? (split._w > 0 ? split._w : workArea.width)
+                    : (split._h > 0 ? split._h : workArea.height);
+                if (!(axisSize > 0)) return;
+                split.ratio = Math.max(0.15, Math.min(0.85, split.ratio + delta / axisSize));
                 return;
             }
         }
@@ -10508,12 +10562,32 @@ export default class TilingWMExtension extends Extension {
             if (targetIdx < 0) return;
 
             const order = this._getWorkspaceOrder(ws);
+            // The drop target is expressed in TILED-only index space
+            // (master=0, stack=1..N-1) while the order interleaves
+            // toggle-floated windows — comparing/splicing across the two
+            // spaces placed the window at the wrong relative position
+            // whenever a float was interleaved (2026-10-04 audit). Map
+            // both sides to the tiled space, then back to the order.
+            const tiledIdx = tiled.indexOf(window);
+            if (tiledIdx === -1) return;
             const currentIdx = order.indexOf(window);
-            if (currentIdx === -1 || currentIdx === targetIdx) return;
+            if (currentIdx === -1 || tiledIdx === targetIdx) return;
 
             order.splice(currentIdx, 1);
-            const adjusted = targetIdx > currentIdx ? targetIdx - 1 : targetIdx;
-            order.splice(adjusted, 0, window);
+            const adjustedTarget = targetIdx > tiledIdx ? targetIdx - 1 : targetIdx;
+            let insertIdx = order.length;
+            let tiledSeen = 0;
+            for (let i = 0; i < order.length; i++) {
+                const w = order[i];
+                if (this._isFloating(w) || w.minimized || w.is_skip_taskbar() ||
+                    w.get_window_type() !== Meta.WindowType.NORMAL) continue;
+                if (tiledSeen === adjustedTarget) {
+                    insertIdx = i;
+                    break;
+                }
+                tiledSeen++;
+            }
+            order.splice(insertIdx, 0, window);
             const tiledOnly = order.filter(w =>
                 !this._isFloating(w) &&
                 w.get_window_type() === Meta.WindowType.NORMAL &&

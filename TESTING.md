@@ -71,6 +71,10 @@ bottom; fill the status table; paste the journal excerpts back.
       animation with no blur smear (changed 2026-10-04)
 - [x] Lock/unlock keeps scratchpad members + toggle-float state
       (changed 2026-10-04)
+- [x] Master-stack/centered drop: below a column lands at the column's
+      bottom; drops land right with floats interleaved (changed 2026-10-04)
+- [x] Directional focus/swap reaches narrow panes (few-px overlap)
+      (changed 2026-10-04)
 
 ### Workspace pill
 - [x] Numbers correct (parking never shown), app icon on active, title fits
