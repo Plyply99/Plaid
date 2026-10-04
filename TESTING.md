@@ -69,6 +69,8 @@ bottom; fill the status table; paste the journal excerpts back.
 - [x] Yellow double border (ring outside the gradient border, rounded)
 - [x] Toggle does not re-animate the tiled layout; reveal fly-in keeps its
       animation with no blur smear (changed 2026-10-04)
+- [x] Lock/unlock keeps scratchpad members + toggle-float state
+      (changed 2026-10-04)
 
 ### Workspace pill
 - [x] Numbers correct (parking never shown), app icon on active, title fits

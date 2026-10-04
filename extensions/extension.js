@@ -57,6 +57,23 @@ function normalizeAccel(combo) {
     }
 }
 
+// Schema default for a settings key — the recovery source when a live value
+// looks like the emptied tamper sentinel (see _disableMutterDefaults): if the
+// shell died while Plaid was enabled, the live keybinds are already [] and
+// capturing [] would restore [] on disable — a permanent loss. Known
+// ambiguity (documented): a user who DELIBERATELY emptied a key is restored
+// to the schema default instead of their empty on the next disable; the
+// fully-correct fix would persist the pre-tamper values to a scratch settings
+// key at first tamper (write-once).
+function schemaDefaultValue(settings, key) {
+    try {
+        const dv = settings.get_default_value(key);
+        return dv ? dv.deep_unpack() : null;
+    } catch (_e) {
+        return null;
+    }
+}
+
 // The GNOME Shell re-enables extensions after every screen unlock, which
 // re-runs enable(). The login splash is a brand moment for real logins only
 // (fresh shell process = fresh module), so a module-level flag survives the
@@ -625,6 +642,24 @@ export default class TilingWMExtension extends Extension {
             this._lastFocusedPerWorkspace = s.lastFocusedPerWorkspace;
             if (s.lastRealFocusedWindow && alive(s.lastRealFocusedWindow))
                 this._lastRealFocusedWindow = s.lastRealFocusedWindow;
+            // Scratchpad / toggle-float survive lock cycles (the pre-lock
+            // maps were stashed; prune members that died while locked).
+            if (s.scratchpadWindows) {
+                for (const [win] of s.scratchpadWindows) {
+                    if (!alive(win))
+                        s.scratchpadWindows.delete(win);
+                }
+                this._scratchpadWindows = s.scratchpadWindows;
+            }
+            if (s.toggleFloatWindows) {
+                for (const win of s.toggleFloatWindows) {
+                    if (!alive(win))
+                        s.toggleFloatWindows.delete(win);
+                }
+                this._toggleFloatWindows = s.toggleFloatWindows;
+            }
+            if (s.scratchpadVisible !== undefined)
+                this._scratchpadVisible = !!s.scratchpadVisible;
             this._debugLog(`tiling state restored (windows=${this._windowWorkspaces.size} trees=${this._bspTrees.size})`);
         } catch (e) {
             log(`[plaid] tiling state restore failed: ${e.message}`);
@@ -690,6 +725,14 @@ export default class TilingWMExtension extends Extension {
                 windowWSIndices: this._windowWSIndices,
                 lastFocusedPerWorkspace: this._lastFocusedPerWorkspace,
                 lastRealFocusedWindow: this._lastRealFocusedWindow,
+                // Scratchpad membership + toggle-float status were LOST on
+                // every lock/unlock (the maps were nulled and rebuilt empty,
+                // so scratch windows silently re-tiled and float-toggled
+                // windows snapped back into the layout) — stash them with
+                // the tiling state (2026-10-04 audit).
+                scratchpadWindows: this._scratchpadWindows,
+                toggleFloatWindows: this._toggleFloatWindows,
+                scratchpadVisible: this._scratchpadVisible,
             };
             this._debugLog(`disable: tiling state stashed (trees=${this._bspTrees ? this._bspTrees.size : 0})`);
         }
@@ -874,16 +917,28 @@ export default class TilingWMExtension extends Extension {
         try {
             this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
             this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
+            if (!this._savedEdgeTiling) {
+                const def = schemaDefaultValue(this._mutterSettings, 'edge-tiling');
+                if (typeof def === 'boolean') this._savedEdgeTiling = def;
+            }
             this._mutterSettings.set_boolean('edge-tiling', false);
             this._wmKeybindings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
             this._savedMaximize = this._wmKeybindings.get_strv('maximize');
+            if (this._savedMaximize.length === 0)
+                this._savedMaximize = schemaDefaultValue(this._wmKeybindings, 'maximize') || [];
             this._savedMaximizeHoriz = this._wmKeybindings.get_strv('maximize-horizontally');
+            if (this._savedMaximizeHoriz.length === 0)
+                this._savedMaximizeHoriz = schemaDefaultValue(this._wmKeybindings, 'maximize-horizontally') || [];
             this._savedMaximizeVert = this._wmKeybindings.get_strv('maximize-vertically');
+            if (this._savedMaximizeVert.length === 0)
+                this._savedMaximizeVert = schemaDefaultValue(this._wmKeybindings, 'maximize-vertically') || [];
             this._wmKeybindings.set_strv('maximize', []);
             this._wmKeybindings.set_strv('maximize-horizontally', []);
             this._wmKeybindings.set_strv('maximize-vertically', []);
             try {
                 this._savedToggleMaximized = this._wmKeybindings.get_strv('toggle-maximized');
+                if (this._savedToggleMaximized.length === 0)
+                    this._savedToggleMaximized = schemaDefaultValue(this._wmKeybindings, 'toggle-maximized') || [];
                 this._wmKeybindings.set_strv('toggle-maximized', []);
             } catch (e) {
                 log(`[plaid] wm toggle-maximized key unavailable: ${e.message}`);
@@ -916,8 +971,11 @@ export default class TilingWMExtension extends Extension {
                 if (!settings) continue;
                 try {
                     const current = settings.get_strv(key);
+                    let saveValue = current;
+                    if (saveValue.length === 0)
+                        saveValue = schemaDefaultValue(settings, key) || [];
                     if (current.some((combo) => held.has(normalizeAccel(combo)))) {
-                        this._savedYieldKeys.push({ settings, key, value: current });
+                        this._savedYieldKeys.push({ settings, key, value: saveValue });
                         settings.set_strv(key, []);
                         log(`[plaid] yielded GNOME shortcut: ${key} (same combo as a Plaid keybind) — restored on disable`);
                     }
@@ -1131,6 +1189,16 @@ export default class TilingWMExtension extends Extension {
                     // Workspace-keyed, workspace-object key — a retained
                     // GJS wrapper per removed workspace otherwise.
                     this._lastRetileTimes?.delete(workspace);
+                    // The workspace-object-keyed maps missed here: a
+                    // retained wrapper + a pending retile timeout that
+                    // later fires against a dead workspace (2026-10-04
+                    // audit).
+                    this._dwindleLeafSigs?.delete(workspace);
+                    this._queuedAnimWorkspaces?.delete(workspace);
+                    if (this._pendingRetileIds?.has(workspace)) {
+                        try { GLib.source_remove(this._pendingRetileIds.get(workspace)); } catch (_e) {}
+                        this._pendingRetileIds.delete(workspace);
+                    }
                     this._scheduleSaveLayouts();
                 }
             }
@@ -2298,27 +2366,14 @@ export default class TilingWMExtension extends Extension {
             this._animRetile(workspace, tiledWindows);
             return;
         }
-
-        const layout = this._getWorkspaceLayout(workspace);
-        if (layout === 'floating') {
-            // GNOME owns floating placement — nothing to do here.
-        } else if (layout === 'dwindle')
-            this._retileDwindle(workspace, tiledWindows);
-        else if (layout === 'centered-master-stack')
-            this._retileCenteredMasterStack(workspace, tiledWindows);
-        else
-            this._retileMasterStack(workspace, tiledWindows);
-
-        try { this._doUpdateBorders(); } catch (e) {
-            log(`[plaid] _doUpdateBorders after retile failed: ${e.message}`);
-        }
-        try { this._verifyRetileLandings(workspace); } catch (_e) {}
-        for (const win of tiledWindows)
-            this._newWindowSet.delete(win);
-        // Retiles are the common denominator for layout/ratio mutations —
-        // persist (debounced) so the last-used per-ws layout and ratios
-        // survive logins.
-        this._scheduleSaveLayouts();
+        // NOTE: the instant (non-animated) retile branch that once lived
+        // here was DEAD CODE — _getAnimationTime() floors at 0.1 by design
+        // (never gate placement on St.Settings.enable_animations), so the
+        // animated path above is the only one that runs. The dead branch
+        // (direct retile + the _verifyRetileLandings audit) was deleted in
+        // the 2026-10-04 audit; the animated path's completion (dec())
+        // covers the _newWindowSet cleanup, the borders refresh, and the
+        // debounced layout save.
     }
 
     // --- Animation ---
@@ -2644,40 +2699,6 @@ export default class TilingWMExtension extends Extension {
             log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
             this._scheduleSaveLayouts();
         } catch (_e) {}
-    }
-
-    _verifyRetileLandings(ws) {
-        if (this._destroyed || !this._settings) return;
-        if (this._grabOp) return;
-        const layout = this._getWorkspaceLayout(ws);
-        if (layout === 'floating') return;
-        const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
-        if (tiled.length === 0) return;
-        const gap = this._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        let workArea = null;
-        try { workArea = ws.get_work_area_for_monitor(monitor); } catch (_e) {}
-        if (!workArea || workArea.width === 0) return;
-        for (const win of tiled) {
-            if (win.minimized || win.is_fullscreen()) continue;
-            if (this._landingGivenUp && this._landingGivenUp.has(win)) continue;
-            const slot = this._windowSlotRect(win, ws, layout, workArea, gap);
-            if (!slot) continue;
-            const f = win.get_frame_rect();
-            if (Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16 ||
-                Math.abs(f.width - slot.w) > 16 || Math.abs(f.height - slot.h) > 16) {
-                this._debugLog(`retile verify: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} off-slot frame=(${f.x},${f.y},${f.width},${f.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h})`);
-                const prev = this._mismatchFrames?.get(win);
-                this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
-                const refusesShrink = f.width > slot.w + 16 || f.height > slot.h + 16;
-                if (prev && refusesShrink &&
-                    Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
-                    Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1)
-                    this._adjustPinnedTree(win, ws);
-                this._retryLanding(win);
-                return;
-            }
-        }
     }
 
     _verifyAnimationLanding(s, kind, pure = false) {
@@ -3066,7 +3087,11 @@ export default class TilingWMExtension extends Extension {
         let clamped;
         if (hi <= lo) {
             const need = masterMin + stackMinW;
-            clamped = need > 0 ? masterMin / need : 0.5;
+            // A master window without a min-size hint would clamp to
+            // 0 / stackMinW = 0 here (a zero-width master pane that the
+            // landing verify can never satisfy) — fall back to a sane
+            // 50/50 split instead (2026-10-04 audit).
+            clamped = (need > 0 && masterMin > 0) ? masterMin / need : 0.5;
         } else {
             clamped = Math.max(lo, Math.min(hi, ratio));
         }
@@ -5066,6 +5091,17 @@ export default class TilingWMExtension extends Extension {
         // offscreen capture renders empty (foreign texture), making the
         // window's content invisible. Never re-target.
         if (!target || !target.add_effect_with_name) return;
+        // Hoist the SDF radius clamp (2026-10-04 audit): _updateMaskBounds
+        // clamps the radius to half the actor before uploading, and updateMask
+        // stores the CLAMPED value in effect._radius — comparing the effect's
+        // stored radius against the UNCLAMPED caller radius (borderRadius+1)
+        // tore the effect down and recreated it on EVERY borders pass for any
+        // window smaller than 2×(borderRadius+1) on an axis (a GL pipeline
+        // recompile per pass on the GNOME-50 path). Idempotent with the
+        // clamp in _updateMaskBounds.
+        radius = Math.max(0, Math.min(radius,
+            Math.floor(Math.max(1, actor.width) / 2),
+            Math.floor(Math.max(1, actor.height) / 2)));
         let effect = this._windowMasks.get(win);
         if (effect && effect._radius !== radius) {
             this._teardownMaskEffect(win, effect);
@@ -10447,10 +10483,23 @@ export default class TilingWMExtension extends Extension {
             }
 
             const gap = this._settings.get_int('inside-gap');
+            // Dropping the dragged window on its OWN leaf (or on a leaf the
+            // removal merges away) must leave the tree untouched: the old
+            // code removed the window and never re-inserted it, so the
+            // follow-up retile re-added it as the "newest" leaf — a silent
+            // arrangement reshuffle (and the reshuffled shape got persisted)
+            // (2026-10-04 audit).
+            if (targetLeaf.window === window) {
+                this._bspTrees.set(ws, tree);
+                return;
+            }
             let newTree = this._bspRemove(tree, window);
             if (newTree.type === 'empty') newTree = null;
-
-            if (newTree && targetLeaf.window !== window) {
+            if (newTree && !this._bspFindLeaf(newTree, targetLeaf.window)) {
+                this._bspTrees.set(ws, tree);
+                return;
+            }
+            if (newTree) {
                 newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, targetRatio);
             }
             this._bspTrees.set(ws, newTree);
