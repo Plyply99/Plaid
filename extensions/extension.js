@@ -2049,6 +2049,18 @@ export default class TilingWMExtension extends Extension {
             }
         }) });
         sigIds.push({ emitter: win, id: win.connect('notify::minimized', () => {
+            // Scratch members are float-class but stay in _windowWorkspaces
+            // (scratch-add never un-manages them), so their minimize /
+            // unminimize from the scratchpad choreography fired a workspace
+            // retile here on EVERY toggle — the animated path moved the
+            // blurred tiled windows around the reveal, and their
+            // constraint-bound blur siblings lagged a frame → transient blur
+            // smears at the trailing (right/bottom) edges of the windows
+            // (2026-10-04: "2 blur glitch areas" when revealing the
+            // scratchpad). A float's minimized state never changes the tiled
+            // layout — skip the retile. _scratchpadRemove still retiles
+            // explicitly, so the intentional path is unaffected.
+            if (this._isFloating(win)) return;
             const ws = win.get_workspace();
             if (ws) this._retileWorkspace(ws);
         }) });
@@ -2268,6 +2280,18 @@ export default class TilingWMExtension extends Extension {
         if (tiledWindows.length === 0) {
             return;
         }
+        // Work-area guard: at login/monitor reconfig mutter can return a
+        // degenerate rect (2026-10-04: a (5,4,1,1) garbage work area drove a
+        // false 1x1-slot retile that floated Firefox). Bail — the
+        // monitors-changed handler re-retiles once monitors settle, and the
+        // settle/re-assert machinery covers the gap.
+        const monIdx = global.display.get_primary_monitor();
+        let workArea = null;
+        try { workArea = workspace.get_work_area_for_monitor(monIdx); } catch (_e) {}
+        if (!this._isValidWorkArea(workArea)) {
+            this._debugLog(`retile: skipped ws=${this._wsIndex(workspace)} (work area not ready)`);
+            return;
+        }
         this._debugLog(`retile: ws=${this._wsIndex(workspace)} tiled=[${tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',')}] layout=${this._getWorkspaceLayout(workspace)} animTime=${this._getAnimationTime().toFixed(2)} animating=${this._animating}`);
 
         if (this._getAnimationTime() > 0 && !this._grabOp) {
@@ -2360,6 +2384,19 @@ export default class TilingWMExtension extends Extension {
                 try { GLib.source_remove(s.win._plaidInvisibleTimer); } catch (_e) {}
                 s.win._plaidInvisibleTimer = 0;
             }
+            // Revealing = leaving the pending-warp state NOW: the offscreen
+            // mask multiplies the whole output (content AND border) by its
+            // opacity uniform, so a window still in _pendingWarp paints
+            // invisible even though the actor is visible. The frozen-frame
+            // / give-up paths reach fadeIn WITHOUT the verified-landing
+            // success branch (the only other place _pendingWarp is cleared),
+            // so clear it here — the same block the backstop reveal uses.
+            if (this._pendingWarp) this._pendingWarp.delete(s.win);
+            try {
+                const effect = this._windowMasks && this._windowMasks.get(s.win);
+                if (effect && effect.setOpacityUniform)
+                    effect.setOpacityUniform(1);
+            } catch (_e) {}
             // Settle window: some clients (Firefox's session restore) re-apply
             // their remembered geometry AFTER the placement. The size-changed
             // hook catches it when the event reaches us, but the event path
@@ -2726,6 +2763,27 @@ export default class TilingWMExtension extends Extension {
             this._landingGivenUp.add(win);
             if (this._mismatchFrames) this._mismatchFrames.delete(win);
             try { this._toggleFloatWindows.add(win); } catch (_e) {}
+            // The window is floating now — clear the pending-warp state so a
+            // masked window is never left invisible: _landingGivenUp makes
+            // every future _verifyAnimationLanding return false, so the
+            // success branch that clears _pendingWarp can never run again,
+            // and the mask uniform stays at 0 (the whole output multiplied
+            // by it — no content, no border) until a title/wm-class notify
+            // or close. Mirror the backstop-reveal block.
+            if (this._pendingWarp) this._pendingWarp.delete(win);
+            try {
+                const a = win.get_compositor_private();
+                if (a) {
+                    a.visible = true;
+                    a.set_opacity(255);
+                }
+            } catch (_e) {}
+            try {
+                const effect = this._windowMasks && this._windowMasks.get(win);
+                if (effect && effect.setOpacityUniform)
+                    effect.setOpacityUniform(1);
+            } catch (_e) {}
+            this._scheduleBorders();
             const ws = win.get_workspace();
             const list = ws
                 ? ws.list_windows().map(w => `${w.get_id()}:${w.get_wm_class_instance() || '?'}:min=${w.minimized}:${Math.round(w.get_frame_rect().width)}x${Math.round(w.get_frame_rect().height)}`).join(' | ')
@@ -2759,6 +2817,21 @@ export default class TilingWMExtension extends Extension {
             // If it has not completed within a generous budget, force-finish
             // so queued retiles keep running instead of wedging forever.
             if (this._animStartedAt && Date.now() - this._animStartedAt > 800) {
+                // Teardown the in-flight animation BEFORE starting a new
+                // one: the watchdog previously just cleared _animating and
+                // drained the queue, leaving the 16ms tick alive — the new
+                // animation then overwrote _animTickId without removing the
+                // old source, so BOTH ticks ran concurrently on the same
+                // _animStates (double dec(), spurious landing verifies,
+                // one leaked GLib source per occurrence; live at
+                // slow-down-factor 8 where 800ms animations sit exactly on
+                // the watchdog budget).
+                if (this._animTickId) {
+                    GLib.source_remove(this._animTickId);
+                    this._animTickId = 0;
+                }
+                this._animStates = null;
+                this._animTargets = null;
                 this._animating = false;
                 const pending = [...this._queuedAnimWorkspaces];
                 this._queuedAnimWorkspaces.clear();
@@ -3675,12 +3748,20 @@ export default class TilingWMExtension extends Extension {
         }
         const a = this._treeMinSizes(node.first);
         const b = this._treeMinSizes(node.second);
+        // 'h' = children side by side (widths ADD, heights max); 'v' =
+        // children stacked (heights ADD, widths max). The formulas were
+        // INVERTED (2026-10-04 audit — the journal diag tree showed a
+        // nested v-split with _minH 673 instead of 540+673=1213 and a root
+        // _minH 1483 instead of 810): every nested split understated its
+        // minimum, so _clampTreeToMinSizes partitioned slots smaller than
+        // the windows can take → landing-verify failures → bend/give-up
+        // floats.
         if (node.direction === 'h') {
-            node._minW = Math.max(a.w, b.w);
-            node._minH = a.h + b.h;
-        } else {
             node._minW = a.w + b.w;
             node._minH = Math.max(a.h, b.h);
+        } else {
+            node._minW = Math.max(a.w, b.w);
+            node._minH = a.h + b.h;
         }
         return { w: node._minW, h: node._minH };
     }
@@ -3865,12 +3946,26 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _isValidWorkArea(workArea) {
+        // mutter can return a garbage rect from get_work_area_for_monitor
+        // while monitors are mid-reconfiguration (the 2026-10-04 login race:
+        // 9x 'get_logical_monitor_from_number' assertions → a (5,4,1,1)-class
+        // rect passed the old width===0 guard and drove a false 1x1-slot
+        // retile that floated Firefox at login). A healthy work area is
+        // never under ~100px on either axis — reject anything smaller so
+        // placements/slots/restores can never act on a degenerate rect.
+        return !!(workArea &&
+            Number.isFinite(workArea.x + workArea.y + workArea.width + workArea.height) &&
+            workArea.width >= 100 && workArea.height >= 100);
+    }
+
     _outsideArea(workArea) {
         // The tiling area: the work area inset by the per-edge OUTSIDE gaps
         // (spacing between windows and the screen edges) — the same rect
         // whether one window or many (the multi-window layouts tile inside
         // it; the single-window placement IS it).
         if (!this._settings) return null;
+        if (!this._isValidWorkArea(workArea)) return null;
         const top = this._settings.get_int('outside-gap-top');
         const bottom = this._settings.get_int('outside-gap-bottom');
         const left = this._settings.get_int('outside-gap-left');
@@ -4059,7 +4154,7 @@ export default class TilingWMExtension extends Extension {
         try {
             workArea = ws.get_work_area_for_monitor(win.get_monitor());
         } catch (_e) {}
-        if (!workArea) return;
+        if (!this._isValidWorkArea(workArea)) return;
         if (frame.width < workArea.width - 20 || frame.height < workArea.height - 20) return;
         this._debugLog(`float: restoring natural rect (${saved.x},${saved.y},${saved.w},${saved.h})`);
         this._moveWindow(win, saved.x, saved.y, saved.w, saved.h);
@@ -5717,6 +5812,12 @@ export default class TilingWMExtension extends Extension {
                             const chain = this._buildChain(w, h, ds, px, py, physW, physH, paintContext);
                             if (!chain) return true;
                             node.add_child(chain);
+                            // The transient-failure contract counts CONSECUTIVE
+                            // failures — a successful frame resets the counter,
+                            // or 5 scattered one-off GL hiccups would
+                            // permanently swap the rounded GJS blur for the
+                            // square Shell.BlurEffect fallback.
+                            this._paintFailCount = 0;
                             return true;
                         } catch (e) {
                             // Transient GL hiccups must not permanently kill
@@ -5829,6 +5930,33 @@ export default class TilingWMExtension extends Extension {
                 try {
                     blur._actorParentSetId = actor.connect('parent-set',
                         () => this._syncBlurStacking());
+                } catch (_e) {}
+                // Scale-aware paint suppression: gnome-shell's minimize /
+                // unminimize fly-ins (and Plaid's _animFloat moves/resizes)
+                // animate the actor's scale. The blur effect paints the
+                // window's FULL-size stage blit every frame, and the actor's
+                // scale transform then squeezes that full-size paint into
+                // the scaled window — the blur content is magnified by
+                // 1/scale, a huge blur smear flying with the window during
+                // the animation (the 2026-10-04 scratchpad-reveal report).
+                // Disable the effect's paint while any scale is active and
+                // re-enable at scale 1 — the window keeps its animation,
+                // the blur pops in cleanly at the end. Toggling the EFFECT
+                // (not the sibling's visible, which the actor's `visible`
+                // GObject binding would immediately overwrite).
+                const syncBlurScale = () => {
+                    if (!blur || !blur._sibling || blur._fatalFail) return;
+                    if (this._windowBlurs && this._windowBlurs.get(win) !== blur) return;
+                    try {
+                        const scaling = actor.scale_x < 0.99 || actor.scale_y < 0.99;
+                        if (blur.enabled === scaling) blur.enabled = !scaling;
+                    } catch (_e) {}
+                };
+                try {
+                    blur._scaleXNotifyId = actor.connect('notify::scale-x', syncBlurScale);
+                } catch (_e) {}
+                try {
+                    blur._scaleYNotifyId = actor.connect('notify::scale-y', syncBlurScale);
                 } catch (_e) {}
                 try {
                     const frame = win.get_frame_rect();
@@ -6061,6 +6189,15 @@ export default class TilingWMExtension extends Extension {
                 try { a.disconnect(blur._actorParentSetId); } catch (_e) {}
             }
             blur._actorParentSetId = 0;
+        }
+        for (const key of ['_scaleXNotifyId', '_scaleYNotifyId']) {
+            if (blur[key]) {
+                const a = win.get_compositor_private();
+                if (a) {
+                    try { a.disconnect(blur[key]); } catch (_e) {}
+                }
+                blur[key] = 0;
+            }
         }
         if (blur._sibling) {
             this._unbindBlurSibling(blur);
@@ -9733,7 +9870,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _windowSlotRect(win, ws, layout, workArea, insideGap) {
-        if (!workArea || workArea.width === 0 || workArea.height === 0) return null;
+        if (!this._isValidWorkArea(workArea)) return null;
         if (layout === 'floating') return null;
         // A single tiled window's slot IS its placement rect — the layouts
         // place the lone window via _singleWindowRect (the work area inset

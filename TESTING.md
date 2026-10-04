@@ -44,6 +44,8 @@ bottom; fill the status table; paste the journal excerpts back.
 - [x] Maximize respects per-edge gaps
 - [x] Float toggle restores exact geometry
 - [x] Mouse resize / swap
+- [x] Nested dwindle trees: min-size windows hold their slots — no
+      oscillation, no give-up floats (changed 2026-10-04)
 
 ### Floating layout
 - [x] `Super+C` cycles to Floating (popup shows "Layout: Floating")
@@ -65,6 +67,8 @@ bottom; fill the status table; paste the journal excerpts back.
 - [x] Add (`Super+Shift+Escape`) → window minimizes, `scratch add: added`
 - [x] Toggle (`Super+Escape`) shows/hides
 - [x] Yellow double border (ring outside the gradient border, rounded)
+- [x] Toggle does not re-animate the tiled layout; reveal fly-in keeps its
+      animation with no blur smear (changed 2026-10-04)
 
 ### Workspace pill
 - [x] Numbers correct (parking never shown), app icon on active, title fits
