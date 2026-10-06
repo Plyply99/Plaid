@@ -414,6 +414,8 @@ export default class TilingWMExtension extends Extension {
         // source id.
         this._stackSettleId = 0;
         this._pickFocusId = null;
+        this._backgroundAppCloneWatchId = 0;
+        this._backgroundAppSpawnRetries = 0;
         // Persisted per-workspace layouts/ratios are slot rules parsed at
         // enable and consulted at use time — timing-independent (no workspace
         // objects exist yet at this point, which is fine: the rules key on
@@ -471,6 +473,7 @@ export default class TilingWMExtension extends Extension {
         this._setupPopupCheckId = 0;
         this._maximizeToggleRects = new Map();
         this._backgroundAppPending = false;
+        this._backgroundAppSpawnRetries = 0;
         this._backgroundAppPendingId = 0;
         this._backgroundAppUnmanagedId = 0;
         this._backgroundAppSettingsChangedId = 0;
@@ -486,6 +489,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppFirstFrameId = 0;
         this._backgroundAppClone = null;
         this._backgroundAppGroupAddedId = 0;
+        this._backgroundAppCloneWatchId = 0;
         this._backgroundAppParkIds = null;
         this._backgroundAppParkWatchTimeoutId = 0;
         this._backgroundAppParkCoalesceId = 0;
@@ -6323,8 +6327,15 @@ export default class TilingWMExtension extends Extension {
 
     _removeAllBlurs() {
         if (!this._windowBlurs) return;
-        for (const win of [...this._windowBlurs.keys()])
+        // The toggle path re-arms everything, including windows whose GJS
+        // blur chain fatal-failed and stuck on the square Shell.BlurEffect
+        // (mirrors _removeAllMasks clearing _maskQuarantined): a fresh
+        // attempt on the next blur enable; if the GL problem is real the
+        // healer re-sticks it within a pass.
+        for (const win of [...this._windowBlurs.keys()]) {
+            win._plaidBlurSquare = false;
             this._removeBlur(win);
+        }
     }
 
     _removeAllMasks() {
@@ -8261,7 +8272,7 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppRestartId = 0;
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             this._clearBackgroundApp();
-            this._launchBackgroundApp();
+            this._launchBackgroundApp(true);
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -8452,7 +8463,7 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _launchBackgroundApp() {
+    _launchBackgroundApp(force = false) {
         if (this._destroyed || !this._settings) return;
         if (!this._settings.get_boolean('background-app-enabled')) return;
         const command = this._settings.get_string('background-app');
@@ -8468,7 +8479,11 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         this._debugLog('launch check: no surviving window to adopt');
-        if (this._hasBackgroundAppWindow()) {
+        // On a settings-driven restart we just closed our own window, but its
+        // async unmanage can still make _hasBackgroundAppWindow() true — that
+        // silently skipped the new command ("existing window found"). `force`
+        // (restart path) always spawns fresh; enable/lock-cycle still adopt.
+        if (!force && this._hasBackgroundAppWindow()) {
             this._debugLog('background app: existing window found — adopting, skipping relaunch');
             return;
         }
@@ -8504,11 +8519,44 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppProc = Gio.Subprocess.new(
                 ['/bin/sh', '-c', `env PLAID_BGAPP=1 ${command}`],
                 Gio.SubprocessFlags.NONE);
+            // Watch for an early exit: a process that dies before its window is
+            // ever claimed would otherwise leave Plaid waiting out the 30s
+            // pending timer and give up (the "bgapp didn't autostart" report).
+            // wait_async also reaps the child.
+            try {
+                // GJS overrides this as wait_async(cancellable, callback) — the
+                // C-style (io_priority, cancellable, callback) form is rejected
+                // ("Too many arguments … expected 2"), which silently disarmed
+                // the exit watch and disabled the respawn entirely.
+                this._backgroundAppProc.wait_async(null, (p, res) => {
+                    try { p.wait_finish(res); } catch (_e) {}
+                    this._onBackgroundAppProcExit(p);
+                });
+            } catch (_e) {}
         } catch (e) {
             this._backgroundAppPending = false;
             this._backgroundAppProc = null;
             this._debugLog(`background app: spawn failed: ${e.message}`);
         }
+    }
+
+    _onBackgroundAppProcExit(proc) {
+        // The spawned shell exited. Only respawn when it died BEFORE any window
+        // was claimed and nothing else has already resolved the launch.
+        if (this._destroyed || !this._settings) return;
+        if (proc !== this._backgroundAppProc) return; // superseded (restart/relaunch)
+        if (!this._settings.get_boolean('background-app-enabled')) return;
+        const command = this._settings.get_string('background-app');
+        if (!command) return;
+        if (this._backgroundAppWin) return; // was claimed — leave the state alone
+        if (!this._backgroundAppPending) return; // claim/timeout already resolved
+        if (this._backgroundAppSpawnRetries >= 2) {
+            this._debugLog('background app: spawn retries exhausted');
+            return;
+        }
+        this._backgroundAppSpawnRetries++;
+        log(`[plaid] background app: process exited before claim — respawn ${this._backgroundAppSpawnRetries}/2`);
+        this._spawnBackgroundAppProcess(command);
     }
 
     _recordBackgroundAppHistory(command) {
@@ -8641,6 +8689,7 @@ export default class TilingWMExtension extends Extension {
             this._removeBlur(win);
             this._removeBorder(win);
             this._backgroundAppWin = win;
+            this._backgroundAppSpawnRetries = 0;
             this._backgroundAppUnmanagedId = win.connect('unmanaged', () => {
                 log(`[plaid] background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
                 if (this._backgroundAppWin === win)
@@ -8804,6 +8853,7 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppPendingId = 0;
         }
         this._backgroundAppPending = false;
+        this._backgroundAppSpawnRetries = 0;
         if (this._windowWorkspaces.has(win)) {
             this._debugLog('background app: de-registering window from tiler');
             this._removeWindow(win);
@@ -8859,6 +8909,9 @@ export default class TilingWMExtension extends Extension {
             } catch (e) {
                 log(`[plaid] background app: clone failed: ${e.message}`);
             }
+            // Retry/heal the clone from here (post-park, so the clone is built
+            // from the settled maximized source) until it is stable.
+            this._startBackgroundAppCloneWatch(win);
             // Late re-raise: at login the shell's wallpaper actors settle
             // after the clone is created and can land above it in the
             // background group — re-insert on top once the startup is done.
@@ -9168,8 +9221,20 @@ export default class TilingWMExtension extends Extension {
         const bg = Main.layoutManager._backgroundGroup;
         if (!bg) return;
         try {
-            if (clone.get_parent() === bg)
-                bg.set_child_above_sibling(clone, null);
+            if (clone.get_parent() !== bg) {
+                // Self-heal: an orphaned clone (background-group churn during
+                // the login burst, or a stale parent) can never be raised —
+                // set_child_above_sibling on a non-child is a no-op, which
+                // left the background invisible for the rest of the session
+                // until a manual bg-app toggle rebuilt it. Re-attach to the
+                // CURRENT background group and re-stretch.
+                log('[plaid] background app: clone orphaned — re-parenting to background group');
+                const parent = clone.get_parent();
+                if (parent) parent.remove_child(clone);
+                bg.add_child(clone);
+                this._positionBackgroundAppClone();
+            }
+            bg.set_child_above_sibling(clone, null);
         } catch (_e) {}
     }
 
@@ -9248,6 +9313,65 @@ export default class TilingWMExtension extends Extension {
         this._positionBackgroundAppClone();
     }
 
+    _startBackgroundAppCloneWatch(win) {
+        // Post-login clone watchdog. The clone is built into the shell's
+        // background group during the login burst, where the group may not
+        // exist yet, the window actor may still be replaced, or a later
+        // z-order/group churn can orphan it. One-shot recovery was not enough:
+        // a lost clone left the background absent for the whole session
+        // (user-visible as "BGAPP did not autostart") until a manual bg-app
+        // toggle rebuilt it. Bounded: stops after two stable ticks or ~20s,
+        // and the moment the window stops being the bg app.
+        if (this._backgroundAppCloneWatchId) {
+            GLib.source_remove(this._backgroundAppCloneWatchId);
+            this._backgroundAppCloneWatchId = 0;
+        }
+        if (!win) return;
+        let ticks = 0;
+        let good = 0;
+        this._backgroundAppCloneWatchId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            if (this._destroyed || win !== this._backgroundAppWin) {
+                this._backgroundAppCloneWatchId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            ticks++;
+            if (!this._backgroundAppClone) {
+                this._ensureBackgroundAppClone(win);
+            } else {
+                const srcActor = win.get_compositor_private();
+                if (srcActor && this._backgroundAppClone.get_source() !== srcActor) {
+                    // The window actor can be replaced (surface round-trips):
+                    // the clone would keep painting the dead source (blank).
+                    log('[plaid] background app: clone source actor replaced — recreating clone');
+                    try { this._backgroundAppClone.destroy(); } catch (_e) {}
+                    this._backgroundAppClone = null;
+                    this._ensureBackgroundAppClone(win);
+                }
+            }
+            this._raiseBackgroundAppClone();
+            const bg = Main.layoutManager._backgroundGroup;
+            const c = this._backgroundAppClone;
+            const src = c ? c.get_source() : null;
+            if (c && bg && c.get_parent() === bg && src && src.width > 0 && src.height > 0)
+                good++;
+            else
+                good = 0;
+            if (good >= 2) {
+                this._backgroundAppCloneWatchId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            if (ticks >= 20) {
+                const srcNow = c ? c.get_source() : null;
+                log(`[plaid] background app: clone watchdog gave up clone=${!!c} ` +
+                    `parent=${!!(c && c.get_parent() === bg)} ` +
+                    `source=${srcNow ? `${Math.round(srcNow.width)}x${Math.round(srcNow.height)}` : 'none'}`);
+                this._backgroundAppCloneWatchId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
     _positionBackgroundAppClone() {
         const clone = this._backgroundAppClone;
         if (!clone) {
@@ -9323,8 +9447,13 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppPendingId = 0;
         }
         this._backgroundAppPending = false;
+        this._backgroundAppSpawnRetries = 0;
         this._hideBackgroundAppInitOverlay();
         this._disconnectBackgroundAppParkWatch();
+        if (this._backgroundAppCloneWatchId) {
+            GLib.source_remove(this._backgroundAppCloneWatchId);
+            this._backgroundAppCloneWatchId = 0;
+        }
         if (this._backgroundAppNWorkspacesId) {
             try { global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId); } catch (_e) {}
             this._backgroundAppNWorkspacesId = 0;
