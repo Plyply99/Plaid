@@ -1942,7 +1942,14 @@ export default class TilingWMExtension extends Extension {
         // tiled — the new-window fade-in (opacity 0 → landing audit → fade
         // back) would make every window vanish and reappear at unlock and
         // break focus. Only real new windows go through it.
-        if (!resume) {
+        // Tiling toggled off: still REGISTER the window (so flair — borders,
+        // mask, blur — keeps rendering via _workspaceOrders) but skip the
+        // new-window hide/place choreography entirely. Otherwise a window
+        // opened while tiling was off was force-placed at the full work-area
+        // slot (and its mask opacity driven to 0 with no retile to reveal it,
+        // since every retile path bails on !enabled) — 2026-10-05 audit.
+        const tilingEnabled = this._settings.get_boolean('enabled');
+        if (!resume && tilingEnabled) {
             this._newWindowSet.add(win);
             try { this._markPendingWindowInvisible(win, win.get_compositor_private()); } catch (_e) {}
         }
@@ -1962,7 +1969,7 @@ export default class TilingWMExtension extends Extension {
                     this._bspInsertForWorkspace(ws, win);
             }
         }
-        if (!resume) {
+        if (!resume && tilingEnabled) {
             // The new window must be invisible AND at its slot before the
             // compositor paints its first frame — otherwise it flashes at
             // GNOME's center spawn point. Two synchronous guarantees:
@@ -3388,7 +3395,16 @@ export default class TilingWMExtension extends Extension {
         if (axis === 'width') {
             const currentRatio = this._getMasterRatio(workspace);
             const currentMasterW = masterDenom * currentRatio;
-            const newMasterW = currentMasterW + delta;
+            // grow/shrink is relative to the FOCUSED window: a stack window
+            // needs the master column to move the OPPOSITE way, and in the
+            // centered layout the master width is split between two side
+            // columns, so each side moves by half — the mouse-resize path
+            // applies the same sign + 2x rules (2026-10-05 audit).
+            const idx = tiledWindows.indexOf(focused);
+            let signedDelta = idx > 0 ? -delta : delta;
+            if (layout === 'centered-master-stack' && idx > 0)
+                signedDelta *= 2;
+            const newMasterW = currentMasterW + signedDelta;
             const minMaster = 100;
             const maxMaster = masterDenom - numStack * 100;
             if (maxMaster >= minMaster) {
@@ -4423,7 +4439,18 @@ export default class TilingWMExtension extends Extension {
         let color1 = isFocused ? activeColor : inactiveColor;
         let color2 = isFocused ? activeColor2 : inactiveColor2;
 
-        if (borderWidth === 0) return false;
+        if (borderWidth === 0) {
+            // Border-only teardown (never touches the mask) so setting the
+            // active/inactive width to 0 actually removes an existing widget
+            // border instead of leaving the last one rendered (2026-10-05
+            // audit). The scratch ring is torn down with it by design: the
+            // ring's width/geometry are derived from the border and live on
+            // the same widget lifecycle, so a zero-width border means no ring
+            // (on the rounded Wayland path the SDF ring is independent and is
+            // unaffected).
+            this._removeWidgetBorder(win);
+            return false;
+        }
 
         // Frame-level border on the window ACTOR (v51.11 mechanism): the
         // actor is the frame, and the border appended last always paints
@@ -5952,8 +5979,14 @@ export default class TilingWMExtension extends Extension {
             } else if (blur._sibling) {
                 if (blur._fatalFail) {
                     // The GJS blur chain died mid-session (e.g. a GL resource
-                    // error) — rebuild with the square Shell.BlurEffect.
+                    // error) — rebuild with the square Shell.BlurEffect. The
+                    // per-window sticky flag makes every future rebuild use
+                    // the square effect too, otherwise _ensureWindowBlur
+                    // re-created another GJS effect and the exact GL problem
+                    // re-fatal-failed it: an FBO churn loop that never
+                    // actually fell back (2026-10-05 audit).
                     this._debugLog('blur self-heal: GJS effect fatal, falling back to Shell.BlurEffect');
+                    win._plaidBlurSquare = true;
                     this._removeBlur(win);
                     this._ensureWindowBlur(win, win.get_compositor_private() || actor);
                     return;
@@ -5973,8 +6006,12 @@ export default class TilingWMExtension extends Extension {
             }
             try {
                 // Pure-GJS rounded blur (the corner cut lives inside the
-                // effect); square Shell.BlurEffect is the fallback.
-                blur = this._createGjsBlurEffect() || new Shell.BlurEffect();
+                // effect); square Shell.BlurEffect is the fallback. A window
+                // that already fatal-failed once stays on the square effect
+                // for the rest of its life (see the self-heal branch).
+                blur = win._plaidBlurSquare
+                    ? new Shell.BlurEffect()
+                    : (this._createGjsBlurEffect() || new Shell.BlurEffect());
                 blur._bindings = [];
                 const sibling = new St.Widget({
                     reactive: false,
@@ -6743,7 +6780,16 @@ export default class TilingWMExtension extends Extension {
                     ? (split._w > 0 ? split._w : workArea.width)
                     : (split._h > 0 ? split._h : workArea.height);
                 if (!(axisSize > 0)) return;
-                split.ratio = Math.max(0.15, Math.min(0.85, split.ratio + delta / axisSize));
+                // grow/shrink is relative to the FOCUSED window. The ratio is
+                // the FIRST child's fraction, so a window living in the second
+                // child must move the ratio the opposite way (the mouse-resize
+                // path flips its sign the same way). Without this, keyboard
+                // resize was inverted for every non-leftmost leaf — and the
+                // BSP builds a right-leaning tree, so that was almost all of
+                // them (2026-10-05 audit).
+                const inFirst = this._bspFindPath(split.first, focused, []);
+                const signedDelta = inFirst ? delta : -delta;
+                split.ratio = Math.max(0.15, Math.min(0.85, split.ratio + signedDelta / axisSize));
                 return;
             }
         }
@@ -7970,7 +8016,10 @@ export default class TilingWMExtension extends Extension {
     _bgAppRealToDisplay(realIdx) {
         const parkingIdx = this._backgroundAppParkingWs ?
             this._wsIndex(this._backgroundAppParkingWs) : -1;
-        return realIdx > parkingIdx ? realIdx - 1 : realIdx;
+        // No parking workspace => no reserved slot => identity mapping. A
+        // bare `realIdx > -1` is always true and would shift every label
+        // down by one (2026-10-05 audit).
+        return parkingIdx >= 0 && realIdx > parkingIdx ? realIdx - 1 : realIdx;
     }
 
     _ensureTerminalSettingsProfile() {
@@ -8328,7 +8377,11 @@ export default class TilingWMExtension extends Extension {
             overlay.add_child(column);
             Main.uiGroup.add_child(overlay);
             this._backgroundAppInitOverlay = overlay;
-            Main.pushModal(overlay);
+            // Keep the Clutter.Grab handle — GNOME 50/51 popModal() requires
+            // it (not the actor). Passing the actor made _findModal return -1
+            // and popModal throw, swallowed, leaving modalCount incremented
+            // (2026-10-05 audit).
+            this._backgroundAppInitOverlayGrab = Main.pushModal(overlay);
             this._backgroundAppInitOverlayModal = true;
             this._backgroundAppInitOverlayCapId =
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
@@ -8385,7 +8438,12 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppInitOverlayPendingDismissId = 0;
         }
         if (this._backgroundAppInitOverlayModal) {
-            try { Main.popModal(overlay); } catch (_e) {}
+            try {
+                const grab = this._backgroundAppInitOverlayGrab;
+                if (grab) Main.popModal(grab);
+                else if (overlay) Main.popModal(overlay);
+            } catch (_e) {}
+            this._backgroundAppInitOverlayGrab = null;
             this._backgroundAppInitOverlayModal = false;
         }
         if (overlay) {
@@ -8735,9 +8793,9 @@ export default class TilingWMExtension extends Extension {
 
     _tryClaimBackgroundApp(win) {
         if (!this._backgroundAppPending || !win) return false;
+        const instance = (win.get_wm_class_instance() || '').toLowerCase();
+        const cls = (win.get_wm_class() || '').toLowerCase();
         if (!this._matchesBackgroundApp(win)) {
-            const instance = (win.get_wm_class_instance() || '').toLowerCase();
-            const cls = (win.get_wm_class() || '').toLowerCase();
             this._debugLog(`background app: identity not yet matching (instance=${instance} class=${cls})`);
             return false;
         }
@@ -9278,6 +9336,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppParkRetryCount = 0;
         this._backgroundAppInitOverlay = null;
         this._backgroundAppInitOverlayModal = false;
+        this._backgroundAppInitOverlayGrab = null;
         this._backgroundAppInitOverlayCapId = 0;
         this._backgroundAppInitOverlayMinId = 0;
         this._backgroundAppInitOverlayPendingDismissId = 0;
