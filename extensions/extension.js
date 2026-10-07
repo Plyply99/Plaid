@@ -1455,7 +1455,6 @@ export default class TilingWMExtension extends Extension {
             if (this._isBgAppProcessWindow(win))
                 return false;
         } catch (_e) {}
-        const wms = win.get_wm_class_instance();
         const title = win.get_title();
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
         if (win.is_skip_taskbar()) return false;
@@ -1472,7 +1471,7 @@ export default class TilingWMExtension extends Extension {
         // is available immediately (cached per PID).
         if (this._isFloatProcessWindow(win))
             return false;
-        if (wms && this._floatingClasses.has(wms.toLowerCase())) return false;
+        if (this._floatClassMatches(win)) return false;
         if (this._floatingTitleMatches(title)) return false;
         if (this._isFixedSizeWindow(win)) return false;
         return true;
@@ -1522,10 +1521,42 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _winClassCandidates(win) {
+        // GNOME 50 populates the WM_CLASS *instance* for Wayland (both parts
+        // are set to the app id); GNOME 51 leaves the instance empty and the
+        // identity lives in WM_CLASS / the GTK app id. Return every non-empty
+        // identity candidate (lowercased), most-specific first, so float rules
+        // written for either shell version keep matching. The first entry is
+        // the window's display class.
+        const out = [];
+        try {
+            const inst = win.get_wm_class_instance();
+            if (inst) out.push(inst.toLowerCase());
+        } catch (_e) {}
+        try {
+            const cls = win.get_wm_class();
+            if (cls) out.push(cls.toLowerCase());
+        } catch (_e) {}
+        try {
+            if (win.get_gtk_application_id) {
+                const app = win.get_gtk_application_id();
+                if (app) out.push(app.toLowerCase());
+            }
+        } catch (_e) {}
+        return out;
+    }
+
+    _floatClassMatches(win) {
+        if (!this._floatingClasses) return false;
+        for (const c of this._winClassCandidates(win)) {
+            if (this._floatingClasses.has(c)) return true;
+        }
+        return false;
+    }
+
     _isFloating(win) {
         if (this._toggleFloatWindows && this._toggleFloatWindows.has(win)) return true;
-        const wms = win.get_wm_class_instance();
-        if (wms && this._floatingClasses && this._floatingClasses.has(wms.toLowerCase())) return true;
+        if (this._floatClassMatches(win)) return true;
         const title = win.get_title();
         if (this._floatingTitleMatches(title)) return true;
         // Process-based fallback: at window-created the wm-class may not be
@@ -1941,7 +1972,7 @@ export default class TilingWMExtension extends Extension {
             if (!win._plaidSignalsConnected) this._connectWindowSignals(win);
             return;
         }
-        this._debugLog(`ADD_WINDOW: ${win.get_wm_class_instance() || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()} ws=${this._wsIndex(win.get_workspace())} type=${win.get_window_type()}`);
+        this._debugLog(`ADD_WINDOW: ${this._winClassCandidates(win)[0] || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()} ws=${this._wsIndex(win.get_workspace())} type=${win.get_window_type()}`);
         // Lock-cycle resumes register windows that are already on screen and
         // tiled — the new-window fade-in (opacity 0 → landing audit → fade
         // back) would make every window vanish and reappear at unlock and
@@ -3792,15 +3823,14 @@ export default class TilingWMExtension extends Extension {
     }
 
     _getWindowMinSize(win) {
-        const cls = (win.get_wm_class_instance() || '').toLowerCase();
-        let entry = this._minSizeOverrides?.get(cls);
+        let entry = null;
+        for (const c of this._winClassCandidates(win)) {
+            entry = this._minSizeOverrides?.get(c);
+            if (entry) break;
+        }
         if (!entry) {
             const title = (win.get_title() || '').toLowerCase();
             entry = this._minSizeOverrides?.get(title);
-        }
-        if (!entry) {
-            const full = (win.get_wm_class() || '').toLowerCase();
-            entry = this._minSizeOverrides?.get(full);
         }
         if (entry) return { w: entry.w, h: entry.h };
         try {
@@ -4151,7 +4181,7 @@ export default class TilingWMExtension extends Extension {
 
     _onWindowIdentityChanged(win) {
         if (this._destroyed || !win) return;
-        this._debugLog(`identity: ${win.get_wm_class_instance() || '?'} appId=${win.get_gtk_application_id ? (win.get_gtk_application_id() || '?') : '?'} ws=${this._wsIndex(win.get_workspace())} managed=${this._windowWorkspaces.has(win)}`);
+        this._debugLog(`identity: ${this._winClassCandidates(win).join('/') || '?'} appId=${win.get_gtk_application_id ? (win.get_gtk_application_id() || '?') : '?'} ws=${this._wsIndex(win.get_workspace())} managed=${this._windowWorkspaces.has(win)}`);
         // Backstop for the Extensions app / prefs window: its wm-class and GTK
         // app id can resolve AFTER the window was already added to the tiler.
         // If it identifies as the Extensions app now, un-tile it and restore
@@ -10446,7 +10476,7 @@ export default class TilingWMExtension extends Extension {
                 try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
                 this._pickFocusId = null;
             }
-            const cls = win.get_wm_class_instance() || '';
+            const cls = this._winClassCandidates(win)[0] || '';
             const title = win.get_title() || '';
             this._settings.set_string('pick-mode-class', cls);
             this._settings.set_string('pick-mode-title', title);
@@ -10461,7 +10491,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
 
-        const cls = win.get_wm_class_instance() || '';
+        const cls = this._winClassCandidates(win)[0] || '';
         const title = win.get_title() || '';
 
         if (!cls && !title) {
