@@ -8271,7 +8271,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppRestartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
             this._backgroundAppRestartId = 0;
             if (this._destroyed) return GLib.SOURCE_REMOVE;
-            this._clearBackgroundApp();
+            this._clearBackgroundApp(false);
             this._launchBackgroundApp(true);
             return GLib.SOURCE_REMOVE;
         });
@@ -9428,7 +9428,7 @@ export default class TilingWMExtension extends Extension {
         });
     }
 
-    _clearBackgroundApp() {
+    _clearBackgroundApp(releaseReservation = true) {
         if (this._setupPopupCheckId) {
             GLib.source_remove(this._setupPopupCheckId);
             this._setupPopupCheckId = 0;
@@ -9454,7 +9454,11 @@ export default class TilingWMExtension extends Extension {
             GLib.source_remove(this._backgroundAppCloneWatchId);
             this._backgroundAppCloneWatchId = 0;
         }
-        if (this._backgroundAppNWorkspacesId) {
+        // A soft teardown (feature toggled off / command changed while Plaid
+        // stays enabled) keeps the reserved parking workspace, its hiding
+        // wraps, and the n-workspaces re-hide hook — only a full release
+        // (extension disable) tears them down.
+        if (releaseReservation && this._backgroundAppNWorkspacesId) {
             try { global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId); } catch (_e) {}
             this._backgroundAppNWorkspacesId = 0;
         }
@@ -9471,7 +9475,9 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppInitOverlayPendingDismissId = 0;
         this._backgroundAppInitOverlayMinTime = 0;
         this._backgroundAppInitOverlayAwaiting = false;
-        if (this._backgroundAppKeepAliveId) {
+        // Keep the hourly keep-alive re-arm while the reservation is kept, or
+        // the shell's 12h keep-alive could lapse and sweep the empty parking.
+        if (releaseReservation && this._backgroundAppKeepAliveId) {
             GLib.source_remove(this._backgroundAppKeepAliveId);
             this._backgroundAppKeepAliveId = 0;
         }
@@ -9528,7 +9534,11 @@ export default class TilingWMExtension extends Extension {
         // During a lock cycle the shell re-enables us right after unlocking;
         // keep the bg-app process, its hiding state, and the parking workspace
         // so the re-enable adopts the surviving window instead of relaunching.
-        if (!_lockCycle) {
+        // A soft teardown (releaseReservation=false: BGAPP toggled off or its
+        // command changed while Plaid stays enabled) also keeps the parked
+        // workspace reserved AND hidden — releasing it would expose an empty
+        // workspace in the overview and shift the index-keyed layout rules.
+        if (!_lockCycle && releaseReservation) {
             this._restoreBackgroundAppHiding();
             try {
                 // The front-reserved ws0 is the shell's own first workspace — never
@@ -9540,8 +9550,10 @@ export default class TilingWMExtension extends Extension {
                     global.workspace_manager.remove_workspace(this._backgroundAppParkingWs, this._currentTime());
             } catch (_e) {}
         }
-        this._backgroundAppParkingWs = null;
-        this._backgroundAppParkingFront = false;
+        if (releaseReservation) {
+            this._backgroundAppParkingWs = null;
+            this._backgroundAppParkingFront = false;
+        }
     }
 
     _closeBackgroundAppWindow(win) {
