@@ -5504,39 +5504,36 @@ export default class TilingWMExtension extends Extension {
     }
 
     _dirIsEmpty(dir) {
+        // GLib.dir_open/dir_read_name are NOT introspectable in GJS (undefined)
+        // — the old implementation threw and the try/catch returned false, so
+        // this silently no-oped on 50 and 51. Use Gio.File enumeration.
         try {
-            const handle = GLib.dir_open(dir, 0);
-            const names = [];
-            let name = GLib.dir_read_name(handle);
-            while (name) {
-                names.push(name);
-                name = GLib.dir_read_name(handle);
-            }
-            GLib.dir_close(handle);
-            return names.length === 0;
+            const children = Gio.File.new_for_path(dir)
+                .enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            const info = children.next_file(null);
+            children.close(null);
+            return info === null;
         } catch (_e) {
             return false;
         }
     }
 
     _removeDirRecursive(dir) {
+        // Same GJS-introspection issue as _dirIsEmpty (see above).
         try {
-            const handle = GLib.dir_open(dir, 0);
-            let name = GLib.dir_read_name(handle);
-            while (name) {
-                const p = dir + '/' + name;
-                if (name === '.' || name === '..') {
-                    name = GLib.dir_read_name(handle);
-                    continue;
-                }
-                if (GLib.file_test(p, GLib.FileTest.IS_DIR))
-                    this._removeDirRecursive(p);
+            const file = Gio.File.new_for_path(dir);
+            const children = file.enumerate_children(
+                'standard::name,standard::type', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = children.next_file(null)) !== null) {
+                const child = children.get_child(info);
+                if (info.get_file_type() === Gio.FileType.DIRECTORY)
+                    this._removeDirRecursive(child.get_path());
                 else
-                    GLib.remove(p);
-                name = GLib.dir_read_name(handle);
+                    child.delete(null);
             }
-            GLib.dir_close(handle);
-            GLib.rmdir(dir);
+            children.close(null);
+            file.delete(null);
         } catch (_e) {}
     }
 
