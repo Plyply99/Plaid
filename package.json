@@ -1,0 +1,9 @@
+{
+  "name": "plaid-tests",
+  "private": true,
+  "type": "module",
+  "description": "Unit + static tests for the Plaid GNOME extension (no runtime dependencies)",
+  "scripts": {
+    "test": "node --import ./tests/register.mjs --test \"tests/**/*.test.mjs\""
+  }
+}

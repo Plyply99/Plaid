@@ -27,6 +27,18 @@ else
     echo "WARNING: node not found — syntax gate skipped" >&2
 fi
 
+# Test gate: run the unit + static suite before packing (same rationale as the
+# syntax gate — a zip with known-broken logic must never be built).
+if [ -d "$(dirname "$0")/tests" ] && command -v node >/dev/null 2>&1; then
+    if ! (cd "$(dirname "$0")" && node --import ./tests/register.mjs --test "tests/**/*.test.mjs"); then
+        echo "Test suite FAILED" >&2
+        exit 1
+    fi
+    echo "Test suite OK"
+else
+    echo "WARNING: tests not run (node or tests/ missing)" >&2
+fi
+
 mkdir -p "$OUT"
 echo "Packing $SOURCE -> $OUT/plaid@plyply99.zip"
 gnome-extensions pack --force --out-dir="$OUT" "$SOURCE"

@@ -13,6 +13,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: ESM syntax gate (stdin form — file-mode --check is not authoritative)
         run: |
           set -e
@@ -36,3 +41,6 @@ jobs:
           fi
           glib-compile-schemas --strict extensions/schemas/
           echo "schema OK"
+
+      - name: Unit + static test suite
+        run: npm test
