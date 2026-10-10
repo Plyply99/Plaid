@@ -16,7 +16,8 @@ glib-compile-schemas "$SOURCE/schemas/"
 # silently pass broken ESM — the stdin form is the real gate. A zip with
 # code GJS rejects must never be built.
 if command -v node >/dev/null 2>&1; then
-    for js in "$SOURCE/extension.js" "$SOURCE/prefs.js"; do
+    for js in "$SOURCE/extension.js" "$SOURCE/prefs.js" "$SOURCE"/modules/*.js; do
+        [ -f "$js" ] || continue
         if ! node --input-type=module --check < "$js"; then
             echo "Syntax gate FAILED: $js" >&2
             exit 1
@@ -49,12 +50,12 @@ if [ -f "$OUT/plaid@plyply99.shell-extension.zip" ]; then
 fi
 
 # gnome-extensions pack drops non-standard files; append everything it
-# skips (assets/ and the terminal-settings script).
-if [ -d "$SOURCE/assets" ] || [ -f "$SOURCE/plaid-terminal-settings.sh" ]; then
+# skips (assets/, the modules directory, and the terminal-settings scripts).
+if [ -d "$SOURCE/assets" ] || [ -d "$SOURCE/modules" ] || [ -f "$SOURCE/plaid-terminal-settings.sh" ]; then
     (cd "$SOURCE" && python3 -c "
 import zipfile, os
 out = '$OUT/plaid@plyply99.zip'
-paths = ['assets', 'plaid-terminal-settings.sh', 'plaid-terminal-settings.fish']
+paths = ['assets', 'modules', 'plaid-terminal-settings.sh', 'plaid-terminal-settings.fish']
 appended = []
 with zipfile.ZipFile(out, 'a') as z:
     existing = set(z.namelist())

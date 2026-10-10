@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeAccel, schemaDefaultValue } from '../../extensions/extension.js';
+import { normalizeAccel, schemaDefaultValue } from '../../extensions/modules/helpers.js';
 
 test('normalizeAccel: modifier order is irrelevant', () => {
   assert.equal(normalizeAccel('<Super><Shift>h'), normalizeAccel('<Shift><Super>h'));

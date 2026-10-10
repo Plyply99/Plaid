@@ -21,7 +21,8 @@ jobs:
       - name: ESM syntax gate (stdin form — file-mode --check is not authoritative)
         run: |
           set -e
-          for js in extensions/extension.js extensions/prefs.js; do
+          for js in extensions/extension.js extensions/prefs.js extensions/modules/*.js; do
+            [ -f "$js" ] || continue
             node --input-type=module --check < "$js"
             echo "syntax OK: $js"
           done

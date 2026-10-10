@@ -51,4 +51,12 @@ if [ -d "$SOURCE/schemas" ]; then
     done
 fi
 
+if [ -d "$SOURCE/modules" ]; then
+    mkdir -p "$DEST/modules"
+    for file in "$SOURCE"/modules/*; do
+        [ -f "$file" ] || continue
+        sync_file "$file" "$DEST/modules/$(basename "$file")"
+    done
+fi
+
 echo "Done. Restart GNOME Shell (log out and back in on Wayland)."

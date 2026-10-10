@@ -2,13 +2,9 @@
 //
 // Plaid's extension.js is a single module that imports gi:// namespaces and
 // resource:// gnome-shell modules — neither resolves under plain Node. This
-// loader maps both schemes to minimal stubs so the REAL extension.js can be
-// imported and its pure logic exercised in unit tests.
-//
-// It also augments the extension.js module with named exports for the three
-// module-scope helpers (normalizeAccel / schemaDefaultValue / maskSdfRect),
-// which are otherwise not reachable. This is a TEST-TIME transform only — the
-// shipped file is never modified.
+// loader maps both schemes to minimal stubs so the REAL extension.js (and its
+// extracted ./modules/*.js) can be imported and its pure logic exercised in
+// unit tests.
 //
 // Register it with: node --import ./tests/register.mjs --test tests/
 
@@ -31,9 +27,6 @@ const RESOURCE_SOURCES = [
   [/\/workspaceSwitcherPopup\.js$/, 'export class WorkspaceSwitcherPopup {}\nexport class MonitorWorkspaceSwitcherPopup {}'],
 ];
 
-const EXTENSION_FILE = '/extensions/extension.js';
-const AUGMENT = '\nexport { normalizeAccel, schemaDefaultValue, maskSdfRect };\n';
-
 function resourceSource(url) {
   for (const [re, src] of RESOURCE_SOURCES) {
     if (re.test(url)) return src;
@@ -54,13 +47,6 @@ export async function load(url, context, nextLoad) {
   }
   if (url.startsWith('resource://')) {
     return { format: 'module', source: resourceSource(url), shortCircuit: true };
-  }
-  if (url.startsWith('file:') && url.endsWith(EXTENSION_FILE)) {
-    const result = await nextLoad(url, context);
-    const src = typeof result.source === 'string'
-      ? result.source
-      : Buffer.from(result.source).toString('utf8');
-    return { format: 'module', source: src + AUGMENT, shortCircuit: true };
   }
   return nextLoad(url, context);
 }

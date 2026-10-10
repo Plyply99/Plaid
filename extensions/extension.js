@@ -16,16 +16,17 @@ import * as WorkspacesViewModule from 'resource:///org/gnome/shell/ui/workspaces
 import * as WorkspaceThumbnailModule from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import { normalizeAccel, schemaDefaultValue, maskSdfRect, helperMethods } from './modules/helpers.js';
+import { geometryMethods } from './modules/geometry.js';
+import { bspMethods } from './modules/bsp.js';
+import { borderMathMethods } from './modules/border-math.js';
+
 const LAYOUT_NAMES = {
     'dwindle': 'Dwindle',
     'master-stack': 'Master-stack',
     'centered-master-stack': 'Centered Master-stack',
     'floating': 'Floating',
 };
-
-const BORDER_SEG_STEP = 12;
-const BORDER_CORNER_MIN_SEGS = 8;
-const BORDER_CORNER_SEG_STEP = 4;
 
 const MASK_EFFECT_NAME = 'plaid-corner-mask';
 const BLUR_EFFECT_NAME = 'plaid-window-blur';
@@ -41,38 +42,6 @@ const PLAID_KEYBIND_KEYS = [
     'pick-float-window', 'cycle-layout',
     'scratchpad-toggle', 'scratchpad-add', 'dropdown-terminal',
 ];
-
-// Canonical form of an accelerator for comparison: '<Shift><Super>h' and
-// '<Super><Shift>h' are the same shortcut (GTK, mutter, and users write the
-// modifier order differently) — lowercased sorted modifiers + key.
-function normalizeAccel(combo) {
-    try {
-        const parts = combo.replace(/[<>]/g, ' ').trim().split(/\s+/);
-        if (parts.length === 0) return combo;
-        const key = parts[parts.length - 1].toLowerCase();
-        const mods = parts.slice(0, -1).map((m) => m.toLowerCase()).sort();
-        return mods.length ? `<${mods.join('><')}>${key}` : key;
-    } catch (_e) {
-        return combo;
-    }
-}
-
-// Schema default for a settings key — the recovery source when a live value
-// looks like the emptied tamper sentinel (see _disableMutterDefaults): if the
-// shell died while Plaid was enabled, the live keybinds are already [] and
-// capturing [] would restore [] on disable — a permanent loss. Known
-// ambiguity (documented): a user who DELIBERATELY emptied a key is restored
-// to the schema default instead of their empty on the next disable; the
-// fully-correct fix would persist the pre-tamper values to a scratch settings
-// key at first tamper (write-once).
-function schemaDefaultValue(settings, key) {
-    try {
-        const dv = settings.get_default_value(key);
-        return dv ? dv.deep_unpack() : null;
-    } catch (_e) {
-        return null;
-    }
-}
 
 // The GNOME Shell re-enables extensions after every screen unlock, which
 // re-runs enable(). The login splash is a brand moment for real logins only
@@ -204,36 +173,6 @@ const MASK_SNIPPET_CODE = `
 // referencing it threw at MODULE LOAD if Cogl.SnippetHook were ever absent.
 // Optional chaining keeps the load safe; the creation paths handle undefined.
 const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook?.FRAGMENT;
-
-// SDF border/clip rect for the corner mask, in ACTOR-local coordinates.
-// SHARED by _updateMaskBounds (uniform upload) and the GNOME 50 GLSLEffect's
-// vfunc_paint_target — that vfunc RE-DERIVES `bounds` on EVERY paint, so it
-// is the authoritative source on GNOME 50: a raw formula there silently
-// stomps any clamp applied at upload time (the 2026-10-02 pascube
-// square-outside/rounded-inside top corners — updateMask's clamped
-// borderedAreaBounds vs paint_target's unclamped bounds = mismatched rects).
-// The rect is the frame rect in actor/buffer coordinates; healthy windows
-// (frame ⊆ buffer: equal for shadowless Wayland, inset for CSD shadows) land
-// strictly INSIDE the actor. A client can commit a surface SMALLER than its
-    // frame (pascube (GTK3): buffer 37px shorter at the TOP with
-    // bottoms flush) — the raw formula then puts y1 ABOVE the capture: top
-// border and top rounding arc draw outside the captured surface (outer edge
-// cut square by the framebuffer edge, content top corners left unclipped).
-// Clamp to the actor bounds: no-op for every healthy window, hugs the
-// visible surface for divergent ones.
-function maskSdfRect(win, actor) {
-    const buffer = win.get_buffer_rect();
-    const frame = win.get_frame_rect();
-    const offsetX = frame.x - buffer.x;
-    const offsetY = frame.y - buffer.y;
-    const bw = frame.width - buffer.width;
-    const bh = frame.height - buffer.height;
-    const x1 = Math.max(1, offsetX + 1);
-    const y1 = Math.max(1, offsetY + 1);
-    const x2 = Math.max(x1, Math.min(actor.width, offsetX + actor.width + bw));
-    const y2 = Math.max(y1, Math.min(actor.height, offsetY + actor.height + bh));
-    return [x1, y1, x2, y2];
-}
 
 // Custom background blur (v51.11, pure GJS): reimplements Shell.BlurEffect's
 // BACKGROUND-mode paint chain (blit stage-beneath → FBO → blur node → final
@@ -1422,26 +1361,6 @@ export default class TilingWMExtension extends Extension {
         });
     }
 
-    _compileTitlePatterns(titles) {
-        const patterns = [];
-        for (const t of titles || []) {
-            if (t.includes('*'))
-                patterns.push(new RegExp('^' + t.split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
-        }
-        return patterns;
-    }
-
-    _floatingTitleMatches(title) {
-        if (!title) return false;
-        if (this._floatingTitles && this._floatingTitles.has(title)) return true;
-        const patterns = this._floatingTitlePatterns;
-        if (!patterns) return false;
-        for (const re of patterns) {
-            if (re.test(title)) return true;
-        }
-        return false;
-    }
-
     _shouldManage(win) {
         if (this._dropdownWin === win ||
             (this._dropdownWaiters && this._dropdownWaiters.has(win))) return false;
@@ -1519,39 +1438,6 @@ export default class TilingWMExtension extends Extension {
         if (tryWarp()) {
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, tryWarp);
         }
-    }
-
-    _winClassCandidates(win) {
-        // GNOME 50 populates the WM_CLASS *instance* for Wayland (both parts
-        // are set to the app id); GNOME 51 leaves the instance empty and the
-        // identity lives in WM_CLASS / the GTK app id. Return every non-empty
-        // identity candidate (lowercased), most-specific first, so float rules
-        // written for either shell version keep matching. The first entry is
-        // the window's display class.
-        const out = [];
-        try {
-            const inst = win.get_wm_class_instance();
-            if (inst) out.push(inst.toLowerCase());
-        } catch (_e) {}
-        try {
-            const cls = win.get_wm_class();
-            if (cls) out.push(cls.toLowerCase());
-        } catch (_e) {}
-        try {
-            if (win.get_gtk_application_id) {
-                const app = win.get_gtk_application_id();
-                if (app) out.push(app.toLowerCase());
-            }
-        } catch (_e) {}
-        return out;
-    }
-
-    _floatClassMatches(win) {
-        if (!this._floatingClasses) return false;
-        for (const c of this._winClassCandidates(win)) {
-            if (this._floatingClasses.has(c)) return true;
-        }
-        return false;
     }
 
     _isFloating(win) {
@@ -1817,80 +1703,6 @@ export default class TilingWMExtension extends Extension {
         }
         this._persistedDwindleRaw = raw;
         return map;
-    }
-
-    _dwindleShapeToString(node) {
-        // Prefix encoding: l=leaf, e=empty, split = dir+ratio(child,child)
-        // e.g. "h0.8480(l,l)" — one ':' per entry (the index separator).
-        if (!node || node.type === 'empty') return 'e';
-        if (node.type === 'leaf') return 'l';
-        if (node.type !== 'split') return 'e';
-        const ratio = Number.isFinite(node.ratio) ? node.ratio : 0.5;
-        // Clamp before toFixed(4): a ratio ≥ 0.99995 serializes to "1.0000"
-        // (and ≤ 0.00005 to "0.0000") which _dwindleShapeFromString REJECTS
-        // (ratio must be strictly between 0 and 1) — the whole entry was
-        // silently dropped from the written strv, losing the saved shape
-        // (2026-10-04 audit).
-        const r = Math.min(0.9999, Math.max(0.0001, ratio));
-        return `${node.direction === 'v' ? 'v' : 'h'}${r.toFixed(4)}` +
-            `(${this._dwindleShapeToString(node.first)},${this._dwindleShapeToString(node.second)})`;
-    }
-
-    _dwindleShapeFromString(str) {
-        // Minimal recursive-descent parser for the encoding above. Leaves
-        // are PLACEHOLDERS ({type:'leaf'} with no window) — only split
-        // nodes' direction+ratio are ever consumed (by reconcile).
-        if (typeof str !== 'string' || str.length === 0) return null;
-        let i = 0;
-        const parseNode = () => {
-            if (i >= str.length) return null;
-            const c = str[i];
-            if (c === 'l') { i++; return { type: 'leaf' }; }
-            if (c === 'e') { i++; return { type: 'empty' }; }
-            if (c !== 'h' && c !== 'v') return null;
-            const dir = c;
-            i++;
-            const start = i;
-            while (i < str.length && /[0-9.]/.test(str[i])) i++;
-            const ratio = parseFloat(str.substring(start, i));
-            if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return null;
-            if (str[i] !== '(') return null;
-            i++;
-            const first = parseNode();
-            if (!first || str[i] !== ',') return null;
-            i++;
-            const second = parseNode();
-            if (!second || str[i] !== ')') return null;
-            i++;
-            return { type: 'split', direction: dir, ratio, first, second };
-        };
-        try {
-            const node = parseNode();
-            return node && i === str.length ? node : null;
-        } catch (_e) {
-            return null;
-        }
-    }
-
-    _reconcileTreeRatios(saved, live) {
-        // Copy saved split ratios into the LIVE tree wherever the two
-        // structures correspond (same direction down the path). A direction
-        // mismatch means this branch's history diverged (different window
-        // aspect / insert order) — stop descending there and keep the live
-        // ratios. Never touches leaves. Returns true when anything changed.
-        if (!saved || !live) return false;
-        if (saved.type !== 'split' || live.type !== 'split') return false;
-        if (saved.direction !== live.direction) return false;
-        let changed = false;
-        const r = Number(saved.ratio);
-        if (Number.isFinite(r) && r > 0.02 && r < 0.98 &&
-            Math.abs(live.ratio - r) > 0.0005) {
-            live.ratio = r;
-            changed = true;
-        }
-        changed = this._reconcileTreeRatios(saved.first, live.first) || changed;
-        changed = this._reconcileTreeRatios(saved.second, live.second) || changed;
-        return changed;
     }
 
     _markPendingWindowInvisible(win, actor) {
@@ -3580,385 +3392,6 @@ export default class TilingWMExtension extends Extension {
         return -1;
     }
 
-    // --- BSP Tree ---
-
-    _bspGetTree(workspace) {
-        if (!this._bspTrees.has(workspace))
-            this._bspTrees.set(workspace, null);
-        return this._bspTrees.get(workspace);
-    }
-
-    _bspMakeLeaf(win) {
-        return { type: 'leaf', window: win };
-    }
-
-    _bspMakeSplit(dir, ratio, first, second) {
-        return { type: 'split', direction: dir, ratio, first, second };
-    }
-
-    _bspInsert(node, win, x, y, w, h, gap) {
-        if (!node) return this._bspMakeLeaf(win);
-        if (node.type === 'empty') return this._bspMakeLeaf(win);
-        if (node.type === 'leaf') {
-            const dir = w >= h ? 'h' : 'v';
-            const ratio = this._settings.get_double('dwindle-ratio');
-            return this._bspMakeSplit(dir, ratio, node, this._bspMakeLeaf(win));
-        }
-        const isH = node.direction === 'h';
-        const axisSize = isH ? w : h;
-        const split = Math.floor((axisSize - gap) * node.ratio);
-        const secondSize = axisSize - split - gap;
-        if (isH)
-            node.second = this._bspInsert(node.second, win, x + split + gap, y, secondSize, h, gap);
-        else
-            node.second = this._bspInsert(node.second, win, x, y + split + gap, w, secondSize, gap);
-        return node;
-    }
-
-    _bspRemove(node, win) {
-        if (!node) return { type: 'empty' };
-        if (node.type === 'empty') return node;
-        if (node.type === 'leaf') {
-            return node.window === win ? { type: 'empty' } : node;
-        }
-        node.first = this._bspRemove(node.first, win);
-        node.second = this._bspRemove(node.second, win);
-        if (node.first.type === 'empty' && node.second.type === 'empty')
-            return { type: 'empty' };
-        if (node.first.type === 'empty') return node.second;
-        if (node.second.type === 'empty') return node.first;
-        return node;
-    }
-
-    _bspCollectWindows(node) {
-        if (!node) return [];
-        if (node.type === 'empty') return [];
-        if (node.type === 'leaf') return [node.window];
-        return [...this._bspCollectWindows(node.first), ...this._bspCollectWindows(node.second)];
-    }
-
-    _bspLayout(node, x, y, w, h, gap, skipWindow) {
-        if (!node) return;
-        if (node.type === 'empty') return;
-        if (node.type === 'leaf') {
-            node._x = x;
-            node._y = y;
-            node._w = w;
-            node._h = h;
-            if (node.window !== skipWindow) {
-                this._safeMove(node.window, x, y, w, h);
-            } else {
-                const frame = node.window.get_frame_rect();
-                this._safeMove(node.window, x, y, frame.width, frame.height);
-            }
-            return;
-        }
-        const isH = node.direction === 'h';
-        const firstEmpty = !node.first || node.first.type === 'empty';
-        const secondEmpty = !node.second || node.second.type === 'empty';
-        if (firstEmpty && secondEmpty) return;
-        if (firstEmpty) {
-            this._bspLayout(node.second, x, y, w, h, gap, skipWindow);
-            return;
-        }
-        if (secondEmpty) {
-            this._bspLayout(node.first, x, y, w, h, gap, skipWindow);
-            return;
-        }
-        const axisSize = isH ? w : h;
-        const split = Math.floor((axisSize - gap) * node.ratio);
-        const secondSize = axisSize - split - gap;
-        if (split < 0 || secondSize < 0) return;
-        if (isH) {
-            this._bspLayout(node.first, x, y, split, h, gap, skipWindow);
-            this._bspLayout(node.second, x + split + gap, y, secondSize, h, gap, skipWindow);
-        } else {
-            this._bspLayout(node.first, x, y, w, split, gap, skipWindow);
-            this._bspLayout(node.second, x, y + split + gap, w, secondSize, gap, skipWindow);
-        }
-    }
-
-    _bspFindPath(node, win, path) {
-        if (!node) return false;
-        if (node.type === 'leaf') return node.window === win;
-        path.push(node);
-        if (this._bspFindPath(node.first, win, path)) return true;
-        if (this._bspFindPath(node.second, win, path)) return true;
-        path.pop();
-        return false;
-    }
-
-    _bspFindLeaf(node, win) {
-        if (!node) return null;
-        if (node.type === 'leaf') return node.window === win ? node : null;
-        return this._bspFindLeaf(node.first, win) || this._bspFindLeaf(node.second, win);
-    }
-
-    _bspSwapWindows(node, winA, winB) {
-        if (!node) return;
-        if (node.type === 'leaf') {
-            if (node.window === winA) node.window = winB;
-            else if (node.window === winB) node.window = winA;
-            return;
-        }
-        this._bspSwapWindows(node.first, winA, winB);
-        this._bspSwapWindows(node.second, winA, winB);
-    }
-
-    _bspFindLeafAtPoint(node, x, y, w, h, px, py, gap) {
-        if (!node) return null;
-        if (node.type === 'empty') return node;
-        if (node.type === 'leaf') return node;
-        const isH = node.direction === 'h';
-        const axisSize = isH ? w : h;
-        const split = Math.floor((axisSize - gap) * node.ratio);
-        const secondSize = axisSize - split - gap;
-        if (isH) {
-            if (px < x + split + gap)
-                return this._bspFindLeafAtPoint(node.first, x, y, split, h, px, py, gap);
-            else
-                return this._bspFindLeafAtPoint(node.second, x + split + gap, y, secondSize, h, px, py, gap);
-        } else {
-            if (py < y + split + gap)
-                return this._bspFindLeafAtPoint(node.first, x, y, w, split, px, py, gap);
-            else
-                return this._bspFindLeafAtPoint(node.second, x, y + split + gap, w, secondSize, px, py, gap);
-        }
-    }
-
-    _bspReplaceLeaf(node, targetLeaf, newWin, preferredRatio = null) {
-        if (!node) return null;
-        if (node.type === 'empty') {
-            if (node === targetLeaf)
-                return this._bspMakeLeaf(newWin);
-            return node;
-        }
-        if (node.type === 'leaf') {
-            if (node === targetLeaf) {
-                const dir = ((node._w || 0) >= (node._h || 0)) ? 'h' : 'v';
-                const ratio = (preferredRatio && preferredRatio > 0 && preferredRatio < 1)
-                    ? preferredRatio
-                    : this._settings.get_double('dwindle-ratio');
-                return this._bspMakeSplit(dir, ratio, node, this._bspMakeLeaf(newWin));
-            }
-            return node;
-        }
-        node.first = this._bspReplaceLeaf(node.first, targetLeaf, newWin, preferredRatio);
-        node.second = this._bspReplaceLeaf(node.second, targetLeaf, newWin, preferredRatio);
-        return node;
-    }
-
-    _bspTagGeometry(node, x, y, w, h, gap) {
-        if (!node) return;
-        node._x = x;
-        node._y = y;
-        node._w = w;
-        node._h = h;
-        if (node.type === 'empty' || node.type === 'leaf') return;
-        const isH = node.direction === 'h';
-        const axisSize = isH ? w : h;
-        const split = Math.floor((axisSize - gap) * node.ratio);
-        const secondSize = axisSize - split - gap;
-        if (isH) {
-            this._bspTagGeometry(node.first, x, y, split, h, gap);
-            this._bspTagGeometry(node.second, x + split + gap, y, secondSize, h, gap);
-        } else {
-            this._bspTagGeometry(node.first, x, y, w, split, gap);
-            this._bspTagGeometry(node.second, x, y + split + gap, w, secondSize, gap);
-        }
-    }
-
-    _bspInsertForWorkspace(ws, win) {
-        const gap = this._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
-        if (!workArea) return;
-        let tree = this._bspGetTree(ws);
-
-        if (tree) {
-            const existing = this._bspCollectWindows(tree);
-            if (existing.includes(win)) return;
-        }
-
-        const area = this._outsideArea(workArea);
-        if (!area) return;
-        const areaX = area.x;
-        const areaY = area.y;
-        const areaW = area.w;
-        const areaH = area.h;
-
-        if (tree) {
-            const [px, py] = global.get_pointer();
-            this._bspTagGeometry(tree, areaX, areaY, areaW, areaH, gap);
-            // Leaf-pick only when the pointer is INSIDE the tiling area —
-            // a pointer on a secondary monitor (or over a panel) used to be
-            // resolved against the primary gapped area to an ARBITRARY leaf
-            // (the top-left-most), landing the new window in a slot
-            // unrelated to where the user works; the append-at-end fallback
-            // matches the plain new-window behavior instead
-            // (2026-10-04 audit).
-            const inside = px >= areaX && px < areaX + areaW &&
-                py >= areaY && py < areaY + areaH;
-            const target = inside
-                ? this._bspFindLeafAtPoint(tree, areaX, areaY, areaW, areaH, px, py, gap)
-                : null;
-            if (target) {
-                tree = this._bspReplaceLeaf(tree, target, win);
-            } else {
-                tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
-            }
-        } else {
-            tree = this._bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
-        }
-        this._bspTrees.set(ws, tree);
-    }
-
-    _parseMinSizeOverrides(entries) {
-        const map = new Map();
-        for (const entry of entries || []) {
-            const m = /^(.+?):(\d+)x(\d+)$/.exec(entry);
-            if (m) map.set(m[1].toLowerCase(), { w: parseInt(m[2], 10), h: parseInt(m[3], 10) });
-        }
-        return map;
-    }
-
-    _getWindowMinSize(win) {
-        let entry = null;
-        for (const c of this._winClassCandidates(win)) {
-            entry = this._minSizeOverrides?.get(c);
-            if (entry) break;
-        }
-        if (!entry) {
-            const title = (win.get_title() || '').toLowerCase();
-            entry = this._minSizeOverrides?.get(title);
-        }
-        if (entry) return { w: entry.w, h: entry.h };
-        try {
-            const [mw, mh] = win.get_min_size();
-            const w = Number.isFinite(mw) ? mw : 0;
-            const h = Number.isFinite(mh) ? mh : 0;
-            if (w > 0 || h > 0) return { w, h };
-        } catch (_e) {}
-        return { w: 0, h: 0 };
-    }
-
-    _treeMinSizes(node) {
-        if (!node || node.type === 'empty') return { w: 0, h: 0 };
-        if (node.type === 'leaf') {
-            const min = node.window ? this._getWindowMinSize(node.window) : { w: 0, h: 0 };
-            node._minW = min.w;
-            node._minH = min.h;
-            return min;
-        }
-        const a = this._treeMinSizes(node.first);
-        const b = this._treeMinSizes(node.second);
-        // 'h' = children side by side (widths ADD, heights max); 'v' =
-        // children stacked (heights ADD, widths max). The formulas were
-        // INVERTED (2026-10-04 audit — the journal diag tree showed a
-        // nested v-split with _minH 673 instead of 540+673=1213 and a root
-        // _minH 1483 instead of 810): every nested split understated its
-        // minimum, so _clampTreeToMinSizes partitioned slots smaller than
-        // the windows can take → landing-verify failures → bend/give-up
-        // floats.
-        if (node.direction === 'h') {
-            node._minW = a.w + b.w;
-            node._minH = Math.max(a.h, b.h);
-        } else {
-            node._minW = Math.max(a.w, b.w);
-            node._minH = a.h + b.h;
-        }
-        return { w: node._minW, h: node._minH };
-    }
-
-    _clampTreeToMinSizes(node, areaW, areaH, gap) {
-        if (!node || node.type !== 'split') return;
-        this._clampTreeToMinSizes(node.first, areaW, areaH, gap);
-        this._clampTreeToMinSizes(node.second, areaW, areaH, gap);
-        if (node.direction === 'h') {
-            const minW1 = node.first?._minW || 0;
-            const minW2 = node.second?._minW || 0;
-            const axisSize = areaW - gap;
-            if (axisSize > 0) {
-                const minRatio = minW1 / axisSize;
-                const maxRatio = 1 - minW2 / axisSize;
-                if (maxRatio <= minRatio) {
-                    const need = minW1 + minW2;
-                    node.ratio = need > 0 ? minW1 / need : 0.5;
-                } else {
-                    node.ratio = Math.max(minRatio, Math.min(maxRatio, node.ratio));
-                }
-            }
-        } else {
-            const minH1 = node.first?._minH || 0;
-            const minH2 = node.second?._minH || 0;
-            const axisSize = areaH - gap;
-            if (axisSize > 0) {
-                const minRatio = minH1 / axisSize;
-                const maxRatio = 1 - minH2 / axisSize;
-                if (maxRatio <= minRatio) {
-                    const need = minH1 + minH2;
-                    node.ratio = need > 0 ? minH1 / need : 0.5;
-                } else {
-                    node.ratio = Math.max(minRatio, Math.min(maxRatio, node.ratio));
-                }
-            }
-        }
-    }
-
-    _adjustForConstraints(node, parent, isFirst, x, y, w, h, gap, parentAxis) {
-        if (!node) return false;
-        if (node.type === 'leaf') {
-            if (!parent || !node.window) return false;
-            const f = node.window.get_frame_rect();
-            if (f.width === 0 || f.height === 0) return false;
-            // parentAxis is the PARENT split's usable span (its w/h minus the
-            // inner gap), passed down by the recursion. The ratio lives on
-            // the parent, so the bend math must be sized against that full
-            // span. The old code used the leaf's OWN allocated slot as the
-            // axis — `1 - frame/ownSlot` for a second child goes negative
-            // whenever the frame exceeds its (too-small) slot, clamping the
-            // ratio to 0.05 (and a stale mid-animation first-child frame
-            // clamps it to 0.95): the 2026-10-02 goverlay/emacs oscillation
-            // that produced 95px slots and a give-up float.
-            const axisSize = parentAxis;
-            if (axisSize <= 0) return false;
-            // "Changed" means the RATIO moved, not that the frame exceeded
-            // its slot: a frame over the slot with the ratio already clamped
-            // at a bound (0.05/0.95) is a no-op the caller must not log or
-            // persist (the frame exceeded its slot but nothing bent).
-            const before = parent.ratio;
-            if (parent.direction === 'h' && f.width > node._w + 1) {
-                if (isFirst) {
-                    parent.ratio = Math.min(0.95, Math.max(parent.ratio, f.width / axisSize));
-                } else {
-                    parent.ratio = Math.max(0.05, Math.min(parent.ratio, 1 - f.width / axisSize));
-                }
-            } else if (parent.direction === 'v' && f.height > node._h + 1) {
-                if (isFirst) {
-                    parent.ratio = Math.min(0.95, Math.max(parent.ratio, f.height / axisSize));
-                } else {
-                    parent.ratio = Math.max(0.05, Math.min(parent.ratio, 1 - f.height / axisSize));
-                }
-            }
-            return parent.ratio !== before;
-        }
-        if (node.type !== 'split') return false;
-        const isH = node.direction === 'h';
-        const axisSize = isH ? w : h;
-        const split = Math.floor((axisSize - gap) * node.ratio);
-        const secondSize = axisSize - split - gap;
-        const childAxis = axisSize - gap;
-        let changed = false;
-        if (isH) {
-            changed = this._adjustForConstraints(node.first, node, true, x, y, split, h, gap, childAxis) || changed;
-            changed = this._adjustForConstraints(node.second, node, false, x + split + gap, y, secondSize, h, gap, childAxis) || changed;
-        } else {
-            changed = this._adjustForConstraints(node.first, node, true, x, y, w, split, gap, childAxis) || changed;
-            changed = this._adjustForConstraints(node.second, node, false, x, y + split + gap, w, secondSize, gap, childAxis) || changed;
-        }
-        return changed;
-    }
-
     _retileDwindle(workspace, tiledWindows) {
         const gap = this._settings.get_int('inside-gap');
         const monitor = global.display.get_primary_monitor();
@@ -4048,42 +3481,6 @@ export default class TilingWMExtension extends Extension {
         } catch (e) {
             log(`[plaid] _moveWindow failed: ${e.message}`);
         }
-    }
-
-    _isValidWorkArea(workArea) {
-        // mutter can return a garbage rect from get_work_area_for_monitor
-        // while monitors are mid-reconfiguration (the 2026-10-04 login race:
-        // 9x 'get_logical_monitor_from_number' assertions → a (5,4,1,1)-class
-        // rect passed the old width===0 guard and drove a false 1x1-slot
-        // retile that floated Firefox at login). A healthy work area is
-        // never under ~100px on either axis — reject anything smaller so
-        // placements/slots/restores can never act on a degenerate rect.
-        return !!(workArea &&
-            Number.isFinite(workArea.x + workArea.y + workArea.width + workArea.height) &&
-            workArea.width >= 100 && workArea.height >= 100);
-    }
-
-    _outsideArea(workArea) {
-        // The tiling area: the work area inset by the per-edge OUTSIDE gaps
-        // (spacing between windows and the screen edges) — the same rect
-        // whether one window or many (the multi-window layouts tile inside
-        // it; the single-window placement IS it).
-        if (!this._settings) return null;
-        if (!this._isValidWorkArea(workArea)) return null;
-        const top = this._settings.get_int('outside-gap-top');
-        const bottom = this._settings.get_int('outside-gap-bottom');
-        const left = this._settings.get_int('outside-gap-left');
-        const right = this._settings.get_int('outside-gap-right');
-        return {
-            x: workArea.x + left,
-            y: workArea.y + top,
-            w: Math.max(1, workArea.width - left - right),
-            h: Math.max(1, workArea.height - top - bottom),
-        };
-    }
-
-    _singleWindowRect(workArea) {
-        return this._outsideArea(workArea);
     }
 
     _convertMaximizedToGaps(win) {
@@ -4623,81 +4020,6 @@ export default class TilingWMExtension extends Extension {
         log(`[plaid] ${args.join(' ')}`);
     }
 
-    _hexToRgb(hex) {
-        const h = (hex || '').replace('#', '');
-        const v = parseInt(h, 16);
-        if (isNaN(v) || h.length < 6) return { r: 0.5, g: 0.5, b: 0.5 };
-        return {
-            r: ((v >> 16) & 255) / 255,
-            g: ((v >> 8) & 255) / 255,
-            b: (v & 255) / 255,
-        };
-    }
-
-    _buildBorderSegments(border) {
-        const info = border._plaidBorder;
-        if (!info) return [];
-        const w = border.width;
-        const h = border.height;
-        const key = `${w}x${h}x${info.radius}`;
-        if (border._plaidSegs && border._plaidSegKey === key)
-            return border._plaidSegs;
-
-        const bw = info.width;
-        const pathX = bw / 2;
-        const pathY = bw / 2;
-        const pathW = w - bw;
-        const pathH = h - bw;
-        if (pathW <= 0 || pathH <= 0) return [];
-
-        const r = Math.min(Math.max(0, info.radius), pathW / 2, pathH / 2);
-        const segs = [];
-        const add = (x0, y0, x1, y1) => segs.push({ x0, y0, x1, y1 });
-        const straight = (x0, y0, x1, y1) => {
-            const len = Math.hypot(x1 - x0, y1 - y0);
-            const n = Math.max(1, Math.ceil(len / BORDER_SEG_STEP));
-            for (let i = 0; i < n; i++) {
-                const a = i / n;
-                const b = (i + 1) / n;
-                add(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a,
-                    x0 + (x1 - x0) * b, y0 + (y1 - y0) * b);
-            }
-        };
-        const arc = (cxp, cyp, a0, a1) => {
-            const n = Math.max(BORDER_CORNER_MIN_SEGS, Math.ceil(Math.abs(a1 - a0) * r / BORDER_CORNER_SEG_STEP));
-            for (let i = 0; i < n; i++) {
-                const a = a0 + (a1 - a0) * (i / n);
-                const b = a0 + (a1 - a0) * ((i + 1) / n);
-                add(cxp + Math.cos(a) * r, cyp + Math.sin(a) * r,
-                    cxp + Math.cos(b) * r, cyp + Math.sin(b) * r);
-            }
-        };
-
-        if (r <= 0) {
-            straight(pathX, pathY, pathX + pathW, pathY);
-            straight(pathX + pathW, pathY, pathX + pathW, pathY + pathH);
-            straight(pathX + pathW, pathY + pathH, pathX, pathY + pathH);
-            straight(pathX, pathY + pathH, pathX, pathY);
-        } else {
-            const top = pathY + r;
-            const bottom = pathY + pathH - r;
-            const left = pathX + r;
-            const right = pathX + pathW - r;
-            straight(left, pathY, right, pathY);
-            arc(right, top, -Math.PI / 2, 0);
-            straight(pathX + pathW, top, pathX + pathW, bottom);
-            arc(right, bottom, 0, Math.PI / 2);
-            straight(right, pathY + pathH, left, pathY + pathH);
-            arc(left, bottom, Math.PI / 2, Math.PI);
-            straight(pathX, bottom, pathX, top);
-            arc(left, top, Math.PI, Math.PI * 1.5);
-        }
-
-        border._plaidSegs = segs;
-        border._plaidSegKey = key;
-        return segs;
-    }
-
     _repaintBorder(border) {
         try {
             const info = border._plaidBorder;
@@ -4741,33 +4063,6 @@ export default class TilingWMExtension extends Extension {
         } catch (e) {
             log(`[plaid] repaint FAILED: ${e.message}`);
         }
-    }
-
-    _borderGradientPos(w, h, p, direction, animated, theta, cx, cy) {
-        if (animated) {
-            const ang = Math.atan2(p.y - cy, p.x - cx);
-            const g = ((ang - theta) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
-            return g < 0.5 ? g * 2 : (1 - g) * 2;
-        }
-        if (direction === 'horizontal')
-            return Math.max(0, Math.min(1, p.x / w));
-        if (direction === 'diagonal')
-            return Math.max(0, Math.min(1, (p.x + p.y) / (w + h)));
-        return Math.max(0, Math.min(1, p.y / h));
-    }
-
-    _lerpRgb(c1, c2, t) {
-        const k = Math.max(0, Math.min(1, t));
-        return {
-            r: c1.r + (c2.r - c1.r) * k,
-            g: c1.g + (c2.g - c1.g) * k,
-            b: c1.b + (c2.b - c1.b) * k,
-        };
-    }
-
-    _borderRotationMs(speed) {
-        if (speed <= 0) return 0;
-        return 22000 - speed * 2000;
     }
 
     _startBorderAnimation() {
@@ -6044,6 +5339,7 @@ export default class TilingWMExtension extends Extension {
                     ? new Shell.BlurEffect()
                     : (this._createGjsBlurEffect() || new Shell.BlurEffect());
                 blur._bindings = [];
+                blur._settleNotifyIds = [];
                 const sibling = new St.Widget({
                     reactive: false,
                     visible: true,
@@ -6055,7 +5351,7 @@ export default class TilingWMExtension extends Extension {
                         offset: 0,
                     }));
                 }
-                for (const prop of ['pivot-point', 'translation-x', 'translation-y', 'scale-x', 'scale-y', 'visible']) {
+                for (const prop of ['pivot-point', 'translation-x', 'translation-y', 'scale-x', 'scale-y', 'visible', 'opacity']) {
                     try {
                         blur._bindings.push(actor.bind_property(
                             prop, sibling, prop, GObject.BindingFlags.SYNC_CREATE
@@ -6074,33 +5370,51 @@ export default class TilingWMExtension extends Extension {
                     blur._actorParentSetId = actor.connect('parent-set',
                         () => this._syncBlurStacking());
                 } catch (_e) {}
-                // Scale-aware paint suppression: gnome-shell's minimize /
+                // Settle-gated paint suppression: gnome-shell's minimize /
                 // unminimize fly-ins (and Plaid's _animFloat moves/resizes)
-                // animate the actor's scale. The blur effect paints the
-                // window's FULL-size stage blit every frame, and the actor's
-                // scale transform then squeezes that full-size paint into
-                // the scaled window — the blur content is magnified by
-                // 1/scale, a huge blur smear flying with the window during
-                // the animation (the 2026-10-04 scratchpad-reveal report).
-                // Disable the effect's paint while any scale is active and
-                // re-enable at scale 1 — the window keeps its animation,
-                // the blur pops in cleanly at the end. Toggling the EFFECT
-                // (not the sibling's visible, which the actor's `visible`
-                // GObject binding would immediately overwrite).
-                const syncBlurScale = () => {
+                // animate the actor. The blur effect paints the window's
+                // FULL-size stage blit every frame, and the actor's scale
+                // transform then squeezes that full-size paint into the
+                // scaled window — the blur content is magnified by 1/scale,
+                // a huge blur smear flying with the window during the
+                // animation (the 2026-10-04 scratchpad-reveal report).
+                // Disable the effect's paint while any scale is active OR the
+                // actor is fading (opacity), and re-enable only once it is at
+                // rest — the window keeps its animation, the blur pops in
+                // cleanly at the end. On every re-enable (and every settled
+                // tick) the sibling rect is re-synced, so a stale offset can
+                // never be painted (the 2026-10 "blur spawned before the
+                // window arrives" reveal glitch: the offset is written while
+                // the actor is mid-flight and persists after it settles).
+                // Toggling the EFFECT (not the sibling's visible, which the
+                // actor's `visible` GObject binding would immediately
+                // overwrite).
+                const syncBlurState = () => {
                     if (!blur || !blur._sibling || blur._fatalFail) return;
                     if (this._windowBlurs && this._windowBlurs.get(win) !== blur) return;
                     try {
-                        const scaling = actor.scale_x < 0.99 || actor.scale_y < 0.99;
-                        if (blur.enabled === scaling) blur.enabled = !scaling;
+                        const moving = actor.scale_x < 0.99 || actor.scale_y < 0.99 ||
+                            actor.opacity < 255;
+                        const shouldEnable = !moving;
+                        if (blur.enabled && shouldEnable) {
+                            // Keep the rect fresh while settled+enabled: after
+                            // a fly-in the actor's position settles a frame or
+                            // two after scale reaches 1, so re-sync here too.
+                            this._syncBlurSiblingRect(win, blur);
+                        } else if (blur.enabled !== shouldEnable) {
+                            if (shouldEnable)
+                                this._syncBlurSiblingRect(win, blur);
+                            blur.enabled = shouldEnable;
+                        }
                     } catch (_e) {}
                 };
-                try {
-                    blur._scaleXNotifyId = actor.connect('notify::scale-x', syncBlurScale);
-                } catch (_e) {}
-                try {
-                    blur._scaleYNotifyId = actor.connect('notify::scale-y', syncBlurScale);
-                } catch (_e) {}
+                for (const sig of ['notify::scale-x', 'notify::scale-y',
+                                   'notify::opacity', 'notify::x', 'notify::y']) {
+                    try {
+                        blur._settleNotifyIds.push(actor.connect(sig, syncBlurState));
+                    } catch (_e) {}
+                }
+                syncBlurState();
                 try {
                     const frame = win.get_frame_rect();
                     const buffer = win.get_buffer_rect();
@@ -6112,40 +5426,8 @@ export default class TilingWMExtension extends Extension {
             }
         }
 
-        if (blur._sibling) {
-            try {
-                const buffer = win.get_buffer_rect();
-                const frame = win.get_frame_rect();
-                // Sibling rect = intersection(frame, buffer), expressed
-                // relative to the constraint source (the window actor —
-                // mutter keeps it == the buffer rect). Healthy windows
-                // (frame ⊆ buffer: CSD shadows) → the intersection IS the
-                // frame → byte-identical to the old frame−buffer offsets,
-                // the blur sits behind the frame inside the shadow. A
-                // client committing a surface SMALLER than its frame
-                // (pascube: 37px top inset) would otherwise push the
-                // sibling ABOVE the window — a visible blurred band 37px
-                // taller than the window ("border bigger than the window",
-                // 2026-10-02). The blur must never paint outside the
-                // window: clamp to the intersection.
-                const ix = Math.max(frame.x, buffer.x);
-                const iy = Math.max(frame.y, buffer.y);
-                const iw = Math.min(frame.x + frame.width, buffer.x + buffer.width) - ix;
-                const ih = Math.min(frame.y + frame.height, buffer.y + buffer.height) - iy;
-                // Offsets are relative to the constraint SOURCE (the actor
-                // the BindConstraints were created with, stored on the
-                // effect) — not necessarily the actor passed to this call.
-                const src = blur._sourceActor || actor;
-                const offsets = iw > 0 && ih > 0
-                    ? [ix - src.x, iy - src.y, iw - src.width, ih - src.height]
-                    : [0, 0, 0, 0];
-                const constraints = blur._sibling.get_constraints();
-                constraints.forEach((c, i) => {
-                    if (c instanceof Clutter.BindConstraint)
-                        c.offset = offsets[i];
-                });
-            } catch (_e) {}
-        }
+        if (blur._sibling)
+            this._syncBlurSiblingRect(win, blur);
 
         try {
             const siblingAlive = blur._sibling ? (blur._sibling.get_parent() ? 'yes' : 'no') : 'n/a';
@@ -6182,6 +5464,53 @@ export default class TilingWMExtension extends Extension {
             }
             blur._bindings = [];
         }
+    }
+
+    _syncBlurSiblingRect(win, blur) {
+        // Sibling rect = intersection(frame, buffer), expressed relative to
+        // the constraint SOURCE (the window actor stored on the effect —
+        // mutter keeps the actor rect == the buffer rect ONCE SETTLED).
+        // Healthy windows (frame ⊆ buffer: CSD shadows) → the intersection
+        // IS the frame → the blur sits behind the frame inside the shadow.
+        // A client committing a surface SMALLER than its frame (pascube: 37px
+        // top inset) would otherwise push the sibling ABOVE the window — a
+        // visible blurred band taller than the window ("border bigger than
+        // the window", 2026-10-02). The blur must never paint outside the
+        // window: clamp to the intersection.
+        //
+        // GUARD: never recompute while the actor is mid-transition. During
+        // gnome-shell's unminimize/reveal fly-in the actor's x/y animate while
+        // the Meta frame/buffer rect is ALREADY at the destination, so
+        // `ix - src.x` would store a large positive offset (lower-right) that
+        // PERSISTS as a static constraint offset after the actor settles — the
+        // 2026-10 "blur sibling spawned before the window arrives" reveal
+        // glitch. Skipping mid-transition leaves the last-good (settled)
+        // offsets; the suppression keeps it from painting until at rest, and
+        // syncBlurState re-syncs the moment it settles.
+        if (!this._windowBlurs || !blur || !blur._sibling) return;
+        try {
+            const buffer = win.get_buffer_rect();
+            const frame = win.get_frame_rect();
+            const src = blur._sourceActor || blur.get_actor();
+            if (!src) return;
+            if (Math.abs(src.x - buffer.x) > 1 || Math.abs(src.y - buffer.y) > 1)
+                return;
+            const ix = Math.max(frame.x, buffer.x);
+            const iy = Math.max(frame.y, buffer.y);
+            const iw = Math.min(frame.x + frame.width, buffer.x + buffer.width) - ix;
+            const ih = Math.min(frame.y + frame.height, buffer.y + buffer.height) - iy;
+            // Offsets are relative to the constraint SOURCE (the actor the
+            // BindConstraints were created with) — not necessarily the actor
+            // passed to the caller.
+            const offsets = iw > 0 && ih > 0
+                ? [ix - src.x, iy - src.y, iw - src.width, ih - src.height]
+                : [0, 0, 0, 0];
+            const constraints = blur._sibling.get_constraints();
+            constraints.forEach((c, i) => {
+                if (c instanceof Clutter.BindConstraint)
+                    c.offset = offsets[i];
+            });
+        } catch (_e) {}
     }
 
     _syncBlurStacking() {
@@ -6333,14 +5662,14 @@ export default class TilingWMExtension extends Extension {
             }
             blur._actorParentSetId = 0;
         }
-        for (const key of ['_scaleXNotifyId', '_scaleYNotifyId']) {
-            if (blur[key]) {
-                const a = win.get_compositor_private();
+        if (blur._settleNotifyIds && blur._settleNotifyIds.length) {
+            const a = win.get_compositor_private();
+            for (const id of blur._settleNotifyIds) {
                 if (a) {
-                    try { a.disconnect(blur[key]); } catch (_e) {}
+                    try { a.disconnect(id); } catch (_e) {}
                 }
-                blur[key] = 0;
             }
+            blur._settleNotifyIds = [];
         }
         if (blur._sibling) {
             this._unbindBlurSibling(blur);
@@ -6594,73 +5923,6 @@ export default class TilingWMExtension extends Extension {
 
     _getActiveWindow() {
         return global.display.focus_window;
-    }
-
-    _findDirectionalTarget(win, direction, windows) {
-        const f = win.get_frame_rect();
-        let best = null;
-        // bestOverlap starts at 0 (not -1): the acceptance test requires
-        // overlap > bestOverlap + 5, so the OLD -1 made the first candidate
-        // need overlap > 4 — tall narrow panes sharing only a few pixels of
-        // edge were unnavigable by the focus/swap keybinds even when they
-        // were the only neighbor in that direction (2026-10-04 audit).
-        let bestOverlap = 0;
-        let bestDist = Infinity;
-        let bestPerp = Infinity;
-        let bestHeight = -1;
-
-        for (const w of windows) {
-            if (w === win) continue;
-            const r = w.get_frame_rect();
-            if (r.width === 0 || r.height === 0) continue;
-
-            let overlap, dist, perp;
-            switch (direction) {
-                case 'left':
-                    if (r.x + r.width > f.x) continue;
-                    overlap = Math.min(f.y + f.height, r.y + r.height) - Math.max(f.y, r.y);
-                    dist = f.x - (r.x + r.width);
-                    perp = Math.abs((f.y + f.height / 2) - (r.y + r.height / 2));
-                    break;
-                case 'right':
-                    if (r.x < f.x + f.width) continue;
-                    overlap = Math.min(f.y + f.height, r.y + r.height) - Math.max(f.y, r.y);
-                    dist = r.x - (f.x + f.width);
-                    perp = Math.abs((f.y + f.height / 2) - (r.y + r.height / 2));
-                    break;
-                case 'up':
-                    if (r.y + r.height > f.y) continue;
-                    overlap = Math.min(f.x + f.width, r.x + r.width) - Math.max(f.x, r.x);
-                    dist = f.y - (r.y + r.height);
-                    perp = Math.abs((f.x + f.width / 2) - (r.x + r.width / 2));
-                    break;
-                case 'down':
-                    if (r.y < f.y + f.height) continue;
-                    overlap = Math.min(f.x + f.width, r.x + r.width) - Math.max(f.x, r.x);
-                    dist = r.y - (f.y + f.height);
-                    perp = Math.abs((f.x + f.width / 2) - (r.x + r.width / 2));
-                    break;
-                default:
-                    return null;
-            }
-            if (overlap <= 0) continue;
-
-            const sameHeight = Math.abs(r.height - bestHeight) <= 5;
-            const overlapTie = Math.abs(overlap - bestOverlap) <= 5;
-            const distTie = Math.abs(dist - bestDist) <= 5;
-            if (overlap > bestOverlap + 5 ||
-                (overlapTie && dist < bestDist - 5) ||
-                (overlapTie && distTie &&
-                 ((!sameHeight && r.height > bestHeight) ||
-                  (sameHeight && perp < bestPerp)))) {
-                bestOverlap = overlap;
-                bestDist = dist;
-                bestPerp = perp;
-                bestHeight = r.height;
-                best = w;
-            }
-        }
-        return best;
     }
 
     _moveFocus(direction) {
@@ -7786,8 +7048,15 @@ export default class TilingWMExtension extends Extension {
         // #11077, electron #48737). The hover-focus steps away from the
         // whole family; their focus is app-managed anyway.
         try {
-            const instance = (win.get_wm_class_instance() || '').toLowerCase();
-            if (instance === 'steamwebhelper') return false;
+            // NEVER key this off get_wm_class_instance() alone: on GNOME 51
+            // it is EMPTY for Wayland (and, observed, for Steam's XWayland
+            // window too) — the raw check silently stopped matching and the
+            // Steam overlay menus closed on the first hover (the 2026-10
+            // regression). _winClassCandidates covers instance/class/app-id;
+            // the process-cmdline fallback in _isChromiumProcessWindow covers
+            // the empty-instance case (Steam's X11 class is "steam", not
+            // "steamwebhelper").
+            if (this._winClassCandidates(win).includes('steamwebhelper')) return false;
         } catch (_e) {}
         try {
             if (this._isChromiumProcessWindow(win)) return false;
@@ -7798,10 +7067,14 @@ export default class TilingWMExtension extends Extension {
         return true;
     }
 
-    // The Chromium process model: every child process (renderer, gpu-process,
-    // zygote, crashpad-handler…) carries a --type= flag on its cmdline —
-    // native apps never do. Verdicts cached per PID (own cache — the float
-    // cache holds boolean verdicts for a different question).
+    // The Chromium/CEF process model: every child process (renderer,
+    // gpu-process, zygote, crashpad-handler…) carries a --type= flag on its
+    // cmdline — native apps never do. Steam's CEF host process
+    // (./steamwebhelper …) is the exception: it carries NO --type=, and on
+    // GNOME 51 its window's wm-class instance is empty, so the family
+    // exclusion must ALSO match the process name here. Verdicts cached per PID
+    // (own cache — the float cache holds boolean verdicts for a different
+    // question).
     _isChromiumProcessWindow(win) {
         try {
             const pid = win.get_pid();
@@ -7814,7 +7087,7 @@ export default class TilingWMExtension extends Extension {
             try {
                 const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
                 if (data)
-                    verdict = /--type=/.test(new TextDecoder().decode(data));
+                    verdict = /--type=|steamwebhelper/.test(new TextDecoder().decode(data));
             } catch (_e) {}
             if (this._chromiumProcessCache) {
                 if (this._chromiumProcessCache.size >= 256)
@@ -8049,15 +7322,6 @@ export default class TilingWMExtension extends Extension {
         };
         this._backgroundAppKeepAliveId =
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60 * 60 * 1000, rekeep);
-    }
-
-    _bgAppRealToDisplay(realIdx) {
-        const parkingIdx = this._backgroundAppParkingWs ?
-            this._wsIndex(this._backgroundAppParkingWs) : -1;
-        // No parking workspace => no reserved slot => identity mapping. A
-        // bare `realIdx > -1` is always true and would shift every label
-        // down by one (2026-10-05 audit).
-        return parkingIdx >= 0 && realIdx > parkingIdx ? realIdx - 1 : realIdx;
     }
 
     _ensureTerminalSettingsProfile() {
@@ -10178,14 +9442,6 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
-    _minClampSlot(r, win, areaW, areaH) {
-        if (!r) return r;
-        const min = this._getWindowMinSize(win);
-        if (min.w > 0 && r.w < min.w) r.w = Math.min(min.w, areaW);
-        if (min.h > 0 && r.h < min.h) r.h = Math.min(min.h, areaH);
-        return r;
-    }
-
     _windowSlotRect(win, ws, layout, workArea, insideGap) {
         if (!this._isValidWorkArea(workArea)) return null;
         if (layout === 'floating') return null;
@@ -10833,3 +10089,15 @@ export default class TilingWMExtension extends Extension {
     }
 
 }
+
+// Subsystem methods extracted into ./modules/*.js are attached here. Each
+// module's functions use `this` exactly as ordinary methods do, so call sites
+// and instance state are unchanged. This runs once at module load, before
+// enable() can be called.
+Object.assign(
+    TilingWMExtension.prototype,
+    helperMethods,
+    geometryMethods,
+    bspMethods,
+    borderMathMethods,
+);

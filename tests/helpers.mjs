@@ -4,7 +4,7 @@
 
 import TilingWMExtension from '../extensions/extension.js';
 
-export { normalizeAccel, schemaDefaultValue, maskSdfRect } from '../extensions/extension.js';
+export { normalizeAccel, schemaDefaultValue, maskSdfRect } from '../extensions/modules/helpers.js';
 
 export const proto = TilingWMExtension.prototype;
 

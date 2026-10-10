@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -13,9 +13,18 @@ const prefsJs = readFileSync(join(ext, 'prefs.js'), 'utf8');
 const schemaXml = readFileSync(join(ext, 'schemas', 'org.gnome.shell.extensions.plaid.gschema.xml'), 'utf8');
 const metadata = JSON.parse(readFileSync(join(ext, 'metadata.json'), 'utf8'));
 
+// Every shipped source file — the API-usage scans below must cover the
+// extracted modules too, or moving code into modules silently drops coverage.
+const modulesDir = join(ext, 'modules');
+const moduleFiles = existsSync(modulesDir)
+  ? readdirSync(modulesDir).filter((f) => f.endsWith('.js')).map((f) => join(modulesDir, f))
+  : [];
+const sourceFiles = [join(ext, 'extension.js'), join(ext, 'prefs.js'), ...moduleFiles];
+const allJs = sourceFiles.map((f) => readFileSync(f, 'utf8')).join('\n');
+
 // Comments legitimately mention removed APIs (documenting why they are gone),
 // so the API-usage scans below must ignore comments.
-const codeOnly = extensionJs
+const codeOnly = allJs
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/\/\/[^\n]*/g, '');
 
@@ -33,7 +42,7 @@ test('schema declares every PLAID_KEYBIND_KEYS entry', () => {
 });
 
 test('every literal settings key read from this._settings exists in the schema', () => {
-  const used = [...extensionJs.matchAll(/this\._settings\.get_(?:int|double|boolean|string|strv)\('([^']+)'\)/g)]
+  const used = [...allJs.matchAll(/this\._settings\.get_(?:int|double|boolean|string|strv)\('([^']+)'\)/g)]
     .map((m) => m[1]);
   const missing = [...new Set(used)].filter((k) => !schemaKeys.has(k));
   assert.deepEqual(missing, [], `settings keys read but not declared: ${missing.join(', ')}`);
@@ -70,4 +79,26 @@ test('no extensions/lib directory (it is deleted at every enable by _cleanupLega
 
 test('prefs.js is present and non-empty', () => {
   assert.ok(prefsJs.length > 1000);
+});
+
+test('every relative ./modules/*.js import resolves on disk', () => {
+  const importRe = /from\s+['"](\.[^'"]+\.js)['"]/g;
+  const specs = new Set();
+  for (const src of [extensionJs, prefsJs])
+    for (const m of src.matchAll(importRe)) specs.add(m[1]);
+  for (const spec of specs) {
+    const p = join(ext, spec.replace(/^\.\//, ''));
+    assert.ok(existsSync(p), `import "${spec}" does not resolve to ${p}`);
+  }
+});
+
+test('build.sh packs the modules directory', () => {
+  const build = readFileSync(join(root, 'build.sh'), 'utf8');
+  assert.ok(/paths = \[[^\]]*'modules'/.test(build),
+    "build.sh's pack-append list must include 'modules' or the zip will miss them");
+});
+
+test('sync.sh syncs the modules directory', () => {
+  const sync = readFileSync(join(root, 'sync.sh'), 'utf8');
+  assert.ok(sync.includes('$SOURCE/modules'), 'sync.sh must copy extensions/modules');
 });
