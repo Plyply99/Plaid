@@ -12,6 +12,18 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
+## v51.23 — 2026-10-10
+
+- **Scratchpad reveal blur fixed.** Revealing a window from the scratchpad no longer
+  flashes a blurred layer offset from the window before it snaps into place — the blur
+  now stays hidden through the reveal animation and appears cleanly once the window has
+  come to rest.
+- **Steam overlay menus no longer close on hover.** Moving the mouse over an open Steam
+  menu (or its submenus) used to dismiss it on GNOME 51. Hover-focus now correctly
+  recognizes the Steam UI as an app-managed-focus family and steps away, as it did before.
+- Housekeeping: retired demo media removed from the repository; the release changelog now
+  lives in `CHANGELOG.md`. Internal code reorganization, no user-visible change.
+
 ## v51.22 — 2026-10-07
 
 **GNOME 51 support.**
