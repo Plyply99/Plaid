@@ -22,6 +22,7 @@ import { borderWidgetMethods } from './modules/borders.js';
 import { keybindMethods } from './modules/keybindings.js';
 import { scratchpadMethods } from './modules/scratchpad.js';
 import { dropdownMethods } from './modules/dropdown-terminal.js';
+import { pointerFocusMethods } from './modules/pointer-focus.js';
 
 const LAYOUT_NAMES = {
     'dwindle': 'Dwindle',
@@ -4083,187 +4084,6 @@ export default class TilingWMExtension extends Extension {
         });
     }
 
-    // --- Pointer Focus (sloppy focus) ---
-
-    _initPointerFocus() {
-        try {
-            this._pointerFocusEnabledId = this._settings.connect(
-                'changed::pointer-focus', () => this._syncPointerFocus());
-        } catch (_e) {
-            this._pointerFocusEnabledId = 0;
-        }
-        this._syncPointerFocus();
-    }
-
-    _syncPointerFocus() {
-        const enabled = this._settings?.get_boolean('pointer-focus') ?? false;
-        if (!enabled) {
-            this._teardownPointerFocus();
-            return;
-        }
-        if (this._pointerFocusId) return;
-        this._pointerFocusId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
-            this._pointerFocusTick();
-            return GLib.SOURCE_CONTINUE;
-        });
-        this._debugLog('pointer focus: tracking enabled');
-    }
-
-    _teardownPointerFocus() {
-        if (this._pointerFocusId) {
-            GLib.source_remove(this._pointerFocusId);
-            this._pointerFocusId = 0;
-        }
-    }
-
-    _pointerFocusTick() {
-        try {
-            const [px, py] = global.get_pointer();
-            if (px === this._pointerFocusLastX && py === this._pointerFocusLastY)
-                return;
-            this._pointerFocusLastX = px;
-            this._pointerFocusLastY = py;
-            this._applyPointerFocus(px, py);
-        } catch (e) {
-            this._debugLog(`pointer focus: tick failed: ${e.message}`);
-        }
-    }
-
-    _applyPointerFocus(px, py) {
-        try {
-            if (Main.overview.visible) return;
-            if (Main.modalCount > 0) return;
-            const target = this._resolveWindowByScan(px, py);
-            if (!target) return;
-            if (!this._canPointerFocusWindow(target)) return;
-            if (target === global.display.focus_window) return;
-            if (target === this._backgroundAppWin) return;
-            // Scratchpad members are NOT excluded (the v50.65 early-return
-            // removed 2026-10-02): a SHOWN scratchpad window is an ordinary
-            // visible float on the active workspace — hover focus must treat
-            // it like any other window. Hidden scratch windows never reach
-            // here: the scan skips minimized windows (that is where the
-            // protection against overlapping hidden windows lives).
-            this._debugLog(`pointer focus: ${target.get_wm_class_instance() || '?'} title=${target.get_title() || '?'}`);
-            target.focus(global.get_current_time());
-        } catch (e) {
-            this._debugLog(`pointer focus: apply failed: ${e.message}`);
-        }
-    }
-
-    _resolveWindowByScan(px, py) {
-        try {
-            const candidates = [];
-            const under = [];
-            let total = 0;
-            const activeWs = global.workspace_manager.get_active_workspace();
-            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
-                const ws = global.workspace_manager.get_workspace_by_index(i);
-                if (ws !== activeWs) continue;
-                if (ws === this._backgroundAppParkingWs) continue;
-                for (const win of ws.list_windows()) {
-                    total++;
-                    if (!win) continue;
-                    // Minimized windows are invisible: not a hover target, and
-                    // never a reach-through blocker (a hidden DDT / scratchpad
-                    // / Super+H window whose frame overlaps the pointer would
-                    // otherwise null the scan via the popup protection).
-                    if (win.minimized) continue;
-                    const r = win.get_frame_rect();
-                    if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height) {
-                        const pass = this._canPointerFocusWindow(win) && win !== this._backgroundAppWin;
-                        under.push({ win, pass });
-                        if (pass)
-                            candidates.push(win);
-                    }
-                }
-            }
-            if (this._settings && this._settings.get_boolean('debug')) {
-                const sig = candidates.map(w => w.get_id()).join(',');
-                if (sig !== this._pointerFocusCandSig) {
-                    this._pointerFocusCandSig = sig;
-                    this._debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
-                }
-            }
-            if (under.length === 0) return null;
-            const stacked = global.display.sort_windows_by_stacking(under.map(u => u.win));
-            const top = stacked[stacked.length - 1];
-            // A popup/menu-like window on top must never be reached through:
-            // focusing what's beneath it strips the menu's parent focus and
-            // kills the menu (Steam's fixed-size popups extending over other
-            // windows). No focus change is the safe outcome.
-            const topUnder = under.find(u => u.win === top);
-            if (topUnder && !topUnder.pass) return null;
-            return top;
-        } catch (e) {
-            this._debugLog(`pointer focus: scan failed: ${e.message}`);
-            return null;
-        }
-    }
-
-    _canPointerFocusWindow(win) {
-        if (!win) return false;
-        if (win.minimized) return false;
-        // The Chromium family (Electron/CEF/Steam's steamwebhelper) renders
-        // its menus as web overlays INSIDE its windows. Focus calls on the
-        // host windows disturb the web UI and close the menus — a documented
-        // upstream incompatibility with focus-follows-mouse (steam-for-linux
-        // #11077, electron #48737). The hover-focus steps away from the
-        // whole family; their focus is app-managed anyway.
-        try {
-            // NEVER key this off get_wm_class_instance() alone: on GNOME 51
-            // it is EMPTY for Wayland (and, observed, for Steam's XWayland
-            // window too) — the raw check silently stopped matching and the
-            // Steam overlay menus closed on the first hover (the 2026-10
-            // regression). _winClassCandidates covers instance/class/app-id;
-            // the process-cmdline fallback in _isChromiumProcessWindow covers
-            // the empty-instance case (Steam's X11 class is "steam", not
-            // "steamwebhelper").
-            if (this._winClassCandidates(win).includes('steamwebhelper')) return false;
-        } catch (_e) {}
-        try {
-            if (this._isChromiumProcessWindow(win)) return false;
-        } catch (_e) {}
-        try {
-            if (win.is_skip_taskbar() && !this._isFloating(win)) return false;
-        } catch (_e) {}
-        return true;
-    }
-
-    // The Chromium/CEF process model: every child process (renderer,
-    // gpu-process, zygote, crashpad-handler…) carries a --type= flag on its
-    // cmdline — native apps never do. Steam's CEF host process
-    // (./steamwebhelper …) is the exception: it carries NO --type=, and on
-    // GNOME 51 its window's wm-class instance is empty, so the family
-    // exclusion must ALSO match the process name here. Verdicts cached per PID
-    // (own cache — the float cache holds boolean verdicts for a different
-    // question).
-    _isChromiumProcessWindow(win) {
-        try {
-            const pid = win.get_pid();
-            if (!pid) return false;
-            if (this._chromiumProcessCache) {
-                const cached = this._chromiumProcessCache.get(pid);
-                if (cached !== undefined) return cached;
-            }
-            let verdict = false;
-            try {
-                const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
-                if (data)
-                    verdict = /--type=|steamwebhelper/.test(new TextDecoder().decode(data));
-            } catch (_e) {}
-            if (this._chromiumProcessCache) {
-                if (this._chromiumProcessCache.size >= 256)
-                    this._chromiumProcessCache.clear();
-                this._chromiumProcessCache.set(pid, verdict);
-            }
-            return verdict;
-        } catch (_e) {
-            return false;
-        }
-    }
-
     // --- Notifications ---
 
     _notifyCritical(title, body) {
@@ -5579,4 +5399,5 @@ Object.assign(
     keybindMethods,
     scratchpadMethods,
     dropdownMethods,
+    pointerFocusMethods,
 );
