@@ -132,6 +132,8 @@ export default class TilingWMExtension extends Extension {
         // source id.
         this._stackSettleId = 0;
         this._pickFocusId = null;
+        this._conflictScanId = 0;
+        this._keybindChangeIds = [];
         this._backgroundAppCloneWatchId = 0;
         this._backgroundAppSpawnRetries = 0;
         // Persisted per-workspace layouts/ratios are slot rules parsed at
@@ -230,8 +232,13 @@ export default class TilingWMExtension extends Extension {
         this._scratchpadVisible = false;
         this._dropPreview = null;
 
-        this._disableMutterDefaults();
+        // Migration FIRST: it may pin a user-layer default (e.g. the old
+        // Super+H nav binds on an existing install), and _disableMutterDefaults
+        // reads the EFFECTIVE values to decide which GNOME defaults to yield —
+        // running it after a schema-default change would yield the new combo
+        // and leave the pinned old one fighting GNOME's grab.
         this._migrateKeybindingDefaults();
+        this._disableMutterDefaults();
         this._dropOverlay = new St.Widget({
             reactive: false,
             visible: true,

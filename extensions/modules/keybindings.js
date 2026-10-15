@@ -15,6 +15,7 @@ import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import { normalizeAccel, schemaDefaultValue } from './helpers.js';
+import { scanKeybindConflicts, describeConflict } from './keybind-conflicts.js';
 
 // Every Plaid keybinding settings key — the single source of truth for
 // registration (_registerKeybindings), removal (_removeKeybindings), and the
@@ -135,44 +136,77 @@ export function _restoreMutterDefaults() {
 }
 
 export function _migrateKeybindingDefaults() {
-    // One-time migration (the scratchpad defaults moved to GNOME-compatible
-    // combos): existing installs keep their binds. get_user_value() reads only the
-    // USER dconf layer, so any past change proves an existing install, and a
-    // per-key null check never touches customized keys. Runs once (flag); a failed
-    // run retries safely. Edge: an install with zero user-layer writes is
-    // indistinguishable from fresh and picks up the new defaults (see the v51.17 notes).
+    // One-time migrations for changed keybind defaults: existing installs keep
+    // their binds. get_user_value() reads only the USER dconf layer, so any past
+    // change proves an existing install, and a per-key null check never touches a
+    // customized key. Each pass runs once (flag); a failed run retries safely.
+    // Edge: an install with zero user-layer writes is indistinguishable from
+    // fresh and picks up the new defaults (see the v51.17 notes).
     try {
-        if (this._settings.get_boolean('keybind-migration-done')) return;
-        let hasUserKeys = false;
-        for (const key of this._settings.settings_schema.list_keys()) {
-            try {
-                if (this._settings.get_user_value(key) !== null) {
-                    hasUserKeys = true;
-                    break;
-                }
-            } catch (_e) {}
-        }
-        if (hasUserKeys) {
-            const oldDefaults = {
+        // Pass 1 — scratchpad moved to GNOME-compatible combos.
+        if (!this._settings.get_boolean('keybind-migration-done')) {
+            const pinned = this._pinOldKeybinds({
                 'scratchpad-add': ['<Super><Shift>Escape'],
                 'scratchpad-toggle': ['<Super>Escape'],
-            };
-            const pinned = [];
-            for (const [key, value] of Object.entries(oldDefaults)) {
-                if (this._settings.get_user_value(key) === null) {
-                    this._settings.set_strv(key, value);
-                    pinned.push(key);
-                }
-            }
-            log(`[plaid] keybind migration: existing install — kept old scratchpad defaults` +
-                (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
-        } else {
-            log('[plaid] keybind migration: fresh install — new scratchpad defaults active');
+            });
+            if (pinned === null)
+                log('[plaid] keybind migration: fresh install — new scratchpad defaults active');
+            else
+                log('[plaid] keybind migration: existing install — kept old scratchpad defaults' +
+                    (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
+            this._settings.set_boolean('keybind-migration-done', true);
         }
-        this._settings.set_boolean('keybind-migration-done', true);
+        // Pass 2 — navigation moved off bare Super+H/Super+L (GNOME's minimize and
+        // lock) and toggle-float off Super+Shift+Space (GNOME's
+        // switch-input-source-backward), so a fresh install never clashes.
+        if (!this._settings.get_boolean('keybind-migration-2-done')) {
+            const pinned = this._pinOldKeybinds({
+                'move-focus-left': ['<Super>h'],
+                'move-focus-right': ['<Super>l'],
+                'move-focus-up': ['<Super>k'],
+                'move-focus-down': ['<Super>j'],
+                'toggle-float': ['<Super><Shift>space'],
+            });
+            if (pinned === null)
+                log('[plaid] keybind migration: fresh install — conflict-free navigation defaults active');
+            else
+                log('[plaid] keybind migration: existing install — kept old navigation defaults' +
+                    (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
+            this._settings.set_boolean('keybind-migration-2-done', true);
+        }
     } catch (e) {
         log(`[plaid] keybind migration failed: ${e.message}`);
     }
+}
+
+export function _pinOldKeybinds(oldDefaults) {
+    // Pin a superseded default onto the user layer for an EXISTING install (a
+    // no-op for a fresh one) so changing the schema default never alters it. Keys
+    // the user customized already have a value and are left alone. Returns the
+    // pinned keys, or null when this is a fresh install.
+    if (!this._hasUserSettings()) return null;
+    const pinned = [];
+    for (const [key, value] of Object.entries(oldDefaults)) {
+        try {
+            if (this._settings.get_user_value(key) === null) {
+                this._settings.set_strv(key, value);
+                pinned.push(key);
+            }
+        } catch (_e) {}
+    }
+    return pinned;
+}
+
+export function _hasUserSettings() {
+    // Any user-layer value (ignoring the migration markers, which every install
+    // writes) proves this is not a fresh install.
+    for (const key of this._settings.settings_schema.list_keys()) {
+        if (key === 'keybind-migration-done' || key === 'keybind-migration-2-done') continue;
+        try {
+            if (this._settings.get_user_value(key) !== null) return true;
+        } catch (_e) {}
+    }
+    return false;
 }
 
 export function _registerKeybindings() {
@@ -219,13 +253,32 @@ export function _registerKeybindings() {
     if (failures > 0)
         log(`[plaid] keybindings registered: ${bindings.length - failures}/${bindings.length} ok (${failures} failed)`);
     this._checkKeybindingConflicts(bindings);
+    // Re-scan when a binding changes (prefs, gsettings, CLI) so a clash with
+    // GNOME is surfaced right away instead of only at the next login. Tracked so
+    // a re-registration (the conflict dialog re-grabs after freeing a combo)
+    // replaces the handlers instead of stacking duplicates.
+    if (this._keybindChangeIds) {
+        for (const id of this._keybindChangeIds) {
+            try { this._settings.disconnect(id); } catch (_e) {}
+        }
+    }
+    this._keybindChangeIds = [];
+    for (const { key } of bindings) {
+        const id = this._settings.connect(`changed::${key}`, () => {
+            this._debugLog(`keybind changed: ${key} — re-scanning for conflicts`);
+            this._scheduleConflictScan(bindings);
+        });
+        this._keybindChangeIds.push(id);
+        this._addSignal(this._settings, id);
+    }
 }
 
-export function _checkKeybindingConflicts(bindings) {
+export function _checkKeybindingConflicts(bindings, dialogDelayMs = 2000) {
     // Combo-collision detector: two settings bindings sharing one combo make grab
-    // registration a per-login race (the loser's key silently dies). Scan at
-    // enable — journal every collision, and surface cross-schema ones in a dialog
-    // whose Fix-now writes the other side (only on that explicit click).
+    // registration a per-login race (the loser's key silently dies). Runs at
+    // enable and again whenever a binding changes — journal every collision, and
+    // surface cross-schema ones in a dialog whose "Let Plaid use it" writes the
+    // other side (only on that explicit click).
     try {
         // Combos are compared in normalizeAccel form — '<Shift><Super>h'
         // and '<Super><Shift>h' are the same shortcut (systems write
@@ -249,41 +302,37 @@ export function _checkKeybindingConflicts(bindings) {
             if (entry.owners.length > 1)
                 log(`[plaid] keybinding CONFLICT: ${entry.owners.join(' + ')} all use '${entry.orig}' — remap one of them in prefs`);
         }
-        const ownSchema = this._settings.schema_id;
-        const conflicts = [];
-        for (const schemaId of Gio.Settings.list_schemas()) {
-            if (schemaId === ownSchema) continue;
-            let settings;
-            try { settings = new Gio.Settings({ schema_id: schemaId }); } catch (_e) { continue; }
-            let keys;
-            try { keys = settings.settings_schema.list_keys(); } catch (_e) { continue; }
-            for (const keyName of keys) {
-                let value;
-                try { value = settings.get_value(keyName); } catch (_e) { continue; }
-                if (!value || value.get_type_string() !== 'as') continue;
-                let combos;
-                try { combos = value.deep_unpack(); } catch (_e) { continue; }
-                for (const combo of combos) {
-                    const entry = ourCombos.get(normalizeAccel(combo));
-                    if (!entry) continue;
-                    log(`[plaid] keybinding CONFLICT: ${entry.owners.join(' + ')} '${entry.orig}' also bound by ` +
-                        `${schemaId} ${keyName} — grab race can kill the Plaid key for a session; ` +
-                        `unbind one side: gsettings set ${schemaId} ${keyName} '[]' (or remap in Plaid prefs)`);
-                    conflicts.push({ owners: entry.owners, combo: entry.orig, schemaId, keyName });
-                }
-            }
-        }
+        const conflicts = scanKeybindConflicts(Gio, this._settings.schema_id, ourCombos);
+        for (const c of conflicts)
+            log(`[plaid] keybinding CONFLICT: ${c.owners.join(' + ')} '${c.orig}' also bound by ` +
+                `${describeConflict(c)} — grab race can kill the Plaid key for a session; ` +
+                `unbind one side (or use the dialog to hand it to Plaid)`);
         if (conflicts.length)
-            this._showConflictDialog(conflicts);
+            this._showConflictDialog(conflicts, dialogDelayMs);
     } catch (e) {
         log(`[plaid] keybinding conflict scan failed: ${e.message}`);
     }
 }
 
-export function _showConflictDialog(conflicts) {
+export function _scheduleConflictScan(bindings) {
+    // Debounce: one edit in prefs can fire several changed:: signals.
+    if (this._conflictScanId) {
+        try { GLib.source_remove(this._conflictScanId); } catch (_e) {}
+    }
+    this._conflictScanId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+        this._conflictScanId = 0;
+        if (this._destroyed || !this._settings) return GLib.SOURCE_REMOVE;
+        this._debugLog('conflict scan: running');
+        this._checkKeybindingConflicts(bindings, 150);
+        return GLib.SOURCE_REMOVE;
+    });
+}
+
+export function _showConflictDialog(conflicts, delayMs = 2000) {
     // Mirrors _showFloatPickDialog's lifecycle: ref on this, teardown
-    // helper, disable() hook. Open is deferred ~2s so it lands after
-    // login settle (and never fights a startup modal).
+    // helper, disable() hook. At enable the open is deferred ~2s so it lands
+    // after login settle (and never fights a startup modal); a binding change
+    // passes a short delay instead.
     this._destroyConflictDialog();
     try {
         const dialog = new ModalDialog();
@@ -295,11 +344,10 @@ export function _showConflictDialog(conflicts) {
             style: 'font-weight: bold; font-size: 14px;',
         }));
         for (const c of conflicts) {
-            const other = c.schemaId.startsWith('org.gnome.') ? _('GNOME') : c.schemaId;
             const line = new St.Label({
-                text: _('Plaid and %s both want %s. One of them may randomly stop working.')
-                    .replace('%s', other)
-                    .replace('%s', c.combo),
+                text: _('%s is already used by %s. Let Plaid take it over?')
+                    .replace('%s', () => c.combo)
+                    .replace('%s', () => describeConflict(c)),
             });
             line.clutter_text.set_line_wrap(true);
             content.add_child(line);
@@ -313,11 +361,26 @@ export function _showConflictDialog(conflicts) {
                 action: () => {
                     for (const c of conflicts) {
                         try {
-                            new Gio.Settings({ schema_id: c.schemaId }).set_strv(c.keyName, []);
-                            log(`[plaid] keybinding conflict fixed: unbound ${c.schemaId} ${c.keyName} (was '${c.combo}')`);
+                            const target = c.path
+                                ? new Gio.Settings({ schema_id: c.schemaId, path: c.path })
+                                : new Gio.Settings({ schema_id: c.schemaId });
+                            // Custom shortcuts hold a single string; every other
+                            // binding here is a strv.
+                            if (c.type === 's') target.set_string(c.keyName, '');
+                            else target.set_strv(c.keyName, []);
+                            log(`[plaid] keybinding conflict fixed: unbound ${c.schemaId}${c.path || ''} ${c.keyName} (was '${c.combo}')`);
                         } catch (e) {
                             log(`[plaid] keybinding conflict fix failed: ${e.message}`);
                         }
+                    }
+                    // The other side owned the grab, so Plaid's binding was
+                    // never registered — drop and re-add ours now that the combo
+                    // is free, or the key stays dead until the next login.
+                    try {
+                        this._removeKeybindings();
+                        this._registerKeybindings();
+                    } catch (e) {
+                        log(`[plaid] keybinding re-grab failed: ${e.message}`);
                     }
                     this._destroyConflictDialog();
                     this._showPopup(_('Shortcut fixed'),
@@ -327,13 +390,13 @@ export function _showConflictDialog(conflicts) {
                 },
             },
             {
-                label: _('Not now'),
+                label: _('Keep it as is'),
                 key: Clutter.KEY_Escape,
                 action: () => this._destroyConflictDialog(),
             },
         ]);
 
-        this._conflictDialogId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+        this._conflictDialogId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
             this._conflictDialogId = 0;
             if (this._destroyed || !this._conflictDialog) return GLib.SOURCE_REMOVE;
             try { dialog.open(); } catch (_e) {}
@@ -345,6 +408,12 @@ export function _showConflictDialog(conflicts) {
 }
 
 export function _destroyConflictDialog() {
+    if (this._conflictScanId) {
+        // A pending change-triggered scan must not outlive disable (or fire
+        // against a stale closure after an unlock re-enable).
+        try { GLib.source_remove(this._conflictScanId); } catch (_e) {}
+        this._conflictScanId = 0;
+    }
     if (this._conflictDialogId) {
         try { GLib.source_remove(this._conflictDialogId); } catch (_e) {}
         this._conflictDialogId = 0;
@@ -366,8 +435,11 @@ export const keybindMethods = {
     _disableMutterDefaults,
     _restoreMutterDefaults,
     _migrateKeybindingDefaults,
+    _pinOldKeybinds,
+    _hasUserSettings,
     _registerKeybindings,
     _checkKeybindingConflicts,
+    _scheduleConflictScan,
     _showConflictDialog,
     _destroyConflictDialog,
     _removeKeybindings,

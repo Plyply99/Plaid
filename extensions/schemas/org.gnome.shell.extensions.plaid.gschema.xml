@@ -221,22 +221,22 @@
 
     <!-- Keybindings: Window Movement -->
     <key name="move-focus-left" type="as">
-      <default><![CDATA[['<Super>h']]]></default>
+      <default><![CDATA[['<Super><Alt>h']]]></default>
       <summary>Move focus to left window</summary>
     </key>
 
     <key name="move-focus-right" type="as">
-      <default><![CDATA[['<Super>l']]]></default>
+      <default><![CDATA[['<Super><Alt>l']]]></default>
       <summary>Move focus to right window</summary>
     </key>
 
     <key name="move-focus-up" type="as">
-      <default><![CDATA[['<Super>k']]]></default>
+      <default><![CDATA[['<Super><Alt>k']]]></default>
       <summary>Move focus to upper window</summary>
     </key>
 
     <key name="move-focus-down" type="as">
-      <default><![CDATA[['<Super>j']]]></default>
+      <default><![CDATA[['<Super><Alt>j']]]></default>
       <summary>Move focus to lower window</summary>
     </key>
 
@@ -292,8 +292,9 @@
 
     <!-- Keybinding: Toggle Float -->
     <key name="toggle-float" type="as">
-      <default><![CDATA[['<Super><Shift>space']]]></default>
+      <default><![CDATA[['<Super><Shift>f']]]></default>
       <summary>Toggle floating for focused window</summary>
+      <description>New installs default to Shift+Super+F (Super+Shift+Space clashes with GNOME's switch-input-source-backward); existing installs keep whatever they had via _migrateKeybindingDefaults</description>
     </key>
 
     <!-- Keybinding: Toggle Plaid -->
@@ -391,6 +392,12 @@
       <default>false</default>
       <summary>One-time keybinding default migration marker</summary>
       <description>Set once at enable after _migrateKeybindingDefaults has classified the install (fresh vs existing) — pins the old scratchpad defaults for existing installs so default changes never alter an existing user's keybindings</description>
+    </key>
+
+    <key name="keybind-migration-2-done" type="b">
+      <default>false</default>
+      <summary>Second keybinding default migration marker</summary>
+      <description>Set once at enable after the second migration pass. The navigation defaults moved off bare Super+H/Super+L (GNOME's minimize and lock) to Alt+Super+H/L, and toggle-float moved off Super+Shift+Space (GNOME's switch-input-source-backward) to Super+Shift+F, so a fresh install never clashes with GNOME. Existing installs keep whatever they had — the pass pins the old values for keys the user has not customized</description>
     </key>
 
     <!-- Drop-Down Terminal -->

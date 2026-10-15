@@ -4,6 +4,26 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Gdk from 'gi://Gdk?version=4.0';
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+import { normalizeAccel } from './modules/helpers.js';
+import { collectOtherBindings, findConflicts, describeConflict } from './modules/keybind-conflicts.js';
+
+// Conflicts for one shortcut row — the same scan the extension runs, so the
+// warning badge and the shell dialog always agree. The "everything else" list
+// walks ~130 schemas, so it is built once per prefs session and reused per row
+// (invalidated when the GNOME custom shortcuts change).
+let otherBindingsCache = null;
+function shortcutConflicts(settings, key) {
+    const combos = new Map();
+    for (const combo of settings.get_strv(key)) {
+        if (combo)
+            combos.set(normalizeAccel(combo), { orig: combo, owners: [key] });
+    }
+    if (combos.size === 0) return [];
+    if (!otherBindingsCache)
+        otherBindingsCache = collectOtherBindings(Gio, settings.schema_id);
+    return findConflicts(otherBindingsCache, combos);
+}
+
 // Which this.<prop> array holds the rendered rows for each strv-backed list.
 const STRV_LIST_ROWS_PROP = {
     'float-windows': '_floatClassRows',
@@ -660,6 +680,37 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             activatable: true,
         });
 
+        // Conflict badge — mirrors PaperWM's per-row "Conflicts" warning: it
+        // names the GNOME shortcut (or schema) that already owns this combo.
+        const warn = new Gtk.Image({
+            icon_name: 'dialog-warning-symbolic',
+            visible: false,
+        });
+        const refreshWarn = () => {
+            const conflicts = shortcutConflicts(settings, key);
+            warn.visible = conflicts.length > 0;
+            warn.tooltip_text = conflicts.length
+                ? _('In use by %s').replace('%s', () => conflicts.map(describeConflict).join(', '))
+                : null;
+        };
+        refreshWarn();
+        settings.connect(`changed::${key}`, refreshWarn);
+        // Adding/editing a GNOME custom shortcut while this window is open must
+        // refresh the badges too — its list lives in a different schema.
+        if (!this._shortcutRefreshers) this._shortcutRefreshers = [];
+        this._shortcutRefreshers.push(refreshWarn);
+        if (!this._customShortcutsSettings) {
+            try {
+                const mk = new Gio.Settings({ schema_id: 'org.gnome.settings-daemon.plugins.media-keys' });
+                this._customShortcutsSettings = mk;
+                mk.connect('changed::custom-keybindings', () => {
+                    otherBindingsCache = null;
+                    for (const fn of this._shortcutRefreshers) fn();
+                });
+            } catch (_e) {}
+        }
+        row.add_suffix(warn);
+
         const current = settings.get_strv(key);
         const label = new Gtk.Label({
             label: current.length > 0 ? current[0] : _('Disabled'),
@@ -668,24 +719,26 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         row.add_suffix(label);
 
         row.connect('activated', () => {
-            this._captureShortcut(row, settings, key, label);
+            this._captureShortcut(row, settings, key, label, refreshWarn);
         });
 
         group.add(row);
     }
 
-    _captureShortcut(row, settings, key, label) {
+    _captureShortcut(row, settings, key, label, onChange) {
         const dialog = new Adw.Window({
             modal: true,
             transient_for: row.get_root(),
             title: _('Set Shortcut'),
-            default_width: 400,
-            default_height: 150,
+            // Roomy enough for the icon, title and the two-line hint — a small
+            // window clipped the hint behind a scroll.
+            default_width: 480,
+            default_height: 320,
         });
 
         const content = new Adw.StatusPage({
             title: _('Press a new shortcut'),
-            description: _('Press Backspace to clear, Escape to cancel'),
+            description: _('Press Backspace to clear, Escape to cancel. If nothing happens, the combination is already taken by GNOME or another app — free it there first.'),
             icon_name: 'input-keyboard-symbolic',
         });
         dialog.set_content(content);
@@ -701,6 +754,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             if (keyval === Gdk.KEY_BackSpace && mask === 0) {
                 settings.set_strv(key, []);
                 label.label = _('Disabled');
+                onChange?.();
                 dialog.close();
                 return true;
             }
@@ -710,6 +764,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             const accel = Gtk.accelerator_name(keyval, mask);
             settings.set_strv(key, [accel]);
             label.label = accel;
+            onChange?.();
             dialog.close();
             return true;
         });
