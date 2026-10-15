@@ -1,5 +1,4 @@
 import Gio from 'gi://Gio';
-import GLib from 'gi://GLib';
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk?version=4.0';
 import Gdk from 'gi://Gdk?version=4.0';
@@ -343,11 +342,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         const directionModel = new Gtk.StringList({
             strings: ['vertical', 'horizontal', 'diagonal'],
         });
-        const directionLabels = {
-            'vertical': _('Vertical'),
-            'horizontal': _('Horizontal'),
-            'diagonal': _('Diagonal'),
-        };
         const directionRow = new Adw.ComboRow({
             title: _('Gradient Direction'),
             subtitle: _('Direction of the border gradient'),

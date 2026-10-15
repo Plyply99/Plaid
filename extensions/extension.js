@@ -2,7 +2,6 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
-import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
@@ -4994,7 +4993,6 @@ export default class TilingWMExtension extends Extension {
                 }
             }
 
-            const gap = this._settings.get_int('inside-gap');
             // Dropping the dragged window on its OWN leaf (or on a leaf the
             // removal merges away) must leave the tree untouched: the old
             // code removed the window and never re-inserted it, so the

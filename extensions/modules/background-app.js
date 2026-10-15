@@ -1037,7 +1037,6 @@ export function _reassertBackgroundAppParking() {
         if (now - (this._backgroundAppParkingLastRelocate || 0) < 1000)
             return;
         this._backgroundAppParkingLastRelocate = now;
-        const oldParking = this._backgroundAppParkingWs;
         this._backgroundAppParkingWs =
             global.workspace_manager.append_new_workspace(false, this._currentTime());
         this._debugLog(`background app: parking relocated to ws=${this._wsIndex(this._backgroundAppParkingWs)}`);

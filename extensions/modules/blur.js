@@ -245,7 +245,6 @@ export function _createGjsBlurEffect() {
                         this._hPipeline.set_uniform_float(this._hSigmaUniform, 1, 1, [3]);
                         this._hPipeline.set_uniform_float(this._hStepUniform, 1, 1, [0.01]);
                         this._hPipeline.set_uniform_float(this._hDirUniform, 2, 1, [1, 0]);
-                        const actor = this.get_actor();
                         const { monW, monH } = this._monitorDims();
                         const ds = this._downscaleFor(monW, monH, this._radius);
                         this._rebuildTargets(ds);

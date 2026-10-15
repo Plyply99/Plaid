@@ -482,8 +482,6 @@ export function _updateMaskBounds(win, actor, effect, radius) {
     const frame = win.get_frame_rect();
     const offsetX = frame.x - buffer.x;
     const offsetY = frame.y - buffer.y;
-    const bw = frame.width - buffer.width;
-    const bh = frame.height - buffer.height;
 
     let borderWidth = 0;
 
