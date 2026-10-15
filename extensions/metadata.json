@@ -1,7 +1,7 @@
 {
     "uuid": "plaid@plyply99",
     "name": "Plaid",
-    "description": "Plaid \u2014 polished and complete tiling for GNOME: three layouts, configurable gaps, gradient borders, rounded corners, window blur, keybinds, float rules, scratchpad, mouse resize/swap, popups, and cursor warp. Self-contained \u2014 no extra extensions or downloads.",
+    "description": "Plaid brings tiling to GNOME Shell: dwindle, master-stack and centered master-stack layouts, a floating layout, configurable gaps, animated gradient borders, rounded corners, window blur, remappable keybindings, float rules, a scratchpad, drop-down terminal, and mouse resize/swap.",
     "shell-version": [
         "50",
         "51"
