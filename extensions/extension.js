@@ -188,6 +188,7 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppWaiter = null;
         this._backgroundAppReleaseId = 0;
         this._plaidSetupNoticeTerminal = false;
+        this._plaidTerminalProfilePath = '';
         this._setupPopupCheckId = 0;
         this._maximizeToggleRects = new Map();
         this._backgroundAppPending = false;
@@ -258,6 +259,8 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             if (this._settings && this._settings.get_boolean('terminal-profile-integration'))
                 this._ensureTerminalSettingsProfile();
+            else
+                this._removeTerminalSettingsProfile();
             return GLib.SOURCE_REMOVE;
         });
         this._initBackgroundApp();
@@ -897,6 +900,12 @@ export default class TilingWMExtension extends Extension {
             if (this._settings.get_boolean('pick-mode')) {
                 this._startPickMode();
             }
+        }));
+        this._addSignal(this._settings, this._settings.connect('changed::terminal-profile-integration', () => {
+            if (this._settings.get_boolean('terminal-profile-integration'))
+                this._ensureTerminalSettingsProfile();
+            else
+                this._removeTerminalSettingsProfile();
         }));
 
         this._connectGrabSignals();

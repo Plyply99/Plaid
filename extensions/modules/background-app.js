@@ -46,11 +46,14 @@ export function _scheduleSetupPopupCheck() {
         this._setupPopupCheckId = 0;
         if (this._destroyed) return GLib.SOURCE_REMOVE;
         const lines = [];
-        if (this._plaidSetupNoticeTerminal)
-            lines.push("• Plaid's terminal settings were added to ~/.bashrc — available in new terminals.");
+        if (this._plaidSetupNoticeTerminal) {
+            const where = (this._plaidTerminalProfilePath || '').replace(GLib.get_home_dir(), '~')
+                || 'your shell profile';
+            lines.push(`• Plaid's terminal settings were added to ${where} — open a new terminal to use them.`);
+        }
         this._plaidSetupNoticeTerminal = false;
         if (lines.length > 0)
-            this._showWarningPopup('Plaid setup complete. Log out and back in to take effect', lines.join('\n'), 'Click to dismiss');
+            this._showWarningPopup('Plaid setup complete', lines.join('\n'), 'Click to dismiss');
         return GLib.SOURCE_REMOVE;
     });
 }
