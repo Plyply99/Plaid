@@ -148,6 +148,11 @@ export default class TilingWMExtension extends Extension {
         this._landingRetries = new Map();
         this._mismatchFrames = new Map();
         this._landingGivenUp = new Set();
+        // Windows that refuse to shrink past a size we asked for (apps that
+        // don't report a min, e.g. ghostty): the observed minimum, plus the
+        // auto-float state while a slot can't yet fit them.
+        this._observedMinSizes = new Map();
+        this._minLimitedWindows = new Set();
         this._pendingWarp = new Set();
         this._lastMonitorsGeom = null;
         this._pinnedAdjustCounts = new Map();
@@ -384,6 +389,13 @@ export default class TilingWMExtension extends Extension {
             }
             if (s.scratchpadVisible !== undefined)
                 this._scratchpadVisible = !!s.scratchpadVisible;
+            if (s.observedMinSizes) {
+                for (const [w] of s.observedMinSizes) {
+                    if (!alive(w))
+                        s.observedMinSizes.delete(w);
+                }
+                this._observedMinSizes = s.observedMinSizes;
+            }
             this._debugLog(`tiling state restored (windows=${this._windowWorkspaces.size} trees=${this._bspTrees.size})`);
         } catch (e) {
             log(`[plaid] tiling state restore failed: ${e.message}`);
@@ -457,6 +469,10 @@ export default class TilingWMExtension extends Extension {
                 scratchpadWindows: this._scratchpadWindows,
                 toggleFloatWindows: this._toggleFloatWindows,
                 scratchpadVisible: this._scratchpadVisible,
+                // Learned size minimums (apps that report none) must survive
+                // the lock cycle too, or the clamp loses its floor until they
+                // are re-learned.
+                observedMinSizes: this._observedMinSizes,
             };
             this._debugLog(`disable: tiling state stashed (trees=${this._bspTrees ? this._bspTrees.size : 0})`);
         }
@@ -615,6 +631,8 @@ export default class TilingWMExtension extends Extension {
         this._landingRetries = null;
         this._mismatchFrames = null;
         this._landingGivenUp = null;
+        this._observedMinSizes = null;
+        this._minLimitedWindows = null;
         this._pendingWarp = null;
         this._lastMonitorsGeom = null;
         this._pinnedAdjustCounts = null;
@@ -1057,6 +1075,9 @@ export default class TilingWMExtension extends Extension {
 
     _isFloating(win) {
         if (this._toggleFloatWindows && this._toggleFloatWindows.has(win)) return true;
+        // Auto-floated because no slot could meet its real size minimum —
+        // excluded from tiling until released (see _releaseMinLimitedWindows).
+        if (this._minLimitedWindows && this._minLimitedWindows.has(win)) return true;
         if (this._floatClassMatches(win)) return true;
         const title = win.get_title();
         if (this._floatingTitleMatches(title)) return true;
@@ -1307,6 +1328,8 @@ export default class TilingWMExtension extends Extension {
         this._windowWorkspaces.delete(win);
         this._windowWSIndices.delete(win);
         this._toggleFloatWindows.delete(win);
+        this._observedMinSizes?.delete(win);
+        this._minLimitedWindows?.delete(win);
         win._plaidFloatAnim = false;
         // Prune the landing/choreography maps so dead windows (and the
         // actors they hold) don't linger until disable.
@@ -2035,8 +2058,10 @@ export default class TilingWMExtension extends Extension {
                     const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
                     if (prev && refusesShrink &&
                         Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
-                        Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1)
+                        Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1) {
+                        this._recordObservedMin(win, f, { w: s.targetW, h: s.targetH });
                         this._adjustPinnedTree(win, win.get_workspace());
+                    }
                     this._retryLanding(win);
                 }
                 return false;
@@ -2071,6 +2096,51 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _recordObservedMin(win, frame, target) {
+        // The window is stable at a size larger than its slot: it refused to
+        // shrink. Remember that floor so the next partition allocates a slot it
+        // will actually take (apps such as ghostty report no min width, so
+        // get_min_size() can't tell us).
+        if (!this._observedMinSizes || !win) return;
+        const cur = this._observedMinSizes.get(win) || { w: 0, h: 0 };
+        let w = cur.w;
+        let h = cur.h;
+        if (frame.width > target.w + 16) w = Math.max(w, Math.round(frame.width));
+        if (frame.height > target.h + 16) h = Math.max(h, Math.round(frame.height));
+        // Cap at half the work area: a single window can never need more than
+        // that as a minimum, and it stops one bogus sample (a resize mutter
+        // ignored) from starving the window for the rest of the session.
+        try {
+            const ws = win.get_workspace();
+            const wa = ws && ws.get_work_area_for_monitor(global.display.get_primary_monitor());
+            if (wa) {
+                w = Math.min(w, Math.ceil(wa.width / 2));
+                h = Math.min(h, Math.ceil(wa.height / 2));
+            }
+        } catch (_e) {}
+        if (w === cur.w && h === cur.h) return;
+        this._observedMinSizes.set(win, { w, h });
+        this._debugLog(`min-learned: ${w}x${h} for ${win.get_wm_class_instance() || '?'}`);
+    }
+
+    _releaseMinLimitedWindow(win) {
+        if (!this._minLimitedWindows || !win) return;
+        this._minLimitedWindows.delete(win);
+        this._landingGivenUp?.delete(win);
+        this._landingRetries?.delete(win);
+        this._mismatchFrames?.delete(win);
+    }
+
+    _releaseMinLimitedWindows() {
+        // Let windows auto-floated for the size minimum rejoin: their learned
+        // minimums now let the partition allocate a fitting slot.
+        if (!this._minLimitedWindows || this._minLimitedWindows.size === 0) return;
+        const wins = [...this._minLimitedWindows];
+        for (const win of wins)
+            this._releaseMinLimitedWindow(win);
+        this._debugLog(`min-limited: released ${wins.length} window(s)`);
+    }
+
     _retryLanding(win) {
         if (!this._landingRetries || !this._landingGivenUp || this._destroyed || !win) return;
         if (!win.get_compositor_private()) {
@@ -2082,7 +2152,10 @@ export default class TilingWMExtension extends Extension {
             this._landingRetries.delete(win);
             this._landingGivenUp.add(win);
             if (this._mismatchFrames) this._mismatchFrames.delete(win);
-            try { this._toggleFloatWindows.add(win); } catch (_e) {}
+            // Auto-float (tracked apart from the user's float toggle) so the
+            // tiler stops fighting its minimum; released on the next layout
+            // change (or float toggle) so it can rejoin once a slot fits.
+            this._minLimitedWindows?.add(win);
             // The window is floating now — clear the pending-warp state so a
             // masked window is never left invisible: _landingGivenUp makes
             // every future _verifyAnimationLanding return false, so the
@@ -2895,7 +2968,7 @@ export default class TilingWMExtension extends Extension {
             }
         }
 
-        this._treeMinSizes(tree);
+        this._treeMinSizes(tree, gap);
         this._clampTreeToMinSizes(tree, areaW, areaH, gap);
         this._bspLayout(tree, areaX, areaY, areaW, areaH, gap);
     }
@@ -3450,6 +3523,20 @@ export default class TilingWMExtension extends Extension {
         const focused = this._getActiveWindow();
         if (!focused) return;
 
+        // A min-limited window (auto-floated because no slot met its minimum)
+        // was never user-floated — toggling releases it back to tiling instead
+        // of marking it floated.
+        if (this._minLimitedWindows && this._minLimitedWindows.has(focused)) {
+            this._releaseMinLimitedWindow(focused);
+            const ws = focused.get_workspace();
+            if (ws) {
+                if (this._getWorkspaceLayout(ws) === 'dwindle')
+                    this._bspInsertForWorkspace(ws, focused);
+                this._retileWorkspace(ws);
+            }
+            return;
+        }
+
         const wasFloating = this._toggleFloatWindows.has(focused);
         if (wasFloating) {
             this._toggleFloatWindows.delete(focused);
@@ -3591,6 +3678,7 @@ export default class TilingWMExtension extends Extension {
         const layouts = ['dwindle', 'master-stack', 'centered-master-stack', 'floating'];
         const ws = global.workspace_manager.get_active_workspace();
         if (!ws) return;
+        this._releaseMinLimitedWindows();
         const current = this._getWorkspaceLayout(ws);
         const idx = layouts.indexOf(current);
         const next = layouts[(idx + 1) % layouts.length];
@@ -4157,7 +4245,7 @@ export default class TilingWMExtension extends Extension {
                         const areaW = area.w;
                         const areaH = area.h;
 
-                        this._treeMinSizes(tree);
+                        this._treeMinSizes(tree, gap);
                         if (this._grabResizeNodeW) {
                             const axis = this._grabResizeNodeW._w;
                             if (axis - gap > 0) {

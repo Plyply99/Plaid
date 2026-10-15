@@ -148,6 +148,9 @@ export function _scratchpadRemove() {
     if (!saved) return;
     this._scratchpadWindows.delete(win);
     this._toggleFloatWindows.delete(win);
+    // A scratch window may also have been auto-floated for its size minimum;
+    // clear that too so it rejoins tiling on return.
+    this._releaseMinLimitedWindow(win);
     // Destroy the scratch RING here, where membership ends. The sig-gate
     // in _ensureWindowBorder destroys the BORDER widget on the
     // scratch→normal signature flip but never the ring (it lives only in

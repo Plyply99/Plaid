@@ -253,17 +253,29 @@ export function _getWindowMinSize(win) {
         const title = (win.get_title() || '').toLowerCase();
         entry = this._minSizeOverrides?.get(title);
     }
-    if (entry) return { w: entry.w, h: entry.h };
-    try {
-        const [mw, mh] = win.get_min_size();
-        const w = Number.isFinite(mw) ? mw : 0;
-        const h = Number.isFinite(mh) ? mh : 0;
-        if (w > 0 || h > 0) return { w, h };
-    } catch (_e) {}
-    return { w: 0, h: 0 };
+    let w = 0;
+    let h = 0;
+    if (entry) {
+        w = entry.w;
+        h = entry.h;
+    } else {
+        try {
+            const [mw, mh] = win.get_min_size();
+            w = Number.isFinite(mw) ? mw : 0;
+            h = Number.isFinite(mh) ? mh : 0;
+        } catch (_e) {}
+    }
+    // Some apps (ghostty) report no minimum, so raise the floor with the size
+    // this window was seen to refuse to shrink below.
+    const obs = this._observedMinSizes?.get(win);
+    if (obs) {
+        w = Math.max(w, obs.w);
+        h = Math.max(h, obs.h);
+    }
+    return { w, h };
 }
 
-export function _treeMinSizes(node) {
+export function _treeMinSizes(node, gap = 0) {
     if (!node || node.type === 'empty') return { w: 0, h: 0 };
     if (node.type === 'leaf') {
         const min = node.window ? this._getWindowMinSize(node.window) : { w: 0, h: 0 };
@@ -271,30 +283,28 @@ export function _treeMinSizes(node) {
         node._minH = min.h;
         return min;
     }
-    const a = this._treeMinSizes(node.first);
-    const b = this._treeMinSizes(node.second);
-    // 'h' = children side by side (widths ADD, heights max); 'v' =
-    // children stacked (heights ADD, widths max). The formulas were
-    // INVERTED (2026-10-04 audit — the journal diag tree showed a
-    // nested v-split with _minH 673 instead of 540+673=1213 and a root
-    // _minH 1483 instead of 810): every nested split understated its
-    // minimum, so _clampTreeToMinSizes partitioned slots smaller than
-    // the windows can take → landing-verify failures → bend/give-up
-    // floats.
+    const a = this._treeMinSizes(node.first, gap);
+    const b = this._treeMinSizes(node.second, gap);
+    // 'h' = children side by side (widths add), 'v' = stacked (heights add).
+    // Each split also consumes ONE gap along its axis, so reserve `gap` here —
+    // without it every nested split under-reserves by a gap and the deep slots
+    // come out too small (windows then overlap instead of shrinking).
     if (node.direction === 'h') {
-        node._minW = a.w + b.w;
+        node._minW = a.w + b.w + gap;
         node._minH = Math.max(a.h, b.h);
     } else {
         node._minW = Math.max(a.w, b.w);
-        node._minH = a.h + b.h;
+        node._minH = a.h + b.h + gap;
     }
     return { w: node._minW, h: node._minH };
 }
 
 export function _clampTreeToMinSizes(node, areaW, areaH, gap) {
     if (!node || node.type !== 'split') return;
-    this._clampTreeToMinSizes(node.first, areaW, areaH, gap);
-    this._clampTreeToMinSizes(node.second, areaW, areaH, gap);
+    // Clamp THIS split against its own span, then descend with each child's
+    // real slot. (Clamping bottom-up against the FULL area under-enforced
+    // nested mins — deep splits were handed slots smaller than their
+    // windows' minimum, which overlap instead of shrinking.)
     if (node.direction === 'h') {
         const minW1 = node.first?._minW || 0;
         const minW2 = node.second?._minW || 0;
@@ -323,6 +333,17 @@ export function _clampTreeToMinSizes(node, areaW, areaH, gap) {
                 node.ratio = Math.max(minRatio, Math.min(maxRatio, node.ratio));
             }
         }
+    }
+    const isH = node.direction === 'h';
+    const axis = isH ? areaW : areaH;
+    const split = Math.floor((axis - gap) * node.ratio);
+    const secondSize = axis - split - gap;
+    if (isH) {
+        this._clampTreeToMinSizes(node.first, split, areaH, gap);
+        this._clampTreeToMinSizes(node.second, secondSize, areaH, gap);
+    } else {
+        this._clampTreeToMinSizes(node.first, areaW, split, gap);
+        this._clampTreeToMinSizes(node.second, areaW, secondSize, gap);
     }
 }
 
@@ -433,6 +454,12 @@ export function _dwindleShapeFromString(str) {
     }
 }
 
+function _leafCount(node) {
+    if (!node || node.type === 'empty') return 0;
+    if (node.type === 'leaf') return 1;
+    return _leafCount(node.first) + _leafCount(node.second);
+}
+
 export function _reconcileTreeRatios(saved, live) {
     // Copy saved split ratios into the LIVE tree wherever the two
     // structures correspond (same direction down the path). A direction
@@ -444,7 +471,12 @@ export function _reconcileTreeRatios(saved, live) {
     if (saved.direction !== live.direction) return false;
     let changed = false;
     const r = Number(saved.ratio);
-    if (Number.isFinite(r) && r > 0.02 && r < 0.98 &&
+    // Only share a ratio between arrangements of the SAME shape — a shape
+    // saved from a smaller/mirrored tree (e.g. a 2-window 85/15) applied to a
+    // bigger or flipped one starves everything past the first split.
+    if (_leafCount(saved.first) === _leafCount(live.first) &&
+        _leafCount(saved.second) === _leafCount(live.second) &&
+        Number.isFinite(r) && r > 0.02 && r < 0.98 &&
         Math.abs(live.ratio - r) > 0.0005) {
         live.ratio = r;
         changed = true;

@@ -88,3 +88,34 @@ test('_reconcileTreeRatios: ignores ratios outside the sane 0.02..0.98 band', ()
   assert.equal(self._reconcileTreeRatios(saved, live), false);
   assert.equal(live.ratio, 0.5);
 });
+
+test('_reconcileTreeRatios: ignores a shape saved from a DIFFERENT window count (regression)', () => {
+  const self = makeSelf();
+  // A 2-window 85/15 shape must not be applied to a 7-window tree (it starved
+  // everything past the first split → sub-minimum slots → floated windows).
+  const saved = split('h', 0.85, leaf(null), leaf(null));
+  const live = split('h', 0.5, leaf(null),
+    split('v', 0.5, leaf(null), split('h', 0.5, leaf(null),
+      split('v', 0.5, leaf(null), split('h', 0.5, leaf(null), leaf(null))))));
+  assert.equal(self._reconcileTreeRatios(saved, live), false);
+  assert.equal(live.ratio, 0.5);
+});
+
+test('_reconcileTreeRatios: copies ratios when the window counts match', () => {
+  const self = makeSelf();
+  const saved = split('h', 0.8, leaf(null), split('v', 0.4, leaf(null), leaf(null)));
+  const live = split('h', 0.5, leaf(null), split('v', 0.5, leaf(null), leaf(null)));
+  assert.equal(self._reconcileTreeRatios(saved, live), true);
+  assert.equal(live.ratio, 0.8);
+  assert.equal(live.second.ratio, 0.4);
+});
+
+test('_reconcileTreeRatios: ignores a mirrored shape with the same leaf count (regression)', () => {
+  const self = makeSelf();
+  // Root counts match (1 + 2) but the big subtree is on the other side —
+  // copying 0.85 would cram the live 2-leaf subtree into 15%.
+  const saved = split('h', 0.85, split('v', 0.5, leaf(null), leaf(null)), leaf(null));
+  const live = split('h', 0.5, leaf(null), split('v', 0.5, leaf(null), leaf(null)));
+  assert.equal(self._reconcileTreeRatios(saved, live), false);
+  assert.equal(live.ratio, 0.5);
+});
