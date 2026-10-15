@@ -30,8 +30,10 @@ const codeOnly = allJs
 
 const schemaKeys = new Set([...schemaXml.matchAll(/<key\s+name="([^"]+)"/g)].map((m) => m[1]));
 
+const keybindingsJs = readFileSync(join(ext, 'modules', 'keybindings.js'), 'utf8');
+
 function extractKeybindKeys() {
-  const block = extensionJs.match(/const PLAID_KEYBIND_KEYS = \[([\s\S]*?)\];/);
+  const block = keybindingsJs.match(/const PLAID_KEYBIND_KEYS = \[([\s\S]*?)\];/);
   assert.ok(block, 'PLAID_KEYBIND_KEYS block not found');
   return [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
 }
