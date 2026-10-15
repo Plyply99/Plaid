@@ -730,18 +730,35 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             modal: true,
             transient_for: row.get_root(),
             title: _('Set Shortcut'),
-            // Roomy enough for the icon, title and the two-line hint — a small
-            // window clipped the hint behind a scroll.
-            default_width: 480,
-            default_height: 320,
+            // Width fixed, height left to the content's natural size — a hard
+            // default_height clipped the hint (StatusPage's content is taller
+            // than it looks, and that varies with font/scale).
+            default_width: 440,
         });
 
-        const content = new Adw.StatusPage({
-            title: _('Press a new shortcut'),
-            description: _('Press Backspace to clear, Escape to cancel. If nothing happens, the combination is already taken by GNOME or another app — free it there first.'),
-            icon_name: 'input-keyboard-symbolic',
+        // Compact layout rather than Adw.StatusPage: StatusPage's icon is
+        // deliberately large, which pushed the hint below the fold.
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 12,
+            margin_top: 24,
+            margin_bottom: 24,
+            margin_start: 24,
+            margin_end: 24,
+            valign: Gtk.Align.CENTER,
         });
-        dialog.set_content(content);
+        box.append(new Gtk.Image({ icon_name: 'input-keyboard-symbolic', pixel_size: 48 }));
+        box.append(new Gtk.Label({
+            label: _('Press a new shortcut'),
+            css_classes: ['title-3'],
+        }));
+        box.append(new Gtk.Label({
+            label: _('Backspace clears, Escape cancels.\nIf nothing happens, the combination is already taken by GNOME or another app — free it there first.'),
+            wrap: true,
+            justify: Gtk.Justification.CENTER,
+            css_classes: ['dim-label'],
+        }));
+        dialog.set_content(box);
 
         const controller = new Gtk.EventControllerKey();
         controller.connect('key-pressed', (_c, keyval, _keycode, state) => {
