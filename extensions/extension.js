@@ -43,12 +43,6 @@ const PLAID_KEYBIND_KEYS = [
     'scratchpad-toggle', 'scratchpad-add', 'dropdown-terminal',
 ];
 
-// The GNOME Shell re-enables extensions after every screen unlock, which
-// re-runs enable(). The login splash is a brand moment for real logins only
-// (fresh shell process = fresh module), so a module-level flag survives the
-// lock/unlock re-enable cycle but resets on the next login.
-let _splashShownThisShell = false;
-
 // Monitor-geometry cache version: bumped by monitors-changed so the blur
 // effect's per-frame _monitorDims scan is served from a module-level cache
 // (bumped only when the geometry actually changes).
@@ -315,14 +309,13 @@ export default class TilingWMExtension extends Extension {
         }
         this._destroyed = false;
         this._settings = this.getSettings();
-        try { this._cleanupLegacyBlur(); } catch (_e) {}
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
         this._floatingTitlePatterns = this._compileTitlePatterns(this._floatingTitles);
         this._floatProcessCache = new Map();
         this._minSizeOverrides = this._parseMinSizeOverrides(this._settings.get_strv('min-window-sizes'));
         if (this._minSizeOverrides.size > 0)
-            log(`[plaid] min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
+            this._debugLog(`min-sizes: ${[...this._minSizeOverrides.entries()].map(([k, v]) => `${k}=${v.w}x${v.h}`).join(', ')} (override loaded)`);
         this._windowBorders = new Map();
         this._scratchpadRings = new Map();
         this._windowMasks = new Map();
@@ -418,7 +411,6 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppSettingsChangedId = 0;
         this._backgroundAppEnabledChangedId = 0;
         this._backgroundAppRestartId = 0;
-        this._releaseCheckId = 0;
         this._pointerFocusId = 0;
         this._pointerFocusLastX = -1;
         this._pointerFocusLastY = -1;
@@ -484,13 +476,6 @@ export default class TilingWMExtension extends Extension {
         });
         this._initBackgroundApp();
         this._initPointerFocus();
-        if (this._releaseCheckId) GLib.source_remove(this._releaseCheckId);
-        this._releaseCheckId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 15000, () => {
-            this._releaseCheckId = 0;
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
-            this._checkForUpdates();
-            return GLib.SOURCE_REMOVE;
-        });
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
@@ -757,10 +742,6 @@ export default class TilingWMExtension extends Extension {
         if (this._backgroundAppRestartId) {
             GLib.source_remove(this._backgroundAppRestartId);
             this._backgroundAppRestartId = 0;
-        }
-        if (this._releaseCheckId) {
-            GLib.source_remove(this._releaseCheckId);
-            this._releaseCheckId = 0;
         }
         this._teardownPointerFocus();
         if (this._pointerFocusEnabledId) {
@@ -2170,7 +2151,7 @@ export default class TilingWMExtension extends Extension {
                         try {
                             if (this._stackDiagnostics && !this._stackDiagnostics.has(win.get_id())) {
                                 this._stackDiagnostics.add(win.get_id());
-                                log(`[plaid] stack reassert: transient ${win.get_id()} re-positioned above ${parent.get_wm_class_instance() || '?'}`);
+                                this._debugLog(`stack reassert: transient ${win.get_id()} re-positioned above ${parent.get_wm_class_instance() || '?'}`);
                             }
                         } catch (_e) {}
                         win.raise();
@@ -2270,7 +2251,7 @@ export default class TilingWMExtension extends Extension {
         if (this._queuedAnimWorkspaces && this._queuedAnimWorkspaces.size > 0) {
             const pending = [...this._queuedAnimWorkspaces];
             this._queuedAnimWorkspaces.clear();
-            log(`[plaid] anim: cancelled, draining ${pending.length} queued retiles`);
+            this._debugLog(`anim: cancelled, draining ${pending.length} queued retiles`);
             for (const ws of pending) this._scheduleRetile(ws);
         }
     }
@@ -2556,7 +2537,7 @@ export default class TilingWMExtension extends Extension {
             // unconditional log claimed "bent" even when every clamp was a
             // no-op (it misled the 2026-10-02 triage).
             if (!changed) return;
-            log(`[plaid] constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
+            this._debugLog(`constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
             this._scheduleSaveLayouts();
         } catch (e) {
             // The whole bend used to be swallowed silently — any exception
@@ -2573,7 +2554,7 @@ export default class TilingWMExtension extends Extension {
             const win = s.win;
             if (!win || !win.get_compositor_private()) {
                 if (!pure)
-                    log(`[plaid] anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
+                    this._debugLog(`anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
                 return false;
             }
             if (this._landingGivenUp && this._landingGivenUp.has(win)) return false;
@@ -2641,7 +2622,7 @@ export default class TilingWMExtension extends Extension {
     _retryLanding(win) {
         if (!this._landingRetries || !this._landingGivenUp || this._destroyed || !win) return;
         if (!win.get_compositor_private()) {
-            log(`[plaid] anim: landing retry skipped (window gone) id=${win.get_id()}`);
+            this._debugLog(`anim: landing retry skipped (window gone) id=${win.get_id()}`);
             return;
         }
         const n = (this._landingRetries.get(win) || 0) + 1;
@@ -2722,7 +2703,7 @@ export default class TilingWMExtension extends Extension {
                 this._animating = false;
                 const pending = [...this._queuedAnimWorkspaces];
                 this._queuedAnimWorkspaces.clear();
-                log(`[plaid] anim: watchdog drained stalled queue (${pending.length})`);
+                this._debugLog(`anim: watchdog drained stalled queue (${pending.length})`);
                 for (const ws of pending) this._scheduleRetile(ws);
             } else {
                 this._queuedAnimWorkspaces.add(workspace);
@@ -3744,7 +3725,7 @@ export default class TilingWMExtension extends Extension {
                 // exists to prevent for registered-then-floated X11
                 // windows. Border-only teardown: keep the mask alive.
                 if (!scratch && !this._isFloating(win) && this._windowBorders.has(win)) {
-                    log(`[plaid] border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
+                    this._debugLog(`border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
                     try { this._windowBorders.get(win).destroy(); } catch (_e) {}
                     this._windowBorders.delete(win);
                     if (this._scratchpadRings) {
@@ -4074,13 +4055,13 @@ export default class TilingWMExtension extends Extension {
             log(`[plaid] _startBorderAnimation failed: ${e.message}`);
             return;
         }
-        log('[plaid] border animation: start');
+        this._debugLog('border animation: start');
         this._borderAnimId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
             try {
                 if (this._destroyed ||
                     !this._settings.get_boolean('gradient-borders') ||
                     this._settings.get_int('border-animation-speed') <= 0) {
-                    log('[plaid] border animation: stop (settings)');
+                    this._debugLog('border animation: stop (settings)');
                     this._stopBorderAnimation();
                     return GLib.SOURCE_REMOVE;
                 }
@@ -4762,76 +4743,6 @@ export default class TilingWMExtension extends Extension {
         this._teardownMaskEffect(win, effect);
         this._windowMasks.delete(win);
     }
-    _cleanupLegacyBlur() {
-        // Auto-update sweep: v51.09/v51.10 installs with the bundled blur C
-        // library left artifacts that a plain zip install does NOT remove
-        // (gnome-extensions install --force only overwrites zip contents).
-        // Remove them at enable so no deprecated junk lingers on user
-        // systems:
-        //   1. ~/.config/environment.d/plaid-blur.conf (+ the dir if empty)
-        //   2. the extension's own lib/ (blur50/blur51 + synced base pair)
-        // The session-fixed env vars (LD_LIBRARY_PATH to a deleted dir) are
-        // inert; the conf removal clears them at the next login.
-        try {
-            const confFile = GLib.get_home_dir() + '/.config/environment.d/plaid-blur.conf';
-            if (GLib.file_test(confFile, GLib.FileTest.EXISTS)) {
-                GLib.remove(confFile);
-                log('[plaid] blur: removed legacy plaid-blur.conf (C library dropped in v51.11)');
-            }
-            try {
-                const confDir = GLib.get_home_dir() + '/.config/environment.d';
-                if (this._dirIsEmpty(confDir))
-                    GLib.remove(confDir);
-            } catch (_e) {}
-        } catch (e) {
-            log(`[plaid] blur: legacy conf cleanup failed: ${e.message}`);
-        }
-        try {
-            const [libPath] = GLib.filename_from_uri(import.meta.url);
-            const libDir = GLib.path_get_dirname(libPath) + '/lib';
-            if (GLib.file_test(libDir, GLib.FileTest.IS_DIR)) {
-                this._removeDirRecursive(libDir);
-                log(`[plaid] blur: removed legacy extension lib/ (${libDir})`);
-            }
-        } catch (e) {
-            log(`[plaid] blur: legacy lib cleanup failed: ${e.message}`);
-        }
-    }
-
-    _dirIsEmpty(dir) {
-        // GLib.dir_open/dir_read_name are NOT introspectable in GJS (undefined)
-        // — the old implementation threw and the try/catch returned false, so
-        // this silently no-oped on 50 and 51. Use Gio.File enumeration.
-        try {
-            const children = Gio.File.new_for_path(dir)
-                .enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
-            const info = children.next_file(null);
-            children.close(null);
-            return info === null;
-        } catch (_e) {
-            return false;
-        }
-    }
-
-    _removeDirRecursive(dir) {
-        // Same GJS-introspection issue as _dirIsEmpty (see above).
-        try {
-            const file = Gio.File.new_for_path(dir);
-            const children = file.enumerate_children(
-                'standard::name,standard::type', Gio.FileQueryInfoFlags.NONE, null);
-            let info;
-            while ((info = children.next_file(null)) !== null) {
-                const child = children.get_child(info);
-                if (info.get_file_type() === Gio.FileType.DIRECTORY)
-                    this._removeDirRecursive(child.get_path());
-                else
-                    child.delete(null);
-            }
-            children.close(null);
-            file.delete(null);
-        } catch (_e) {}
-    }
-
     _blurCornerRadius() {
         return (this._settings && this._settings.get_boolean('rounded-corners'))
             ? this._settings.get_int('border-radius') + 1
@@ -5573,7 +5484,7 @@ export default class TilingWMExtension extends Extension {
                 // counts as a change (the settle poll refreshes borders once).
                 changed = true;
                 if (!blur._reAttachPending) {
-                    log(`[plaid] blur: ${sourceDead ? 'source detached' : 'sibling detached'} → deferred re-attach (${win.get_wm_class_instance() || '?'})`);
+                    this._debugLog(`blur: ${sourceDead ? 'source detached' : 'sibling detached'} → deferred re-attach (${win.get_wm_class_instance() || '?'})`);
                     blur._reAttachPending = true;
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                         if (this._destroyed) return GLib.SOURCE_REMOVE;
@@ -5604,7 +5515,7 @@ export default class TilingWMExtension extends Extension {
                         // Inside the guard: _syncBlurStacking runs on EVERY
                         // restacked — logging here unguarded spammed the
                         // journal once per restack while a mismatch persisted.
-                        log(`[plaid] blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
+                        this._debugLog(`blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
                         blur._reAttachPending = true;
                         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                             if (this._destroyed) return GLib.SOURCE_REMOVE;
@@ -6256,81 +6167,6 @@ export default class TilingWMExtension extends Extension {
         const layout = this._getWorkspaceLayout(ws);
         this._showPopup(`Workspace ${this._bgAppRealToDisplay(this._wsIndex(ws)) + 1}`,
             `Layout: ${LAYOUT_NAMES[layout] || layout}`);
-    }
-
-    _checkForUpdates() {
-        if (this._destroyed || !this._settings) return;
-        if (this.path.startsWith('/usr/share/')) return;
-        try {
-            if (!this._settings.get_boolean('release-check-enabled')) return;
-        } catch (_e) { return; }
-        try {
-            const proc = Gio.Subprocess.new(
-                ['/bin/sh', '-c',
-                    'curl -sL --max-time 10 ' +
-                    'https://api.github.com/repos/Plyply99/Plaid/releases/latest'],
-                Gio.SubprocessFlags.STDOUT_PIPE);
-            proc.communicate_utf8_async(null, null, (sub, result) => {
-                try {
-                    if (this._destroyed) return;
-                    const [, stdout] = sub.communicate_utf8_finish(result);
-                    const json = JSON.parse(stdout || '');
-                    const tag = String(json.tag_name || '');
-                    const m = tag.match(/^v?(\d+)\.(\d+)$/);
-                    if (!m) return;
-                    const latest = parseInt(m[1], 10) * 100 + parseInt(m[2], 10);
-                    const installed = parseInt(this.metadata.version, 10);
-                    if (latest <= installed) return;
-                    let assetUrl = null;
-                    for (const a of (json.assets || [])) {
-                        if (a.name === 'plaid@plyply99.zip') {
-                            assetUrl = a.browser_download_url || null;
-                            break;
-                        }
-                    }
-                    if (!assetUrl) {
-                        Main.notify('Plaid update failed',
-                            'Could not find the update zip. Check the release page.');
-                        return;
-                    }
-                    this._installUpdate(assetUrl, m[1], m[2]);
-                } catch (_e) {}
-            });
-        } catch (_e) {}
-    }
-
-    _installUpdate(assetUrl, major, minor) {
-        const zipPath = `${GLib.get_home_dir()}/Downloads/plaid@plyply99.zip`;
-        const dl = Gio.Subprocess.new(
-            ['/bin/sh', '-c', `curl -sfL --max-time 60 -o "${zipPath}" "${assetUrl}"`],
-            Gio.SubprocessFlags.NONE);
-        dl.wait_check_async(null, (sub, res) => {
-            try {
-                sub.wait_check_finish(res);
-            } catch (_e) {
-                if (!this._destroyed)
-                    Main.notify('Plaid update failed',
-                        'Could not download the update. Check the release page.');
-                return;
-            }
-            if (this._destroyed) return;
-            const inst = Gio.Subprocess.new(
-                ['gnome-extensions', 'install', '--force', zipPath],
-                Gio.SubprocessFlags.NONE);
-            inst.wait_check_async(null, (sub2, res2) => {
-                try {
-                    sub2.wait_check_finish(res2);
-                } catch (_e) {
-                    if (!this._destroyed)
-                        Main.notify('Plaid update failed',
-                            'Could not install the update. Check the release page.');
-                    return;
-                }
-                if (this._destroyed) return;
-                Main.notify(`Plaid v${major}.${minor} available`,
-                    'Log out and back in to apply.');
-            });
-        });
     }
 
     _showPopup(title, subtitle = null, duration = 3000, onActivate = null) {
@@ -7117,7 +6953,6 @@ export default class TilingWMExtension extends Extension {
         } catch (_e) {
             this._backgroundAppEnabledChangedId = 0;
         }
-        this._showBackgroundAppInitOverlay();
         this._scheduleBackgroundAppReservation();
         const current = this._settings.get_string('background-app');
         if (current)
@@ -7431,7 +7266,7 @@ export default class TilingWMExtension extends Extension {
             this._addSignal(global.workspace_manager, global.workspace_manager.connect(
                 'active-workspace-changed', () => this._scheduleWorkspacePillUpdate()));
             this._scheduleWorkspacePillUpdate();
-            log('[plaid] workspace pill initialized');
+            this._debugLog('workspace pill initialized');
         } catch (e) {
             log(`[plaid] workspace pill init failed: ${e.message}`);
             this._workspacePill = null;
@@ -7586,174 +7421,6 @@ export default class TilingWMExtension extends Extension {
             'Click to dismiss');
     }
 
-    _loadInitLogo(basePath, size) {
-        const pngPath = `${basePath}.png`;
-        try {
-            const surface = cairo.ImageSurface.createFromPNG(pngPath);
-            if (!surface || surface.getWidth() === 0 || surface.getHeight() === 0) {
-                log(`[plaid] init overlay logo: ${pngPath} surface failed (empty)`);
-                return null;
-            }
-            const area = new St.DrawingArea({
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-                width: size,
-                height: size,
-            });
-            area._plaidLogoSurface = surface;
-            area._plaidLogoScale = size / surface.getWidth();
-            area.connect('repaint', () => {
-                try {
-                    const cr = area.get_context();
-                    cr.scale(area._plaidLogoScale, area._plaidLogoScale);
-                    cr.setSourceSurface(area._plaidLogoSurface, 0, 0);
-                    cr.paint();
-                } catch (e) {
-                    log(`[plaid] init overlay logo: ${pngPath} paint failed: ${e.message}`);
-                }
-            });
-            log(`[plaid] init overlay logo: ${pngPath} drawn`);
-            return area;
-        } catch (e) {
-            log(`[plaid] init overlay logo: ${pngPath} failed: ${e.message}`);
-            return null;
-        }
-    }
-
-    _showBackgroundAppInitOverlay() {
-        // The Plaid login moment — shown once per shell session (real logins
-        // only). GNOME Shell re-enables extensions after every unlock; the
-        // module-level flag survives that cycle so the splash stays a login
-        // brand moment instead of appearing on every screen-lock unlock.
-        if (this._settings && !this._settings.get_boolean('init-overlay-enabled')) return;
-        if (_splashShownThisShell) return;
-        _splashShownThisShell = true;
-        if (this._backgroundAppInitOverlay) return;
-        this._backgroundAppInitOverlayAwaiting =
-            this._settings && this._settings.get_boolean('background-app-enabled') &&
-            !!this._settings.get_string('background-app');
-        this._backgroundAppInitOverlayMinTime = Date.now() + 3000;
-        try {
-            const stage = global.stage;
-            const overlay = new St.BoxLayout({
-                reactive: true,
-                visible: true,
-                orientation: Clutter.Orientation.VERTICAL,
-                x_expand: true,
-                y_expand: true,
-            });
-            overlay.set_style('background-color: rgba(0, 0, 0, 1);');
-            overlay.set_size(stage.width, stage.height);
-            overlay.set_position(0, 0);
-            const column = new St.BoxLayout({
-                orientation: Clutter.Orientation.VERTICAL,
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            const logoRow = new St.BoxLayout({
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            logoRow.set_style('spacing: 24px;');
-            const scaleFactor = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-            const logoSize = 140 * scaleFactor;
-            const area = this._loadInitLogo(`${this.path}/assets/plaid-logo`, logoSize);
-            if (area)
-                logoRow.add_child(area);
-            if (logoRow.get_children().length > 0)
-                column.add_child(logoRow);
-            const wordmark = new St.Label({
-                text: 'Plaid',
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-                style: 'font-size: 64px; font-weight: bold; color: #ffffff;',
-            });
-            const subtitle = new St.Label({
-                text: 'is initializing…',
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-                style: 'font-size: 28px; color: #ffffff;',
-            });
-            column.add_child(wordmark);
-            column.add_child(subtitle);
-            overlay.add_child(column);
-            Main.uiGroup.add_child(overlay);
-            this._backgroundAppInitOverlay = overlay;
-            // Keep the Clutter.Grab handle — GNOME 50/51 popModal() requires
-            // it (not the actor). Passing the actor made _findModal return -1
-            // and popModal throw, swallowed, leaving modalCount incremented
-            // (2026-10-05 audit).
-            this._backgroundAppInitOverlayGrab = Main.pushModal(overlay);
-            this._backgroundAppInitOverlayModal = true;
-            this._backgroundAppInitOverlayCapId =
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
-                    this._backgroundAppInitOverlayCapId = 0;
-                    this._hideBackgroundAppInitOverlay();
-                    return GLib.SOURCE_REMOVE;
-                });
-            this._backgroundAppInitOverlayMinId =
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
-                    this._backgroundAppInitOverlayMinId = 0;
-                    // No bg-app pipeline? The moment ends at the 3s mark.
-                    // Otherwise the ready signal gates the dismissal.
-                    if (!this._backgroundAppInitOverlayAwaiting)
-                        this._hideBackgroundAppInitOverlay();
-                    return GLib.SOURCE_REMOVE;
-                });
-            log('[plaid] background app: init overlay shown (input blocked)');
-        } catch (e) {
-            this._backgroundAppInitOverlay = null;
-            log(`[plaid] background app: init overlay failed: ${e.message}`);
-        }
-    }
-
-    _requestBackgroundAppInitDismiss() {
-        if (!this._backgroundAppInitOverlay) return;
-        if (this._backgroundAppInitOverlayPendingDismissId) return;
-        const remaining = this._backgroundAppInitOverlayMinTime - Date.now();
-        if (remaining <= 0) {
-            this._hideBackgroundAppInitOverlay();
-        } else {
-            this._backgroundAppInitOverlayPendingDismissId =
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, remaining, () => {
-                    this._backgroundAppInitOverlayPendingDismissId = 0;
-                    this._hideBackgroundAppInitOverlay();
-                    return GLib.SOURCE_REMOVE;
-                });
-        }
-    }
-
-    _hideBackgroundAppInitOverlay() {
-        const overlay = this._backgroundAppInitOverlay;
-        this._backgroundAppInitOverlay = null;
-        this._backgroundAppInitOverlayAwaiting = false;
-        if (this._backgroundAppInitOverlayCapId) {
-            GLib.source_remove(this._backgroundAppInitOverlayCapId);
-            this._backgroundAppInitOverlayCapId = 0;
-        }
-        if (this._backgroundAppInitOverlayMinId) {
-            GLib.source_remove(this._backgroundAppInitOverlayMinId);
-            this._backgroundAppInitOverlayMinId = 0;
-        }
-        if (this._backgroundAppInitOverlayPendingDismissId) {
-            GLib.source_remove(this._backgroundAppInitOverlayPendingDismissId);
-            this._backgroundAppInitOverlayPendingDismissId = 0;
-        }
-        if (this._backgroundAppInitOverlayModal) {
-            try {
-                const grab = this._backgroundAppInitOverlayGrab;
-                if (grab) Main.popModal(grab);
-                else if (overlay) Main.popModal(overlay);
-            } catch (_e) {}
-            this._backgroundAppInitOverlayGrab = null;
-            this._backgroundAppInitOverlayModal = false;
-        }
-        if (overlay) {
-            try { overlay.destroy(); } catch (_e) {}
-            log('[plaid] background app: init overlay dismissed');
-        }
-    }
-
     _launchBackgroundApp(force = false) {
         if (this._destroyed || !this._settings) return;
         if (!this._settings.get_boolean('background-app-enabled')) return;
@@ -7793,7 +7460,6 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppPendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30000, () => {
             this._backgroundAppPendingId = 0;
             this._backgroundAppPending = false;
-            this._requestBackgroundAppInitDismiss();
             if (this._backgroundAppWaiter) {
                 try { this._backgroundAppWaiter.cleanup(false); } catch (_e) {}
             }
@@ -7846,7 +7512,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         this._backgroundAppSpawnRetries++;
-        log(`[plaid] background app: process exited before claim — respawn ${this._backgroundAppSpawnRetries}/2`);
+        this._debugLog(`background app: process exited before claim — respawn ${this._backgroundAppSpawnRetries}/2`);
         this._spawnBackgroundAppProcess(command);
     }
 
@@ -7908,7 +7574,7 @@ export default class TilingWMExtension extends Extension {
             const w = this._findBackgroundAppWindow();
             if (w) {
                 if (this._adoptFoundWindow(w))
-                    log('[plaid] background app: resumed surviving window (lock cycle, retry)');
+                    this._debugLog('background app: resumed surviving window (lock cycle, retry)');
                 else
                     this._debugLog('adopt: retry found window but adoption failed');
                 return GLib.SOURCE_REMOVE;
@@ -7982,7 +7648,7 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppWin = win;
             this._backgroundAppSpawnRetries = 0;
             this._backgroundAppUnmanagedId = win.connect('unmanaged', () => {
-                log(`[plaid] background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
+                this._debugLog(`background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
                 if (this._backgroundAppWin === win)
                     this._backgroundAppWin = null;
             });
@@ -7992,7 +7658,7 @@ export default class TilingWMExtension extends Extension {
             return false;
         }
         this._debugLog(`adopt: found ${win.get_wm_class_instance() || '?'}`);
-        log('[plaid] background app: resumed surviving window (lock cycle)');
+        this._debugLog('background app: resumed surviving window (lock cycle)');
         return true;
     }
 
@@ -8154,7 +7820,7 @@ export default class TilingWMExtension extends Extension {
         this._removeBorder(win);
         this._backgroundAppWin = win;
         this._backgroundAppUnmanagedId = win.connect('unmanaged', () => {
-            log(`[plaid] background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
+            this._debugLog(`background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
             if (this._backgroundAppWin === win)
                 this._backgroundAppWin = null;
         });
@@ -8212,7 +7878,6 @@ export default class TilingWMExtension extends Extension {
                 this._debugLog('background app: clone re-raised after startup settle');
                 return GLib.SOURCE_REMOVE;
             });
-            this._requestBackgroundAppInitDismiss();
             return GLib.SOURCE_REMOVE;
         };
         try {
@@ -8519,7 +8184,7 @@ export default class TilingWMExtension extends Extension {
                 // left the background invisible for the rest of the session
                 // until a manual bg-app toggle rebuilt it. Re-attach to the
                 // CURRENT background group and re-stretch.
-                log('[plaid] background app: clone orphaned — re-parenting to background group');
+                this._debugLog('background app: clone orphaned — re-parenting to background group');
                 const parent = clone.get_parent();
                 if (parent) parent.remove_child(clone);
                 bg.add_child(clone);
@@ -8633,7 +8298,7 @@ export default class TilingWMExtension extends Extension {
                 if (srcActor && this._backgroundAppClone.get_source() !== srcActor) {
                     // The window actor can be replaced (surface round-trips):
                     // the clone would keep painting the dead source (blank).
-                    log('[plaid] background app: clone source actor replaced — recreating clone');
+                    this._debugLog('background app: clone source actor replaced — recreating clone');
                     try { this._backgroundAppClone.destroy(); } catch (_e) {}
                     this._backgroundAppClone = null;
                     this._ensureBackgroundAppClone(win);
@@ -8653,7 +8318,7 @@ export default class TilingWMExtension extends Extension {
             }
             if (ticks >= 20) {
                 const srcNow = c ? c.get_source() : null;
-                log(`[plaid] background app: clone watchdog gave up clone=${!!c} ` +
+                this._debugLog(`background app: clone watchdog gave up clone=${!!c} ` +
                     `parent=${!!(c && c.get_parent() === bg)} ` +
                     `source=${srcNow ? `${Math.round(srcNow.width)}x${Math.round(srcNow.height)}` : 'none'}`);
                 this._backgroundAppCloneWatchId = 0;
@@ -8739,7 +8404,6 @@ export default class TilingWMExtension extends Extension {
         }
         this._backgroundAppPending = false;
         this._backgroundAppSpawnRetries = 0;
-        this._hideBackgroundAppInitOverlay();
         this._disconnectBackgroundAppParkWatch();
         if (this._backgroundAppCloneWatchId) {
             GLib.source_remove(this._backgroundAppCloneWatchId);
@@ -8758,14 +8422,6 @@ export default class TilingWMExtension extends Extension {
             this._backgroundAppParkRetryId = 0;
         }
         this._backgroundAppParkRetryCount = 0;
-        this._backgroundAppInitOverlay = null;
-        this._backgroundAppInitOverlayModal = false;
-        this._backgroundAppInitOverlayGrab = null;
-        this._backgroundAppInitOverlayCapId = 0;
-        this._backgroundAppInitOverlayMinId = 0;
-        this._backgroundAppInitOverlayPendingDismissId = 0;
-        this._backgroundAppInitOverlayMinTime = 0;
-        this._backgroundAppInitOverlayAwaiting = false;
         // Keep the hourly keep-alive re-arm while the reservation is kept, or
         // the shell's 12h keep-alive could lapse and sweep the empty parking.
         if (releaseReservation && this._backgroundAppKeepAliveId) {

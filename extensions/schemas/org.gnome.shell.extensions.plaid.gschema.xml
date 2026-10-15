@@ -445,19 +445,5 @@
       <description>Border color for scratchpad windows so the scratch layer is visually distinct, e.g. ['#f5c211']</description>
     </key>
 
-    <!-- Branding -->
-    <key name="init-overlay-enabled" type="b">
-      <default>true</default>
-      <summary>Show the Plaid init overlay</summary>
-      <description>Show the full-screen 'Plaid is initializing…' moment at login. Applies at your next login.</description>
-    </key>
-
-    <!-- Updates -->
-    <key name="release-check-enabled" type="b">
-      <default>true</default>
-      <summary>Automatic Plaid updates</summary>
-      <description>Check GitHub for a newer Plaid release at session start and install it automatically. A notification announces the update; it loads on your next login. Turn off to skip checks and notifications. Disabled automatically when Plaid is installed system-wide (e.g. on PlaidOS, where updates come via bootc upgrade).</description>
-    </key>
-
   </schema>
 </schemalist>

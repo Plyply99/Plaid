@@ -81,16 +81,6 @@ Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki).
 
 
 
-
-- **Plaid Welcome**: Plaid does serious hokus pokus, a few moments to ready your session.
-
-
-<img width="3840" height="2160" alt="Plaid-initialize" src="https://github.com/user-attachments/assets/981d98f0-0121-4ecb-831f-d66e872b3fe2" />
-
-
-
-
-
 - **PWP Plaid Workspace Pill**: The top bar's workspace indicator becomes a pill —
   visible workspace numbers, active workspace's app icon and the focused
   window's title — while the overview and app switcher stay stock GNOME.

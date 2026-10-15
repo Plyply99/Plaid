@@ -55,7 +55,7 @@ if [ -d "$SOURCE/assets" ] || [ -d "$SOURCE/modules" ] || [ -f "$SOURCE/plaid-te
     (cd "$SOURCE" && python3 -c "
 import zipfile, os
 out = '$OUT/plaid@plyply99.zip'
-paths = ['assets', 'modules', 'plaid-terminal-settings.sh', 'plaid-terminal-settings.fish']
+paths = ['assets', 'modules', 'LICENSE', 'ATTRIBUTION', 'plaid-terminal-settings.sh', 'plaid-terminal-settings.fish']
 appended = []
 with zipfile.ZipFile(out, 'a') as z:
     existing = set(z.namelist())

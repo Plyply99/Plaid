@@ -1,0 +1,21 @@
+Attribution
+===========
+
+Plaid is free software licensed under the GNU General Public License,
+version 3.0 or later. See the LICENSE file (also included in this extension
+package).
+
+Third-party components
+----------------------
+
+* Window blur kernel
+  The window-blur effect reimplements the separable Gaussian blur used by
+  GNOME Shell / Mutter (the GLSL in mutter's clutter-blur.c / ClutterBlurNode,
+  distributed under the GNU Lesser General Public License v2.1-or-later).
+  The shader math is reproduced for behavioral compatibility with the shell's
+  native blur.
+
+* Ecosystem
+  Plaid builds on the GNOME Shell and GNOME Shell extensions ecosystem. Thanks
+  to the GNOME developers and the extensions community whose work and
+  documentation make projects like this possible.

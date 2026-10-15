@@ -60,10 +60,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             _('Drag window edges to resize splits, drag title bar to swap windows'));
         this._addSwitchRow(group, settings, 'workspace-popup', _('Show Popups'),
             _('Show popups when switching workspaces and when tiling is toggled on or off'));
-        this._addSwitchRow(group, settings, 'release-check-enabled', _('Auto Update'),
-            _('Install updates automatically — they load on your next login.'));
-        this._addSwitchRow(group, settings, 'init-overlay-enabled', _('Show Init Overlay'),
-            _('Full-screen “Plaid is initializing…” moment at login. Applies at your next login.'));
         this._addSwitchRow(group, settings, 'debug', _('Debug Logging'),
             _('Verbose diagnostics to the system journal — only enable when troubleshooting.'));
 

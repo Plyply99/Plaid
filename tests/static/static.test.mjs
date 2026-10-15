@@ -48,11 +48,9 @@ test('every literal settings key read from this._settings exists in the schema',
   assert.deepEqual(missing, [], `settings keys read but not declared: ${missing.join(', ')}`);
 });
 
-test('metadata version/version-name/uuid/shell-version are consistent', () => {
+test('metadata uuid/shell-version are consistent', () => {
   assert.equal(metadata.uuid, 'plaid@plyply99');
-  const major = Math.floor(metadata.version / 100);
-  const minor = metadata.version % 100;
-  assert.equal(metadata['version-name'], `v${major}.${String(minor).padStart(2, '0')}`);
+  assert.ok(Number.isInteger(metadata.version), 'version must be an integer');
   assert.ok(metadata['shell-version'].includes('50'), 'shell-version must include 50');
   assert.ok(metadata['shell-version'].includes('51'), 'shell-version must include 51');
 });
@@ -70,11 +68,6 @@ test('Clutter.get_default_backend is only used behind a feature-detect guard', (
 
 test('no removed St.BoxLayout vertical property usage', () => {
   assert.ok(!codeOnly.includes('.vertical'), 'St.BoxLayout.vertical was removed in GNOME 51');
-});
-
-test('no extensions/lib directory (it is deleted at every enable by _cleanupLegacyBlur)', () => {
-  assert.equal(existsSync(join(ext, 'lib')), false,
-    'extensions/lib exists — _cleanupLegacyBlur would delete it at enable');
 });
 
 test('prefs.js is present and non-empty', () => {
