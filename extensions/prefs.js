@@ -62,6 +62,8 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             _('Show popups when switching workspaces and when tiling is toggled on or off'));
         this._addSwitchRow(group, settings, 'debug', _('Debug Logging'),
             _('Verbose diagnostics to the system journal — only enable when troubleshooting.'));
+        this._addSwitchRow(group, settings, 'terminal-profile-integration', _('Shell Profile Integration'),
+            _('Add a source line to ~/.bashrc or config.fish so Plaid terminal settings apply to new shells.'));
 
         this._addSpinRow(group, settings, 'inside-gap', _('Inside Gaps'),
             _('Spacing between windows in pixels'), 0, 50, 1, 5);
@@ -413,8 +415,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         this._addSpinRow(ddtGroup, settings, 'dropdown-terminal-height', _('Terminal Height'),
             _('Height of the drop-down terminal as a percentage of the screen'), 20, 80, 1, 5);
-        this._addSwitchRow(ddtGroup, settings, 'terminal-profile-integration', _('Shell Profile Integration'),
-            _('Add a source line to ~/.bashrc or config.fish so Plaid terminal settings apply to new shells.'));
 
         const bgAppGroup = new Adw.PreferencesGroup({
             title: _('Background App'),
