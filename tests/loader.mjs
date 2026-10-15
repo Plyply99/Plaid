@@ -43,7 +43,9 @@ export async function resolve(specifier, context, nextResolve) {
 export async function load(url, context, nextLoad) {
   if (url.startsWith('gi://')) {
     const name = url.slice('gi://'.length).split('/')[0];
-    return { format: 'module', source: GI_SOURCES[name] ?? 'export default {};', shortCircuit: true };
+    if (!(name in GI_SOURCES))
+      throw new Error(`Unknown gi:// namespace in tests: gi://${name} — check the exact namespace casing`);
+    return { format: 'module', source: GI_SOURCES[name], shortCircuit: true };
   }
   if (url.startsWith('resource://')) {
     return { format: 'module', source: resourceSource(url), shortCircuit: true };
