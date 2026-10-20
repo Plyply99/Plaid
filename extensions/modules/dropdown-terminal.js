@@ -170,16 +170,19 @@ export function _clearDropdownWaiters() {
 export function _configureDropdownTerminal(win) {
     try { win.skip_taskbar = true; } catch (_e) {}
     try { win.make_above(); } catch (_e) {}
+    // Sticky: the terminal follows every workspace WITHOUT leaving an empty
+    // one. Dynamic workspaces ignore sticky windows, so a workspace is never
+    // removed/renumbered when the terminal moves (that was the "strange
+    // switching" with the DDT open).
+    try { win.stick(); } catch (_e) {}
 }
 
 export function _showDropdownTerminal(win) {
     try { win.unminimize(); } catch (_e) {}
     try { win.make_above(); } catch (_e) {}
-    try {
-        const ws = global.workspace_manager.get_active_workspace();
-        if (ws && win.get_workspace() !== ws)
-            win.change_workspace(ws);
-    } catch (_e) {}
+    // Sticky (see _configureDropdownTerminal) — re-assert in case something
+    // unstuck it, so it appears on the active workspace.
+    try { if (!win.is_on_all_workspaces()) win.stick(); } catch (_e) {}
     this._positionDropdownTerminal(win);
     try { win.activate(this._currentTime()); } catch (_e) {}
     this._applyDropdownEffects(win);
@@ -188,6 +191,10 @@ export function _showDropdownTerminal(win) {
 export function _syncDropdownWorkspace() {
     const win = this._dropdownWin;
     if (!win) return;
+    // Sticky (see _configureDropdownTerminal): it is already on every workspace.
+    // Moving it here on each switch emptied workspaces under dynamic
+    // workspaces, which then removed/renumbered them.
+    try { if (win.is_on_all_workspaces()) return; } catch (_e) {}
     const ws = global.workspace_manager.get_active_workspace();
     if (!ws) return;
     try {
@@ -197,6 +204,19 @@ export function _syncDropdownWorkspace() {
                 this._positionDropdownTerminal(win);
         }
     } catch (_e) {}
+}
+
+export function _scheduleDropdownWorkspaceSync() {
+    // Coalesce the burst of active-workspace-changed signals a switch can
+    // produce — moving the terminal on every one of them used to fight the
+    // switch itself.
+    if (this._dropdownSyncId) return;
+    this._dropdownSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 120, () => {
+        this._dropdownSyncId = 0;
+        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        this._syncDropdownWorkspace();
+        return GLib.SOURCE_REMOVE;
+    });
 }
 
 export function _dropdownRect() {
@@ -229,6 +249,13 @@ export function _positionDropdownTerminal(win) {
         try { rect = this._dropdownRect(); } catch (_e) {}
         if (!rect) return false;
         const before = win.get_frame_rect();
+        if (before.x === rect.x && before.y === rect.y &&
+            before.width === rect.width && before.height === rect.height) {
+            // Already at the target — skip the redundant move_resize (this
+            // used to fire on every workspace switch).
+            this._applyDropdownEffects(win);
+            return false;
+        }
         this._debugLog(`dropdown: position target=(${rect.x},${rect.y},${rect.width},${rect.height}) before=(${before.x},${before.y},${before.width},${before.height}) try=${retries}`);
         try {
             win.move_resize_frame(true, rect.x, rect.y, rect.width, rect.height);
@@ -285,6 +312,7 @@ export function _clearDropdownWindow() {
     this._removeBlur(win);
     try { win.skip_taskbar = false; } catch (_e) {}
     try { win.unmake_above(); } catch (_e) {}
+    try { win.unstick(); } catch (_e) {}
     this._dropdownWin = null;
 }
 
@@ -297,6 +325,7 @@ export const dropdownMethods = {
     _configureDropdownTerminal,
     _showDropdownTerminal,
     _syncDropdownWorkspace,
+    _scheduleDropdownWorkspaceSync,
     _dropdownRect,
     _positionDropdownTerminal,
     _dropdownMonitorIndex,

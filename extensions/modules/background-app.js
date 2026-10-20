@@ -811,6 +811,15 @@ export function _parkBackgroundAppOnWorkspace(win) {
     this._backgroundAppParkRetryCount = 0;
     const beforeIdx = this._wsIndex(ws);
     const targetIdx = this._wsIndex(this._backgroundAppParkingWs);
+    // Already parked on the parking workspace and maximized — skip the
+    // maximize/move_resize churn. Comparing against the monitor geometry never
+    // matched (a maximized window fills the work area, below the top bar), so
+    // this used to run on every workspace change and feed a switch loop.
+    if (beforeIdx >= 0 && beforeIdx === targetIdx) {
+        let parked = false;
+        try { parked = win.maximized_horz && win.maximized_vert; } catch (_e) {}
+        if (parked) return;
+    }
     try {
         if (win.get_workspace() !== this._backgroundAppParkingWs)
             win.change_workspace(this._backgroundAppParkingWs);
@@ -839,14 +848,54 @@ export function _applyBackgroundAppHiding() {
     const self = this;
     const origGetNeighbor = Meta.Workspace.prototype.get_neighbor;
     const wrappedGetNeighbor = function (direction) {
-        const neighbor = origGetNeighbor.call(this, direction);
-        if (!neighbor || neighbor === this) return neighbor;
-        if (neighbor === self._backgroundAppParkingWs) {
-            const next = origGetNeighbor.call(neighbor, direction);
-            if (next && next !== neighbor) return next;
-            return this;
+        // Skip the hidden parking workspace and WRAP at the ends. Returning
+        // null at the last workspace made the shell append a workspace when
+        // dynamic workspaces are on — which fed a BGAPP parking/switch churn
+        // loop and meant the switch never wrapped back to workspace 1.
+        // The shell calls get_neighbor() with Meta.MotionDirection values
+        // (LEFT=-3 / RIGHT=-4), while other callers use Meta.DisplayDirection
+        // (LEFT=2 / RIGHT=3). Accept BOTH — guarding on one enum only made this
+        // hook hand the call back to the original and silently skip the wrap.
+        const leftDirs = [Meta.MotionDirection.LEFT];
+        const rightDirs = [Meta.MotionDirection.RIGHT];
+        if (Meta.DisplayDirection) {
+            leftDirs.push(Meta.DisplayDirection.LEFT);
+            rightDirs.push(Meta.DisplayDirection.RIGHT);
         }
-        return neighbor;
+        if (!leftDirs.includes(direction) && !rightDirs.includes(direction))
+            return origGetNeighbor.call(this, direction);
+        const wm = global.workspace_manager;
+        const n = wm.get_n_workspaces();
+        // Resolve the parking slot by IDENTITY, with its known front/trailing
+        // home as a fallback. A stale Meta.Workspace must never let the hidden
+        // parking back into the cycle — it renders as a second "Workspace 1".
+        let parkingIdx = -1;
+        const parking = self._backgroundAppParkingWs;
+        if (parking) {
+            for (let i = 0; i < n; i++) {
+                if (wm.get_workspace_by_index(i) === parking) {
+                    parkingIdx = i;
+                    break;
+                }
+            }
+        }
+        if (parkingIdx < 0 && (parking || self._backgroundAppParkingFront))
+            parkingIdx = self._backgroundAppParkingFront ? 0 : Math.max(0, n - 2);
+        const real = [];
+        for (let i = 0; i < n; i++) {
+            if (i === parkingIdx) continue;
+            const ws = wm.get_workspace_by_index(i);
+            if (ws) real.push(ws);
+        }
+        const idx = real.indexOf(this);
+        if (idx < 0)
+            return origGetNeighbor.call(this, direction);
+        // A single real workspace has nowhere to wrap to; deny the move so the
+        // shell does not append one (which would fight the reservation).
+        if (real.length < 2)
+            return this;
+        const step = leftDirs.includes(direction) ? -1 : 1;
+        return real[(idx + step + real.length) % real.length];
     };
     const origUpdateVisibility =
         WorkspacesViewModule.WorkspacesView.prototype._updateVisibility;
@@ -1028,7 +1077,25 @@ export function _reassertBackgroundAppParking() {
         return;
     }
     const n = global.workspace_manager.get_n_workspaces();
-    const parkingIdx = this._wsIndex(this._backgroundAppParkingWs);
+    // Find the parking workspace by IDENTITY rather than ws.index(): indexing
+    // a workspace that dynamic-workspaces destroyed logs mutter's
+    // `meta_workspace_index: assertion 'ret >= 0' failed` on every switch.
+    let parkingIdx = -1;
+    for (let i = 0; i < n; i++) {
+        if (global.workspace_manager.get_workspace_by_index(i) === this._backgroundAppParkingWs) {
+            parkingIdx = i;
+            break;
+        }
+    }
+    if (parkingIdx < 0) {
+        // Stale reservation — drop it and re-reserve instead of re-parking
+        // against a dead workspace.
+        this._debugLog('background app: parking workspace is stale — re-reserving');
+        this._backgroundAppParkingWs = null;
+        this._backgroundAppParkingFront = false;
+        this._scheduleBackgroundAppReservation();
+        return;
+    }
     // Stable homes: the front (ws0 — the normal reservation) or the
     // trailing n-2 (rare fallback). Nothing reorders them; if the parking
     // ever ends up elsewhere, relocate with the old append-and-move logic.
@@ -1180,16 +1247,23 @@ export function _refillBackgroundApp() {
 export function _restoreFocusFromBackgroundApp() {
     if (this._destroyed || !this._backgroundAppWin) return;
     const ws = global.workspace_manager.get_active_workspace();
+    if (!ws || ws === this._backgroundAppParkingWs) return;
+    // NEVER restore focus across workspaces: activating a window on another
+    // workspace switches to it, which re-runs the parking fix and starts a
+    // focus/switch feedback loop (the user saw workspace 3<->4 churn).
     let prev = this._lastRealFocusedWindow;
-    if (!prev || !prev.get_compositor_private()) {
-        if (ws) prev = this._lastFocusedPerWorkspace.get(ws);
-    }
-    if (!prev || prev === this._backgroundAppWin) return;
-    if (!prev.get_compositor_private()) return;
+    if (!prev || prev === this._backgroundAppWin || !prev.get_compositor_private() ||
+        prev.get_workspace() !== ws)
+        prev = this._lastFocusedPerWorkspace.get(ws);
+    if (!prev || prev === this._backgroundAppWin || !prev.get_compositor_private() ||
+        prev.get_workspace() !== ws)
+        return;
     this._debugLog('background app: stealing focus back');
     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
         if (this._destroyed) return false;
         if (global.display.focus_window === prev) return false;
+        // The workspace may have moved while the idle was queued.
+        if (prev.get_workspace() !== global.workspace_manager.get_active_workspace()) return false;
         try { prev.activate(this._currentTime()); } catch (_e) {}
         return false;
     });

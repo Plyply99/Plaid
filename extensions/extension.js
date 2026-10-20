@@ -707,9 +707,14 @@ export default class TilingWMExtension extends Extension {
             const win = global.display.focus_window;
             if (win) {
                 if (win !== this._backgroundAppWin) {
-                    this._lastRealFocusedWindow = win;
                     const ws = win.get_workspace();
-                    if (ws) this._lastFocusedPerWorkspace.set(ws, win);
+                    // Never remember a window on the hidden parking workspace
+                    // as a focus-restore target (activating it would switch
+                    // the user onto the reserved slot).
+                    if (ws && ws !== this._backgroundAppParkingWs) {
+                        this._lastRealFocusedWindow = win;
+                        this._lastFocusedPerWorkspace.set(ws, win);
+                    }
                 }
             }
             if (this._backgroundAppWin && win === this._backgroundAppWin) {
@@ -780,7 +785,7 @@ export default class TilingWMExtension extends Extension {
             }
         }));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
-            this._syncDropdownWorkspace();
+            this._scheduleDropdownWorkspaceSync();
             this._raiseBackgroundAppClone();
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 if (this._destroyed) return false;
@@ -797,6 +802,12 @@ export default class TilingWMExtension extends Extension {
             if (this._destroyed || !this._settings.get_boolean('enabled')) return;
             const ws = global.workspace_manager.get_active_workspace();
             if (!ws) return;
+            if (ws === this._backgroundAppParkingWs) {
+                // Reaching the hidden slot means something switched onto the
+                // reservation — log it loudly and skip the per-workspace work.
+                this._debugLog('workspace: active workspace is the hidden parking slot');
+                return;
+            }
             try {
                 if (this._settings.get_boolean('workspace-popup'))
                     this._showWorkspacePopup(ws);
@@ -3698,6 +3709,9 @@ export default class TilingWMExtension extends Extension {
 
     _showWorkspacePopup(ws) {
         if (!ws) return;
+        // The hidden parking slot must never be announced as a workspace — it
+        // renders as a duplicate "Workspace 1".
+        if (ws === this._backgroundAppParkingWs) return;
         const layout = this._getWorkspaceLayout(ws);
         this._showPopup(`Workspace ${this._bgAppRealToDisplay(this._wsIndex(ws)) + 1}`,
             `Layout: ${LAYOUT_NAMES[layout] || layout}`);
