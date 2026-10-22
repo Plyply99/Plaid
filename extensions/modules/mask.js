@@ -364,10 +364,14 @@ export function _ensureWindowMask(win, actor, radius) {
     if (!target || !target.add_effect_with_name) return;
     // Radius clamp: _updateMaskBounds stores the CLAMPED radius on the effect,
     // so compare against the clamped value — comparing the unclamped caller
-    // radius recreated the effect every borders pass for small windows.
+    // radius recreated the effect every borders pass for small windows. Use the
+    // Meta rect while the actor is unsized so the radius never collapses to 0.
+    const size = _clampSize(win, actor);
+    if (size.w <= 2 || size.h <= 2)
+        return; // not sized yet — a later borders pass attaches correctly
     radius = Math.max(0, Math.min(radius,
-        Math.floor(Math.max(1, actor.width) / 2),
-        Math.floor(Math.max(1, actor.height) / 2)));
+        Math.floor(size.w / 2),
+        Math.floor(size.h / 2)));
     let effect = this._windowMasks.get(win);
     if (effect && effect._radius !== radius) {
         this._teardownMaskEffect(win, effect);
@@ -457,6 +461,28 @@ export function _kickMaskNow(win) {
     try { global.stage.queue_redraw(); } catch (_e) {}
 }
 
+// A window can be flaired BEFORE its actor is sized (portal dialogs and file
+// pickers map fast) — clamping the radius against an unsized actor collapsed it
+// to 0 and left the window permanently square. Fall back to the window's Meta
+// rect, which is already valid at map time.
+function _clampSize(win, actor) {
+    const aw = Math.floor((actor && actor.width) || 0);
+    const ah = Math.floor((actor && actor.height) || 0);
+    if (aw > 2 && ah > 2)
+        return { w: aw, h: ah };
+    try {
+        const r = win.get_buffer_rect();
+        if (r.width > 2 && r.height > 2)
+            return { w: r.width, h: r.height };
+    } catch (_e) {}
+    try {
+        const r = win.get_frame_rect();
+        if (r.width > 2 && r.height > 2)
+            return { w: r.width, h: r.height };
+    } catch (_e) {}
+    return { w: aw, h: ah };
+}
+
 export function _updateMaskBounds(win, actor, effect, radius) {
     // Mask self-heal: X11 foreign-texture surfaces (Chromium/electron) can swap
     // their texture on workspace round-trips, making the offscreen capture empty.
@@ -486,10 +512,12 @@ export function _updateMaskBounds(win, actor, effect, radius) {
     let borderWidth = 0;
 
     // Clamp the SDF radius to half the window — a radius wider than the
-    // window inverts the rounded-rect SDF (centerLeft > centerRight).
+    // window inverts the rounded-rect SDF (centerLeft > centerRight). Use the
+    // Meta rect when the actor is not sized yet (see _clampSize).
+    const clampSize = _clampSize(win, actor);
     radius = Math.max(0, Math.min(radius,
-        Math.floor(Math.max(1, actor.width) / 2),
-        Math.floor(Math.max(1, actor.height) / 2)));
+        Math.floor(Math.max(1, clampSize.w) / 2),
+        Math.floor(Math.max(1, clampSize.h) / 2)));
     if (this._settings) {
         const isFocused = win === global.display.focus_window;
         const widthKey = isFocused ? 'active-border-width' : 'inactive-border-width';
