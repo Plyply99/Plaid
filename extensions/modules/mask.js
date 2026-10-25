@@ -316,8 +316,8 @@ export function _createMaskEffect() {
             log(`[plaid] mask uniforms failed: ${e.message}`);
             return;
         }
-        try { effect.queue_repaint(); } catch (_e) {}
-        try { global.stage.queue_redraw(); } catch (_e) {}
+        effect.queue_repaint();
+        global.stage.queue_redraw();
     };
 
     effect.setTheta = (theta) => {
@@ -325,7 +325,7 @@ export function _createMaskEffect() {
             effect.set_uniform_float('theta', 1, [theta]);
             if (effect.invalidate)
                 effect.invalidate();
-            try { global.stage.queue_redraw(); } catch (_e) {}
+            global.stage.queue_redraw();
         } catch (_e) {}
     };
 
@@ -334,7 +334,7 @@ export function _createMaskEffect() {
             effect.set_uniform_float('borderWidth', 1, [width]);
             if (effect.invalidate)
                 effect.invalidate();
-            try { global.stage.queue_redraw(); } catch (_e) {}
+            global.stage.queue_redraw();
         } catch (_e) {}
     };
 
@@ -343,7 +343,7 @@ export function _createMaskEffect() {
             effect.set_uniform_float('opacity', 1, [v]);
             if (effect.invalidate)
                 effect.invalidate();
-            try { global.stage.queue_redraw(); } catch (_e) {}
+            global.stage.queue_redraw();
         } catch (_e) {}
         };
 
@@ -399,7 +399,7 @@ export function _ensureWindowMask(win, actor, radius) {
         this._connectTextureWatch(win, actor, effect);
     }
     this._updateMaskBounds(win, actor, effect, radius);
-    try { target.queue_redraw(); } catch (_e) {}
+    target.queue_redraw();
 }
 
 export function _connectTextureWatch(win, actor, effect) {
@@ -433,7 +433,7 @@ export function _scheduleMaskRedraw(win, actor, effect) {
             try { target.invalidate_paint_volume(); } catch (_e) {}
         }
         try { actor.invalidate_paint_volume(); } catch (_e) {}
-        try { global.stage.queue_redraw(); } catch (_e) {}
+        global.stage.queue_redraw();
         return GLib.SOURCE_REMOVE;
     });
 }
@@ -454,7 +454,7 @@ export function _kickMaskNow(win) {
         try { target.invalidate_paint_volume(); } catch (_e) {}
     }
     try { actor.invalidate_paint_volume(); } catch (_e) {}
-    try { global.stage.queue_redraw(); } catch (_e) {}
+    global.stage.queue_redraw();
 }
 
 // A window can be flaired BEFORE its actor is sized (portal dialogs and file

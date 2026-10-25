@@ -181,23 +181,23 @@ export function _createGjsBlurEffect() {
                     v = Math.max(0, Math.round(v));
                     if (v === this._radius) return;
                     this._radius = v;
-                    try { this.queue_repaint(); } catch (_e) {}
-                    try { global.stage.queue_redraw(); } catch (_e) {}
+                    this.queue_repaint();
+                    global.stage.queue_redraw();
                 }
                 get brightness() { return this._brightness; }
                 set brightness(v) {
                     if (v === this._brightness) return;
                     this._brightness = v;
-                    try { this.queue_repaint(); } catch (_e) {}
-                    try { global.stage.queue_redraw(); } catch (_e) {}
+                    this.queue_repaint();
+                    global.stage.queue_redraw();
                 }
                 get corner_radius() { return this._cornerRadius; }
                 set corner_radius(v) {
                     v = Math.max(0, Math.round(v));
                     if (v === this._cornerRadius) return;
                     this._cornerRadius = v;
-                    try { this.queue_repaint(); } catch (_e) {}
-                    try { global.stage.queue_redraw(); } catch (_e) {}
+                    this.queue_repaint();
+                    global.stage.queue_redraw();
                 }
 
                 _downscaleFor(w, h, radius) {

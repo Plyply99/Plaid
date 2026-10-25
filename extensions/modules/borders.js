@@ -265,9 +265,7 @@ export function _startBorderAnimation() {
             // St.DrawingArea only runs the cairo handler on ITS queue_repaint
             // (Clutter's queue_redraw repaints the cached texture), so the gradient
             // only rotates via queue_repaint. Plain St.Widgets have no queue_repaint.
-            try {
-                if (border.queue_repaint) border.queue_repaint();
-            } catch (_e) {}
+            if (border.queue_repaint) border.queue_repaint();
         }
         return GLib.SOURCE_CONTINUE;
     });
@@ -335,9 +333,7 @@ export function _updateBordersDuringGrab() {
                 border._plaidSegKey = '';
             }
         }
-        if (border.queue_repaint) {
-            try { border.queue_repaint(); } catch (_e) {}
-        }
+        if (border.queue_repaint) border.queue_repaint();
     }
 }
 
