@@ -49,13 +49,13 @@ if [ -f "$OUT/plaid@plyply99.shell-extension.zip" ]; then
     mv -f "$OUT/plaid@plyply99.shell-extension.zip" "$OUT/plaid@plyply99.zip"
 fi
 
-# gnome-extensions pack drops non-standard files; append the modules directory,
-# the licenses, and the terminal-settings scripts.
-if [ -d "$SOURCE/modules" ] || [ -f "$SOURCE/plaid-terminal-settings.sh" ]; then
+# gnome-extensions pack drops non-standard files; append the modules directory
+# and the licenses.
+if [ -d "$SOURCE/modules" ]; then
     (cd "$SOURCE" && python3 -c "
 import zipfile, os
 out = '$OUT/plaid@plyply99.zip'
-paths = ['modules', 'LICENSE', 'ATTRIBUTION', 'plaid-terminal-settings.sh', 'plaid-terminal-settings.fish']
+paths = ['modules', 'LICENSE', 'ATTRIBUTION']
 appended = []
 with zipfile.ZipFile(out, 'a') as z:
     existing = set(z.namelist())

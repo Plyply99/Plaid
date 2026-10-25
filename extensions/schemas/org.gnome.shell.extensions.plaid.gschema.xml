@@ -420,12 +420,6 @@
       <description>Show or hide the drop-down terminal on the active monitor</description>
     </key>
 
-    <key name="terminal-profile-integration" type="b">
-      <default>false</default>
-      <summary>Shell profile integration</summary>
-      <description>Add a source line to ~/.bashrc or config.fish so Plaid's terminal settings apply to new shells. Off by default; enable to opt in.</description>
-    </key>
-
     <!-- Background App -->
     <key name="background-app-enabled" type="b">
       <default>false</default>

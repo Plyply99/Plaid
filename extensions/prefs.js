@@ -81,8 +81,6 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             _('Show popups when switching workspaces and when tiling is toggled on or off'));
         this._addSwitchRow(group, settings, 'debug', _('Debug Logging'),
             _('Verbose diagnostics to the system journal — only enable when troubleshooting.'));
-        this._addSwitchRow(group, settings, 'terminal-profile-integration', _('Shell Profile Integration'),
-            _('Add a source line to ~/.bashrc or config.fish so Plaid terminal settings apply to new shells.'));
 
         this._addSpinRow(group, settings, 'inside-gap', _('Inside Gaps'),
             _('Spacing between windows in pixels'), 0, 50, 1, 5);

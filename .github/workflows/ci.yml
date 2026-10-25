@@ -27,12 +27,6 @@ jobs:
             echo "syntax OK: $js"
           done
 
-      - name: Terminal script syntax gate
-        run: |
-          set -e
-          bash -n extensions/plaid-terminal-settings.sh
-          echo "bash OK"
-
       - name: Schema compile gate
         run: |
           set -e

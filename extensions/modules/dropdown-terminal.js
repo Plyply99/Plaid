@@ -158,6 +158,15 @@ export function _tryClaimDropdown(win) {
     return true;
 }
 
+export function _recheckDropdownWaiters() {
+    if (this._destroyed || !this._settings || !this._dropdownPending) return;
+    for (const win of [...this._dropdownWaiters.keys()]) {
+        const cleanup = this._dropdownWaiters.get(win);
+        if (!this._tryClaimDropdown(win)) continue;
+        try { cleanup(); } catch (_e) {}
+    }
+}
+
 export function _clearDropdownWaiters() {
     for (const win of [...this._dropdownWaiters.keys()]) {
         try { win.skip_taskbar = false; } catch (_e) {}
@@ -321,6 +330,7 @@ export const dropdownMethods = {
     _toggleDropdownTerminal,
     _handleDropdownWindowCreated,
     _tryClaimDropdown,
+    _recheckDropdownWaiters,
     _clearDropdownWaiters,
     _configureDropdownTerminal,
     _showDropdownTerminal,

@@ -92,10 +92,6 @@ Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki).
 
 
 
-- **PTS Plaid Terminal settings**: Plaid settings as shell functions.
-
-  
-[Plaid-cli.webm](https://github.com/user-attachments/assets/51279ba5-2ac2-4d81-a694-1490e0d3f473)
 
 
 

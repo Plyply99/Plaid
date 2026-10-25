@@ -40,24 +40,6 @@ export function _initBackgroundApp() {
     this._launchBackgroundApp();
 }
 
-export function _scheduleSetupPopupCheck() {
-    if (this._setupPopupCheckId) return;
-    this._setupPopupCheckId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 6000, () => {
-        this._setupPopupCheckId = 0;
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
-        const lines = [];
-        if (this._plaidSetupNoticeTerminal) {
-            const where = (this._plaidTerminalProfilePath || '').replace(GLib.get_home_dir(), '~')
-                || 'your shell profile';
-            lines.push(`• Plaid's terminal settings were added to ${where} — open a new terminal to use them.`);
-        }
-        this._plaidSetupNoticeTerminal = false;
-        if (lines.length > 0)
-            this._showWarningPopup('Plaid setup complete', lines.join('\n'), 'Click to dismiss');
-        return GLib.SOURCE_REMOVE;
-    });
-}
-
 export function _scheduleBackgroundAppReleaseWatch() {
     if (this._backgroundAppReleaseId) return;
     this._backgroundAppReleaseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 20000, () => {
@@ -507,17 +489,23 @@ export function _isExtensionsAppWindow(win) {
     if (!win) return false;
     let pid = 0;
     try { pid = win.get_pid(); } catch (_e) {}
+    const isExtensionsCmd = (cmd) => !!cmd && (
+        cmd.includes('org.gnome.Shell.Extensions') ||
+        cmd.includes('org.gnome.Extensions') ||
+        cmd.includes('gnome-extensions-app'));
     if (pid > 0) {
-        try {
-            const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
-            if (data) {
-                const cmd = new TextDecoder().decode(data).replace(/\0/g, ' ');
-                if (cmd.includes('org.gnome.Shell.Extensions') ||
-                    cmd.includes('org.gnome.Extensions') ||
-                    cmd.includes('gnome-extensions-app'))
-                    return true;
-            }
-        } catch (_e) {}
+        const cached = this._procCmdlineCached(pid);
+        if (cached !== undefined) {
+            if (isExtensionsCmd(cached)) return true;
+        } else {
+            this._getProcCmdline(pid, (cmd) => {
+                if (this._destroyed) return;
+                if (isExtensionsCmd(cmd) && !win._plaidProcIdentityNotified) {
+                    win._plaidProcIdentityNotified = true;
+                    this._addIdle(() => { this._onWindowIdentityChanged(win); return false; });
+                }
+            });
+        }
     }
     const wms = (win.get_wm_class_instance() || '').toLowerCase();
     if (wms === 'org.gnome.shell.extensions' || wms === 'org.gnome.extensions')
@@ -529,56 +517,119 @@ export function _isExtensionsAppWindow(win) {
 }
 
 export function _procEnvironHasMarker(pid, marker) {
-    try {
-        // GLib.file_get_contents stats the file first — /proc files report
-        // size 0, so it returns empty. Gio.File.load_contents reads to EOF
-        // and works on /proc/<pid>/environ.
-        const f = Gio.File.new_for_path(`/proc/${pid}/environ`);
-        const [success, data] = f.load_contents(null);
-        if (!success || !data) return false;
-        return new TextDecoder().decode(data).split('\0').includes(marker);
-    } catch (_e) {
+    if (!pid) return false;
+    const data = this._procEnvironCached(pid);
+    if (data !== undefined)
+        return data.split('\0').includes(marker);
+    this._getProcEnviron(pid, (env) => {
+        if (this._destroyed) return;
+        if (env.split('\0').includes(marker))
+            this._recheckMarkerWaiters();
+    });
+    return false;
+}
+
+export function _markerSweepAllowed() {
+    if (!this._settings) return false;
+    return this._settings.get_boolean('background-app-enabled') || !!this._dropdownPending;
+}
+
+export function _recheckMarkerWaiters() {
+    if (this._destroyed || !this._settings) return;
+    this._recheckDropdownWaiters();
+    this._recheckBackgroundAppAfterProc();
+}
+
+export function _recheckBackgroundAppAfterProc() {
+    if (this._destroyed || !this._settings || this._bgAppRecheckPending) return;
+    if (!this._settings.get_boolean('background-app-enabled')) return;
+    const gen = this._markerSweepGen;
+    const id = this._addIdle(() => {
+        this._bgAppRecheckId = 0;
+        this._bgAppRecheckPending = false;
+        if (this._destroyed || !this._settings) return false;
+        if (this._markerSweepGen !== gen) return false;
+        if (!this._settings.get_boolean('background-app-enabled')) return false;
+        const win = this._findBackgroundAppWindow();
+        if (!win) return false;
+        if (this._backgroundAppPending)
+            this._tryClaimBackgroundApp(win);
+        else if (!this._backgroundAppWin)
+            this._adoptFoundWindow(win);
         return false;
+    });
+    if (id) {
+        this._bgAppRecheckId = id;
+        this._bgAppRecheckPending = true;
     }
 }
 
 export function _markerPidSetHas(marker, pid) {
-    // The /proc sweep is a synchronous, full-directory scan in the
-    // compositor main loop — only run it while the bg-app feature is on
-    // and its window isn't claimed yet (spawn pending or lock-cycle
-    // adoption search). Once claimed, no marker match is needed.
-    if (!this._settings || !this._settings.get_boolean('background-app-enabled'))
+    // The /proc sweep is only needed while the bg-app is on and unclaimed
+    // (spawn pending or lock-cycle adoption). Once claimed, skip it.
+    if (!this._markerSweepAllowed()) return false;
+    if (this._backgroundAppWin && !this._backgroundAppPending && !this._dropdownPending)
         return false;
-    if (this._backgroundAppWin && !this._backgroundAppPending) return false;
     const now = Date.now();
     const cache = this._markerPidCache;
-    if (!cache || cache.marker !== marker || now - cache.at > 1500) {
+    if (!cache || cache.marker !== marker || now - cache.at > 1500)
+        this._startMarkerPidSweep(marker);
+    const current = this._markerPidCache;
+    return !!current && current.marker === marker && current.set.has(pid);
+}
+
+export function _startMarkerPidSweep(marker) {
+    if (this._markerSweepPending) return;
+    if (!this._markerSweepAllowed()) return;
+    this._markerSweepPending = true;
+    const gen = (this._markerSweepGen || 0) + 1;
+    this._markerSweepGen = gen;
+    const run = async () => {
         const set = new Set();
         try {
             const dir = Gio.File.new_for_path('/proc');
             const children = dir.enumerate_children(
                 'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            const pids = [];
             let info;
             while ((info = children.next_file(null))) {
                 const name = info.get_name();
-                if (!/^\d+$/.test(name)) continue;
-                const pidN = parseInt(name, 10);
-                if (!this._procEnvironHasMarker(pidN, marker)) continue;
-                try {
-                    const [, status] = GLib.file_get_contents(`/proc/${pidN}/status`);
+                if (/^\d+$/.test(name))
+                    pids.push(parseInt(name, 10));
+            }
+            try { children.close(null); } catch (_e) {}
+            for (let start = 0; start < pids.length; start += 32) {
+                if (this._markerSweepGen !== gen) return;
+                const batch = pids.slice(start, start + 32);
+                const envs = await Promise.all(batch.map(pidN =>
+                    this._readProcFilePromise(`/proc/${pidN}/environ`)));
+                if (this._markerSweepGen !== gen) return;
+                for (let i = 0; i < batch.length; i++) {
+                    if (!envs[i]) continue;
+                    const env = new TextDecoder().decode(envs[i]);
+                    if (!env.split('\0').includes(marker)) continue;
+                    const status = await this._readProcFilePromise(`/proc/${batch[i]}/status`);
                     if (!status) continue;
                     const m = new TextDecoder().decode(status).match(/^NSpid:\s+(.+)$/m);
                     if (!m) continue;
                     const vals = m[1].trim().split(/\s+/).map(Number);
                     const last = vals[vals.length - 1];
                     if (last > 0) set.add(last);
-                } catch (_e) {}
+                }
             }
         } catch (_e) {}
-        this._markerPidCache = { marker, at: now, set };
-    }
-    const current = this._markerPidCache;
-    return !!current && current.marker === marker && current.set.has(pid);
+        if (this._markerSweepGen !== gen) return;
+        this._markerSweepPending = false;
+        if (this._destroyed || !this._settings) return;
+        if (!this._settings.get_boolean('background-app-enabled')) return;
+        this._markerPidCache = { marker, at: Date.now(), set };
+        if (set.size > 0)
+            this._recheckMarkerWaiters();
+    };
+    run().catch(() => {
+        if (this._markerSweepGen === gen)
+            this._markerSweepPending = false;
+    });
 }
 
 export function _handleBackgroundAppWindowCreated(win) {
@@ -1268,11 +1319,18 @@ export function _restoreFocusFromBackgroundApp() {
 }
 
 export function _clearBackgroundApp(releaseReservation = true) {
-    if (this._setupPopupCheckId) {
-        GLib.source_remove(this._setupPopupCheckId);
-        this._setupPopupCheckId = 0;
+    this._markerSweepGen = (this._markerSweepGen || 0) + 1;
+    this._markerSweepPending = false;
+    this._bgAppRecheckPending = false;
+    this._markerPidCache = null;
+    if (this._bgAppRecheckId) {
+        try {
+            if (GLib.MainContext.default().find_source_by_id(this._bgAppRecheckId))
+                GLib.source_remove(this._bgAppRecheckId);
+        } catch (_e) {}
+        this._untrackSource(this._bgAppRecheckId);
+        this._bgAppRecheckId = 0;
     }
-    this._plaidSetupNoticeTerminal = false;
     if (this._backgroundAppReleaseId) {
         GLib.source_remove(this._backgroundAppReleaseId);
         this._backgroundAppReleaseId = 0;
@@ -1399,7 +1457,6 @@ export function _closeBackgroundAppWindow(win) {
 
 export const backgroundAppMethods = {
     _initBackgroundApp,
-    _scheduleSetupPopupCheck,
     _scheduleBackgroundAppReleaseWatch,
     _releaseBackgroundAppReservation,
     _scheduleBackgroundAppReservation,
@@ -1423,6 +1480,10 @@ export const backgroundAppMethods = {
     _isExtensionsAppWindow,
     _procEnvironHasMarker,
     _markerPidSetHas,
+    _startMarkerPidSweep,
+    _markerSweepAllowed,
+    _recheckMarkerWaiters,
+    _recheckBackgroundAppAfterProc,
     _handleBackgroundAppWindowCreated,
     _tryClaimBackgroundApp,
     _configureBackgroundApp,

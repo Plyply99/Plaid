@@ -157,18 +157,28 @@ export function _isChromiumProcessWindow(win) {
             const cached = this._chromiumProcessCache.get(pid);
             if (cached !== undefined) return cached;
         }
-        let verdict = false;
-        try {
-            const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
-            if (data)
-                verdict = /--type=|steamwebhelper/.test(new TextDecoder().decode(data));
-        } catch (_e) {}
-        if (this._chromiumProcessCache) {
+        const evaluate = (cmd) => {
+            const verdict = /--type=|steamwebhelper/.test(cmd || '');
+            if (!this._chromiumProcessCache) return;
             if (this._chromiumProcessCache.size >= 256)
                 this._chromiumProcessCache.clear();
             this._chromiumProcessCache.set(pid, verdict);
+            if (!verdict) {
+                // Force the next tick to re-evaluate this position; the tick
+                // otherwise short-circuits when the pointer has not moved.
+                this._pointerFocusLastX = -1;
+                this._pointerFocusLastY = -1;
+            }
+        };
+        const cachedCmd = this._procCmdlineCached(pid);
+        if (cachedCmd !== undefined) {
+            evaluate(cachedCmd);
+            return this._chromiumProcessCache.get(pid) === true;
         }
-        return verdict;
+        this._getProcCmdline(pid, evaluate);
+        // Unknown process: skip hover focus until the async read lands. This
+        // preserves the menu-safety behavior for Chromium/Steam on first hover.
+        return true;
     } catch (_e) {
         return false;
     }

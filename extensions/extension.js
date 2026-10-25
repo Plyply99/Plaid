@@ -23,8 +23,8 @@ import { scratchpadMethods } from './modules/scratchpad.js';
 import { dropdownMethods } from './modules/dropdown-terminal.js';
 import { pointerFocusMethods } from './modules/pointer-focus.js';
 import { workspacePillMethods } from './modules/workspace-pill.js';
-import { terminalSettingsMethods } from './modules/terminal-settings.js';
 import { persistenceMethods } from './modules/persistence.js';
+import { procInfoMethods } from './modules/proc-info.js';
 
 const LAYOUT_NAMES = {
     'dwindle': 'Dwindle',
@@ -105,7 +105,8 @@ export default class TilingWMExtension extends Extension {
         this._windowMasks = new Map();
         this._maskQuarantined = new Set();
         this._windowBlurs = new Map();
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._sourceIds = new Set();
+        this._addIdle(() => {
             if (this._destroyed) return false;
             try { this._purgeOrphanBlurs(); } catch (_e) {}
             return false;
@@ -192,12 +193,13 @@ export default class TilingWMExtension extends Extension {
         this._backgroundAppWin = null;
         this._backgroundAppWaiter = null;
         this._backgroundAppReleaseId = 0;
-        this._plaidSetupNoticeTerminal = false;
-        this._plaidTerminalProfilePath = '';
-        this._setupPopupCheckId = 0;
         this._maximizeToggleRects = new Map();
         this._backgroundAppPending = false;
         this._backgroundAppSpawnRetries = 0;
+        this._markerSweepPending = false;
+        this._bgAppRecheckPending = false;
+        this._bgAppRecheckId = 0;
+        this._markerSweepGen = 0;
         this._backgroundAppPendingId = 0;
         this._backgroundAppUnmanagedId = 0;
         this._backgroundAppSettingsChangedId = 0;
@@ -263,19 +265,10 @@ export default class TilingWMExtension extends Extension {
         this._workspacePillTitleId = 0;
         this._workspacePillUnmanagedId = 0;
         this._workspacePillUpdateId = 0;
-        this._plaidTerminalProfileNotified = false;
         this._initWorkspacePill();
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
-            if (this._settings && this._settings.get_boolean('terminal-profile-integration'))
-                this._ensureTerminalSettingsProfile();
-            else
-                this._removeTerminalSettingsProfile();
-            return GLib.SOURCE_REMOVE;
-        });
         this._initBackgroundApp();
         this._initPointerFocus();
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._addIdle(() => {
             if (this._destroyed) return false;
             this._updateDropOverlaySize();
             const resumeLockCycle = sessionState.lockCycle;
@@ -481,6 +474,7 @@ export default class TilingWMExtension extends Extension {
             this._debugLog(`disable: tiling state stashed (trees=${this._bspTrees ? this._bspTrees.size : 0})`);
         }
         this._destroyed = true;
+        this._removeAllSources();
         if (this._pickFocusId) {
             global.display.disconnect(this._pickFocusId);
             this._pickFocusId = null;
@@ -607,6 +601,7 @@ export default class TilingWMExtension extends Extension {
         this._windowMasks = null;
         try { this._removeAllBlurs(); } catch (_e) {}
         this._windowBlurs = null;
+        this._sourceIds = null;
         this._slotReassertTimes = null;
         this._workspaceOrders = null;
         this._windowWorkspaces = null;
@@ -663,7 +658,7 @@ export default class TilingWMExtension extends Extension {
                         doRetile();
                     });
                 } else {
-                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._addIdle(() => {
                         this._markPendingWindowInvisible(win, win.get_compositor_private());
                         doRetile();
                         return false;
@@ -687,7 +682,7 @@ export default class TilingWMExtension extends Extension {
                         this._updateBorders();
                     });
                 } else {
-                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._addIdle(() => {
                         if (this._destroyed || !this._settings) return false;
                         doRestore();
                         if (this._settings.get_boolean('follow-focus') &&
@@ -782,12 +777,12 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
             this._scheduleDropdownWorkspaceSync();
             this._raiseBackgroundAppClone();
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._addIdle(() => {
                 if (this._destroyed) return false;
                 this._raiseBackgroundAppClone();
                 return false;
             });
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+            this._addTimeout(150, () => {
                 if (this._destroyed) return GLib.SOURCE_REMOVE;
                 this._raiseBackgroundAppClone();
                 return GLib.SOURCE_REMOVE;
@@ -865,7 +860,7 @@ export default class TilingWMExtension extends Extension {
                 target = windows[0];
             }
             this._keyboardFocusChange = true;
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._addIdle(() => {
                 if (this._destroyed) return false;
                 try { target.activate(this._currentTime()); } catch (_e) {}
                 this._keyboardFocusChange = false;
@@ -938,15 +933,60 @@ export default class TilingWMExtension extends Extension {
                 this._startPickMode();
             }
         }));
-        this._addSignal(this._settings, this._settings.connect('changed::terminal-profile-integration', () => {
-            if (this._settings.get_boolean('terminal-profile-integration'))
-                this._ensureTerminalSettingsProfile();
-            else
-                this._removeTerminalSettingsProfile();
-        }));
-
         this._connectGrabSignals();
 
+    }
+
+    _trackSource(id) {
+        if (id && this._sourceIds) this._sourceIds.add(id);
+        return id;
+    }
+
+    _untrackSource(id) {
+        if (this._sourceIds) this._sourceIds.delete(id);
+    }
+
+    _addIdle(callback) {
+        if (this._destroyed || !this._sourceIds) return 0;
+        let id = 0;
+        id = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            let result = GLib.SOURCE_REMOVE;
+            try {
+                result = callback();
+            } catch (e) {
+                log(`[plaid] idle callback failed: ${e.message}`);
+            }
+            if (!result) this._untrackSource(id);
+            return result;
+        });
+        return this._trackSource(id);
+    }
+
+    _addTimeout(delay, callback) {
+        if (this._destroyed || !this._sourceIds) return 0;
+        let id = 0;
+        id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            let result = GLib.SOURCE_REMOVE;
+            try {
+                result = callback();
+            } catch (e) {
+                log(`[plaid] timeout callback failed: ${e.message}`);
+            }
+            if (!result) this._untrackSource(id);
+            return result;
+        });
+        return this._trackSource(id);
+    }
+
+    _removeAllSources() {
+        if (!this._sourceIds) return;
+        for (const id of this._sourceIds) {
+            try {
+                if (GLib.MainContext.default().find_source_by_id(id))
+                    GLib.source_remove(id);
+            } catch (_e) {}
+        }
+        this._sourceIds.clear();
     }
 
     _addSignal(emitter, id) {
@@ -1087,7 +1127,7 @@ export default class TilingWMExtension extends Extension {
             return true;
         };
         if (tryWarp()) {
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, tryWarp);
+            this._addTimeout(50, tryWarp);
         }
     }
 
@@ -1097,6 +1137,7 @@ export default class TilingWMExtension extends Extension {
         // excluded from tiling until released (see _releaseMinLimitedWindows).
         if (this._minLimitedWindows && this._minLimitedWindows.has(win)) return true;
         if (this._floatClassMatches(win)) return true;
+        if (this._isExtensionsAppWindow(win)) return true;
         const title = win.get_title();
         if (this._floatingTitleMatches(title)) return true;
         // Process-based fallback: at window-created the wm-class may not be
@@ -1122,26 +1163,35 @@ export default class TilingWMExtension extends Extension {
             const cached = this._floatProcessCache.get(pid);
             if (cached !== undefined) return cached;
         }
-        let verdict = false;
-        try {
-            const [, data] = GLib.file_get_contents(`/proc/${pid}/cmdline`);
-            if (data) {
-                const cmd = new TextDecoder().decode(data).replace(/\0/g, ' ').toLowerCase();
-                for (const token of this._floatingClasses) {
-                    if (!token || token.length < 3) continue;
-                    if (cmd.includes(token)) {
-                        verdict = true;
-                        break;
-                    }
+        const evaluate = (cmd) => {
+            if (this._destroyed) return;
+            const lower = (cmd || '').toLowerCase();
+            let verdict = false;
+            for (const token of this._floatingClasses) {
+                if (!token || token.length < 3) continue;
+                if (lower.includes(token)) {
+                    verdict = true;
+                    break;
                 }
             }
-        } catch (_e) {}
-        if (this._floatProcessCache) {
+            if (!this._floatProcessCache) return;
             if (this._floatProcessCache.size >= 256)
                 this._floatProcessCache.clear();
             this._floatProcessCache.set(pid, verdict);
+            if (verdict && !win._plaidProcIdentityNotified) {
+                win._plaidProcIdentityNotified = true;
+                this._addIdle(() => { this._onWindowIdentityChanged(win); return false; });
+            }
+        };
+        const cachedCmd = this._procCmdlineCached(pid);
+        if (cachedCmd !== undefined) {
+            evaluate(cachedCmd);
+            return !!this._floatProcessCache && this._floatProcessCache.get(pid) === true;
         }
-        return verdict;
+        // Unknown process: register as tiled and re-evaluate once the async
+        // read lands (a flatpak float rule has class/app-id fallbacks too).
+        this._getProcCmdline(pid, evaluate);
+        return false;
     }
 
     _isFixedSizeWindow(win) {
@@ -1851,7 +1901,7 @@ export default class TilingWMExtension extends Extension {
                 const actor = s.win.get_compositor_private();
                 if (actor) {
                     actor.ease({ opacity: 255, duration: fadeDuration, mode: Clutter.AnimationMode.EASE_OUT_CUBIC, onComplete: finishFade });
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, fadeDuration + 100, finishFade);
+                    this._addTimeout(fadeDuration + 100, finishFade);
                     return;
                 }
             } catch (_e) {}
@@ -1927,7 +1977,7 @@ export default class TilingWMExtension extends Extension {
                     // automated). One shot; the reveal above already
                     // happened, so the window never sits hidden.
                     const settleWin = s.win;
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                    this._addTimeout(2000, () => {
                         if (this._destroyed) return GLib.SOURCE_REMOVE;
                         if (!settleWin || !settleWin.get_compositor_private()) return GLib.SOURCE_REMOVE;
                         if (!this._windowWorkspaces || !this._windowWorkspaces.has(settleWin))
@@ -1938,10 +1988,10 @@ export default class TilingWMExtension extends Extension {
                     });
                     return;
                 }
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, attempt);
+                this._addTimeout(100, attempt);
             }
         };
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, attempt);
+        this._addTimeout(80, attempt);
     }
 
     _checkWorkspaceLandings(ws) {
@@ -2227,7 +2277,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         this._landingRetries.set(win, n);
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+        this._addTimeout(200, () => {
             if (this._destroyed) return GLib.SOURCE_REMOVE;
             if (this._landingGivenUp && this._landingGivenUp.has(win)) return GLib.SOURCE_REMOVE;
             // Window-liveness: _removeWindow prunes the given-up set on
@@ -3117,7 +3167,7 @@ export default class TilingWMExtension extends Extension {
             return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
         };
         if (apply())
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
+            this._addTimeout(100, retry);
     }
 
     _trackFloatGeometry(win) {
@@ -3138,10 +3188,7 @@ export default class TilingWMExtension extends Extension {
         // If it identifies as the Extensions app now, un-tile it and restore
         // the layout so opening prefs never leaves the workspace rearranged.
         try {
-            const wms = (win.get_wm_class_instance() || '').toLowerCase();
-            const appId = (win.get_gtk_application_id && win.get_gtk_application_id() || '').toLowerCase();
-            if (wms === 'org.gnome.shell.extensions' || wms === 'org.gnome.extensions' ||
-                appId === 'org.gnome.shell.extensions' || appId === 'org.gnome.extensions') {
+            if (this._isExtensionsAppWindow(win)) {
                 if (this._windowWorkspaces.has(win)) {
                     this._debugLog('extensions app: un-tiling settings window (late identity)');
                     const ws = win.get_workspace();
@@ -3406,7 +3453,7 @@ export default class TilingWMExtension extends Extension {
 
         this._keyboardFocusChange = true;
         bestWindow.activate(this._currentTime());
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._addIdle(() => {
             if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
@@ -3447,7 +3494,7 @@ export default class TilingWMExtension extends Extension {
         this._keyboardFocusChange = true;
         focused.activate(this._currentTime());
         this._cursorWarpDeferred(focused);
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._addIdle(() => {
             if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
@@ -3602,7 +3649,7 @@ export default class TilingWMExtension extends Extension {
 
         this._keyboardFocusChange = true;
         this._retileWorkspace(ws);
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._addIdle(() => {
             if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
@@ -3647,7 +3694,7 @@ export default class TilingWMExtension extends Extension {
                 this._capturePosition(win);
             this._keyboardFocusChange = true;
             this._retileAll();
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._addIdle(() => {
                 this._keyboardFocusChange = false;
                 return false;
             });
@@ -3707,7 +3754,7 @@ export default class TilingWMExtension extends Extension {
 
         this._moveCursorToWindow(win);
 
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        this._addIdle(() => {
             if (this._destroyed) return false;
             this._keyboardFocusChange = false;
             return false;
@@ -3854,13 +3901,29 @@ export default class TilingWMExtension extends Extension {
 
     _getJPSettings() {
         try {
-            const jpExt = Extension.lookupByUUID('just-perfection-desktop@just-perfection');
-            if (!jpExt) {
-                this._debugLog('workspace popup: JP extension not loaded');
-                return null;
+            // Cross-extension read: the extension manager record exposes the
+            // live extension object as stateObj; fall back to building a
+            // schema source from the extension directory (EGO installs keep
+            // their schema outside the default source).
+            const uuid = 'just-perfection-desktop@just-perfection';
+            const jpExt = Main.extensionManager.lookup(uuid);
+            if (!jpExt) return null;
+            const live = jpExt.stateObj && jpExt.stateObj.getSettings
+                ? jpExt.stateObj.getSettings() : null;
+            if (live) {
+                this._debugLog('workspace popup: JP settings acquired');
+                return live;
             }
-            const settings = jpExt.getSettings();
-            this._debugLog('workspace popup: JP settings acquired');
+            const schemaDir = jpExt.dir.get_child('schemas');
+            const def = Gio.SettingsSchemaSource.get_default();
+            const src = schemaDir.query_exists(null)
+                ? Gio.SettingsSchemaSource.new_from_directory(
+                    schemaDir.get_path(), def, false)
+                : def;
+            const schema = src.lookup('org.gnome.shell.extensions.just-perfection', true);
+            if (!schema) return null;
+            const settings = new Gio.Settings({ settings_schema: schema });
+            this._debugLog('workspace popup: JP settings acquired (schema source)');
             return settings;
         } catch (e) {
             this._debugLog('workspace popup: JP settings lookup failed:', String(e));
@@ -3893,8 +3956,13 @@ export default class TilingWMExtension extends Extension {
 
     _updateWorkspacePopupWarning() {
         if (this._destroyed) return;
-        const jpExt = Extension.lookupByUUID('just-perfection-desktop@just-perfection');
-        if (!jpExt) {
+        let jpEnabled = false;
+        try {
+            jpEnabled = !!(this._shellSettings &&
+                this._shellSettings.get_strv('enabled-extensions')
+                    .includes('just-perfection-desktop@just-perfection'));
+        } catch (_e) {}
+        if (!jpEnabled) {
             if (this._jpSettings) {
                 if (this._jpSettingsChangedId) {
                     this._jpSettings.disconnect(this._jpSettingsChangedId);
@@ -3912,9 +3980,6 @@ export default class TilingWMExtension extends Extension {
         }
         let overlap = false;
         try {
-            const jpEnabled = !!(this._shellSettings &&
-                this._shellSettings.get_strv('enabled-extensions')
-                    .includes('just-perfection-desktop@just-perfection'));
             const jpSuppresses = !!(this._jpSettings &&
                 !this._jpSettings.get_boolean('workspace-popup'));
             overlap = jpEnabled && jpSuppresses;
@@ -5128,6 +5193,6 @@ Object.assign(
     dropdownMethods,
     pointerFocusMethods,
     workspacePillMethods,
-    terminalSettingsMethods,
     persistenceMethods,
+    procInfoMethods,
 );
