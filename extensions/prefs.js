@@ -297,7 +297,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
         const compatRow = new Adw.ActionRow({
             title: _('Disable other window-effect extensions'),
-            subtitle: _('Plaid handles window borders, rounded corners, and blur itself. Other window-effect extensions may conflict visually — e.g., Rounded Window Corners Reborn, Blur My Shell, Burn-My-Windows, Compiz effects, and similar.'),
+            subtitle: _('Plaid handles borders, rounded corners, and blur itself. Other window-effect extensions may conflict — e.g., Rounded Window Corners Reborn, Blur My Shell, Burn-My-Windows.'),
             icon_name: 'dialog-warning-symbolic',
         });
         compatGroup.add(compatRow);
@@ -577,7 +577,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             dialog.choose_rgba(row.get_root(), initial, null, (_source, result) => {
                 try {
                     const rgba = dialog.choose_rgba_finish(result);
-                    const hex = `#${Math.round(rgba.red * 255).toString(16).padStart(2, '0')}${Math.round(rgba.green * 255).toString(16).padStart(2, '0')}${Math.round(rgba.blue * 255).toString(16).padStart(2, '0')}`;
+                    const hex = `#${Math.round(rgba.red * 255).toString(16).padStart(2, '0')}` +
+                        `${Math.round(rgba.green * 255).toString(16).padStart(2, '0')}` +
+                        `${Math.round(rgba.blue * 255).toString(16).padStart(2, '0')}`;
                     settings.set_strv(key, [hex]);
                     label.label = hex;
                     colorDot.queue_draw();
@@ -700,6 +702,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         if (!this._shortcutRefreshers) this._shortcutRefreshers = [];
         this._shortcutRefreshers.push(refreshWarn);
         if (!this._customShortcutsSettings) {
+            // The custom-shortcuts schema is optional; keep prefs usable if absent.
             try {
                 const mk = new Gio.Settings({ schema_id: 'org.gnome.settings-daemon.plugins.media-keys' });
                 this._customShortcutsSettings = mk;

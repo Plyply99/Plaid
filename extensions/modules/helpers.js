@@ -41,7 +41,7 @@ export function schemaDefaultValue(settings, key) {
 // SHARED by _updateMaskBounds (uniform upload) and the GNOME 50 GLSLEffect's
 // vfunc_paint_target — that vfunc RE-DERIVES `bounds` on EVERY paint, so it
 // is the authoritative source on GNOME 50: a raw formula there silently
-// stomps any clamp applied at upload time (the 2026-10-02 pascube
+// stomps any clamp applied at upload time (the pascube
 // square-outside/rounded-inside top corners — updateMask's clamped
 // borderedAreaBounds vs paint_target's unclamped bounds = mismatched rects).
 // The rect is the frame rect in actor/buffer coordinates; healthy windows

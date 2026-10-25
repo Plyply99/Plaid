@@ -259,7 +259,7 @@ export function _registerKeybindings() {
     // replaces the handlers instead of stacking duplicates.
     if (this._keybindChangeIds) {
         for (const id of this._keybindChangeIds) {
-            try { this._settings.disconnect(id); } catch (_e) {}
+            this._settings.disconnect(id);
         }
     }
     this._keybindChangeIds = [];
@@ -317,7 +317,7 @@ export function _checkKeybindingConflicts(bindings, dialogDelayMs = 2000) {
 export function _scheduleConflictScan(bindings) {
     // Debounce: one edit in prefs can fire several changed:: signals.
     if (this._conflictScanId) {
-        try { GLib.source_remove(this._conflictScanId); } catch (_e) {}
+        GLib.source_remove(this._conflictScanId);
     }
     this._conflictScanId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
         this._conflictScanId = 0;
@@ -411,11 +411,11 @@ export function _destroyConflictDialog() {
     if (this._conflictScanId) {
         // A pending change-triggered scan must not outlive disable (or fire
         // against a stale closure after an unlock re-enable).
-        try { GLib.source_remove(this._conflictScanId); } catch (_e) {}
+        GLib.source_remove(this._conflictScanId);
         this._conflictScanId = 0;
     }
     if (this._conflictDialogId) {
-        try { GLib.source_remove(this._conflictDialogId); } catch (_e) {}
+        GLib.source_remove(this._conflictDialogId);
         this._conflictDialogId = 0;
     }
     if (this._conflictDialog) {

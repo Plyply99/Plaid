@@ -85,13 +85,11 @@ export default class TilingWMExtension extends Extension {
         // the mode signal fires synchronously at the push, while disable()
         // also checks Main.sessionMode.isLocked directly.
         if (!_lockModeId && Main.sessionMode) {
-            try {
-                _lockModeId = Main.sessionMode.connect('updated', (sm) => {
-                    if (sm.currentMode === 'lock' || sm.currentMode === 'unlock-dialog')
-                        sessionState.lockCycle = true;
-                    this._debugLog(`session mode: ${sm.currentMode} lockCycle=${sessionState.lockCycle}`);
-                });
-            } catch (_e) {}
+            _lockModeId = Main.sessionMode.connect('updated', (sm) => {
+                if (sm.currentMode === 'lock' || sm.currentMode === 'unlock-dialog')
+                    sessionState.lockCycle = true;
+                this._debugLog(`session mode: ${sm.currentMode} lockCycle=${sessionState.lockCycle}`);
+            });
         }
         this._destroyed = false;
         this._settings = this.getSettings();
@@ -126,7 +124,7 @@ export default class TilingWMExtension extends Extension {
         this._savedRects = new Map();
         this._workspaceLayoutsSaveId = 0;
         this._saveDirtySince = 0;
-        // Explicit zero-init (2026-10-04 audit): disable() reads these
+        // Explicit zero-init: disable() reads these
         // BEFORE any assignment; an undefined field was only accidentally
         // safe (falsey) — any future truthy default would double-remove a
         // source id.
@@ -471,7 +469,7 @@ export default class TilingWMExtension extends Extension {
                 // every lock/unlock (the maps were nulled and rebuilt empty,
                 // so scratch windows silently re-tiled and float-toggled
                 // windows snapped back into the layout) — stash them with
-                // the tiling state (2026-10-04 audit).
+                // the tiling state.
                 scratchpadWindows: this._scratchpadWindows,
                 toggleFloatWindows: this._toggleFloatWindows,
                 scratchpadVisible: this._scratchpadVisible,
@@ -484,13 +482,13 @@ export default class TilingWMExtension extends Extension {
         }
         this._destroyed = true;
         if (this._pickFocusId) {
-            try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+            global.display.disconnect(this._pickFocusId);
             this._pickFocusId = null;
         }
         if (_lockModeId) {
             // Unpaired shell-lifetime signal: the handler captures `this`
             // (the extension instance) for the life of the shell otherwise.
-            try { Main.sessionMode.disconnect(_lockModeId); } catch (_e) {}
+            Main.sessionMode.disconnect(_lockModeId);
             _lockModeId = 0;
         }
         // NOTE: pending retile/border sources are removed by
@@ -520,20 +518,20 @@ export default class TilingWMExtension extends Extension {
             this._layoutPopupHideId = 0;
         }
         if (this._layoutPopup) {
-            try { this._layoutPopup.remove_all_transitions(); } catch (_e) {}
-            try { this._layoutPopup.destroy(); } catch (_e) {}
+            this._layoutPopup.remove_all_transitions();
+            this._layoutPopup.destroy();
             this._layoutPopup = null;
         }
         this._restoreWorkspaceSwitcherPopup();
         if (this._shellSettings) {
             if (this._shellSettingsChangedId) {
-                try { this._shellSettings.disconnect(this._shellSettingsChangedId); } catch (_e) {}
+                this._shellSettings.disconnect(this._shellSettingsChangedId);
             }
             this._shellSettings = null;
         }
         if (this._jpSettings) {
             if (this._jpSettingsChangedId) {
-                try { this._jpSettings.disconnect(this._jpSettingsChangedId); } catch (_e) {}
+                this._jpSettings.disconnect(this._jpSettingsChangedId);
             }
             this._jpSettings = null;
         }
@@ -544,11 +542,11 @@ export default class TilingWMExtension extends Extension {
         this._restoreWorkspacePill();
         this._clearBackgroundApp();
         if (this._backgroundAppSettingsChangedId) {
-            try { this._settings.disconnect(this._backgroundAppSettingsChangedId); } catch (_e) {}
+            this._settings.disconnect(this._backgroundAppSettingsChangedId);
             this._backgroundAppSettingsChangedId = 0;
         }
         if (this._backgroundAppEnabledChangedId) {
-            try { this._settings.disconnect(this._backgroundAppEnabledChangedId); } catch (_e) {}
+            this._settings.disconnect(this._backgroundAppEnabledChangedId);
             this._backgroundAppEnabledChangedId = 0;
         }
         if (this._backgroundAppRestartId) {
@@ -557,7 +555,7 @@ export default class TilingWMExtension extends Extension {
         }
         this._teardownPointerFocus();
         if (this._pointerFocusEnabledId) {
-            try { this._settings.disconnect(this._pointerFocusEnabledId); } catch (_e) {}
+            this._settings.disconnect(this._pointerFocusEnabledId);
             this._pointerFocusEnabledId = 0;
         }
         this._dropdownPending = false;
@@ -566,11 +564,11 @@ export default class TilingWMExtension extends Extension {
             this._dropdownPendingId = 0;
         }
         if (this._dropdownSettingsChangedId) {
-            try { this._settings.disconnect(this._dropdownSettingsChangedId); } catch (_e) {}
+            this._settings.disconnect(this._dropdownSettingsChangedId);
             this._dropdownSettingsChangedId = 0;
         }
         if (this._dropdownHeightChangedId) {
-            try { this._settings.disconnect(this._dropdownHeightChangedId); } catch (_e) {}
+            this._settings.disconnect(this._dropdownHeightChangedId);
             this._dropdownHeightChangedId = 0;
         }
         if (this._warningPopupId) {
@@ -578,12 +576,12 @@ export default class TilingWMExtension extends Extension {
             this._warningPopupId = 0;
         }
         if (this._warningPopup) {
-            try { this._warningPopup.remove_all_transitions(); } catch (_e) {}
-            try { this._warningPopup.destroy(); } catch (_e) {}
+            this._warningPopup.remove_all_transitions();
+            this._warningPopup.destroy();
             this._warningPopup = null;
         }
         if (this._pendingWarningOverviewId) {
-            try { Main.overview.disconnect(this._pendingWarningOverviewId); } catch (_e) {}
+            Main.overview.disconnect(this._pendingWarningOverviewId);
             this._pendingWarningOverviewId = 0;
         }
         this._pendingWarning = null;
@@ -739,12 +737,10 @@ export default class TilingWMExtension extends Extension {
             }
             this._debugLog('monitors-changed handled');
         }));
-        try {
-            if (this._mutterSettings) {
-                this._addSignal(this._mutterSettings, this._mutterSettings.connect(
-                    'changed::dynamic-workspaces', () => this._checkDynamicWorkspaces()));
-            }
-        } catch (_e) {}
+        if (this._mutterSettings) {
+            this._addSignal(this._mutterSettings, this._mutterSettings.connect(
+                'changed::dynamic-workspaces', () => this._checkDynamicWorkspaces()));
+        }
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('workspace-added', (_m, index) => {
             const ws = global.workspace_manager.get_workspace_by_index(index);
             this._workspaceOrders.set(ws, []);
@@ -772,12 +768,11 @@ export default class TilingWMExtension extends Extension {
                     this._lastRetileTimes?.delete(workspace);
                     // The workspace-object-keyed maps missed here: a
                     // retained wrapper + a pending retile timeout that
-                    // later fires against a dead workspace (2026-10-04
-                    // audit).
+                    // later fires against a dead workspace.
                     this._dwindleLeafSigs?.delete(workspace);
                     this._queuedAnimWorkspaces?.delete(workspace);
                     if (this._pendingRetileIds?.has(workspace)) {
-                        try { GLib.source_remove(this._pendingRetileIds.get(workspace)); } catch (_e) {}
+                        GLib.source_remove(this._pendingRetileIds.get(workspace));
                         this._pendingRetileIds.delete(workspace);
                     }
                     this._scheduleSaveLayouts();
@@ -815,9 +810,15 @@ export default class TilingWMExtension extends Extension {
             // Re-assert float layering + refresh Flair after the switch
             // settles (the restacked signal can fire before the reveal
             // ordering is final).
-            try { this._reassertFloatingTransients(); } catch (_e) {}
-            try { this._updateBorders(); } catch (_e) {}
-            try { this._auditWorkspaceLandings(ws); } catch (_e) {}
+            try { this._reassertFloatingTransients(); } catch (e) {
+                log(`[plaid] float re-assert failed: ${e.message}`);
+            }
+            try { this._updateBorders(); } catch (e) {
+                log(`[plaid] border update failed: ${e.message}`);
+            }
+            try { this._checkWorkspaceLandings(ws); } catch (e) {
+                log(`[plaid] landing check failed: ${e.message}`);
+            }
             // Post-switch settle POLL: XWayland windows commit their surface AFTER
             // the switch choreography — their visibility flip and the reveal
             // sink happen with no further `restacked`, so the blur glue +
@@ -836,7 +837,7 @@ export default class TilingWMExtension extends Extension {
             // geometry changes hit borders naturally via size-changed.
             // One poll per switch (re-armed), cleaned up in disable().
             if (this._stackSettleId) {
-                try { GLib.source_remove(this._stackSettleId); } catch (_e) {}
+                GLib.source_remove(this._stackSettleId);
                 this._stackSettleId = 0;
             }
             let settleTicks = 0;
@@ -955,13 +956,13 @@ export default class TilingWMExtension extends Extension {
     _disconnectSignals() {
         if (this._signals) {
             for (const { emitter, id } of this._signals) {
-                try { emitter.disconnect(id); } catch (_e) {}
+                emitter.disconnect(id);
             }
             this._signals = [];
         }
         for (const [win, sigIds] of this._windowSignals || []) {
             for (const { emitter, id } of sigIds) {
-                try { emitter.disconnect(id); } catch (_e) {}
+                emitter.disconnect(id);
             }
             // Re-enables are resumes: the maps come back with the same window
             // objects, so the flag must be cleared here or _connectWindowSignals
@@ -1222,7 +1223,9 @@ export default class TilingWMExtension extends Extension {
             win._plaidInvisibleTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
                 win._plaidInvisibleTimer = 0;
                 if (this._destroyed) return GLib.SOURCE_REMOVE;
-                this._debugLog(`backstop reveal: ${win.get_wm_class_instance() || '?'} ws=${this._wsIndex(win.get_workspace())} tiled=${this._windowWorkspaces.has(win)} frame=(${Math.round(win.get_frame_rect().x)},${Math.round(win.get_frame_rect().y)},${Math.round(win.get_frame_rect().width)},${Math.round(win.get_frame_rect().height)})`);
+                const fr = win.get_frame_rect();
+                this._debugLog(`backstop reveal: ${win.get_wm_class_instance() || '?'} ws=${this._wsIndex(win.get_workspace())} tiled=${this._windowWorkspaces.has(win)} ` +
+                    `frame=(${Math.round(fr.x)},${Math.round(fr.y)},${Math.round(fr.width)},${Math.round(fr.height)})`);
                 if (this._pendingWarp) this._pendingWarp.delete(win);
                 try {
                     const a = win.get_compositor_private();
@@ -1254,9 +1257,10 @@ export default class TilingWMExtension extends Extension {
             if (!win._plaidSignalsConnected) this._connectWindowSignals(win);
             return;
         }
-        this._debugLog(`ADD_WINDOW: ${this._winClassCandidates(win)[0] || '?'} title=${win.get_title() || '?'} skipTaskbar=${win.is_skip_taskbar()} ws=${this._wsIndex(win.get_workspace())} type=${win.get_window_type()}`);
+        this._debugLog(`ADD_WINDOW: ${this._winClassCandidates(win)[0] || '?'} title=${win.get_title() || '?'} ` +
+            `skipTaskbar=${win.is_skip_taskbar()} ws=${this._wsIndex(win.get_workspace())} type=${win.get_window_type()}`);
         // Lock-cycle resumes register windows that are already on screen and
-        // tiled — the new-window fade-in (opacity 0 → landing audit → fade
+        // tiled — the new-window fade-in (opacity 0 → landing check → fade
         // back) would make every window vanish and reappear at unlock and
         // break focus. Only real new windows go through it.
         // Tiling toggled off: still REGISTER the window (so flair — borders,
@@ -1264,7 +1268,7 @@ export default class TilingWMExtension extends Extension {
         // new-window hide/place choreography entirely. Otherwise a window
         // opened while tiling was off was force-placed at the full work-area
         // slot (and its mask opacity driven to 0 with no retile to reveal it,
-        // since every retile path bails on !enabled) — 2026-10-05 audit.
+        // since every retile path bails on !enabled).
         const tilingEnabled = this._settings.get_boolean('enabled');
         if (!resume && tilingEnabled) {
             this._newWindowSet.add(win);
@@ -1357,13 +1361,13 @@ export default class TilingWMExtension extends Extension {
         if (this._pendingWarp) this._pendingWarp.delete(win);
         if (this._newWindowSet) this._newWindowSet.delete(win);
         if (win._plaidInvisibleTimer) {
-            try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+            GLib.source_remove(win._plaidInvisibleTimer);
             win._plaidInvisibleTimer = 0;
         }
         if (win._plaidSettlePollId) {
             // The poll self-stops next tick via the _windowWorkspaces guard,
             // but remove it eagerly so no source id outlives the window.
-            try { GLib.source_remove(win._plaidSettlePollId); } catch (_e) {}
+            GLib.source_remove(win._plaidSettlePollId);
             win._plaidSettlePollId = 0;
         }
         win._plaidSettleUntil = 0;
@@ -1457,7 +1461,7 @@ export default class TilingWMExtension extends Extension {
             // blurred tiled windows around the reveal, and their
             // constraint-bound blur siblings lagged a frame → transient blur
             // smears at the trailing (right/bottom) edges of the windows
-            // (2026-10-04: "2 blur glitch areas" when revealing the
+            // ("2 blur glitch areas" when revealing the
             // scratchpad). A float's minimized state never changes the tiled
             // layout — skip the retile. _scratchpadRemove still retiles
             // explicitly, so the intentional path is unaffected.
@@ -1476,7 +1480,7 @@ export default class TilingWMExtension extends Extension {
         const sigIds = this._windowSignals.get(win);
         if (sigIds) {
             for (const { emitter, id } of sigIds) {
-                try { emitter.disconnect(id); } catch (_e) {}
+                emitter.disconnect(id);
             }
             this._windowSignals.delete(win);
         }
@@ -1520,7 +1524,7 @@ export default class TilingWMExtension extends Extension {
         const ids = this._floatHooks.get(win);
         if (!ids) return;
         for (const id of ids) {
-            try { win.disconnect(id); } catch (_e) {}
+            win.disconnect(id);
         }
         this._floatHooks.delete(win);
     }
@@ -1682,7 +1686,7 @@ export default class TilingWMExtension extends Extension {
             return;
         }
         // Work-area guard: at login/monitor reconfig mutter can return a
-        // degenerate rect (2026-10-04: a (5,4,1,1) garbage work area drove a
+        // degenerate rect (a (5,4,1,1) garbage work area drove a
         // false 1x1-slot retile that floated Firefox). Bail — the
         // monitors-changed handler re-retiles once monitors settle, and the
         // settle/re-assert machinery covers the gap.
@@ -1693,7 +1697,8 @@ export default class TilingWMExtension extends Extension {
             this._debugLog(`retile: skipped ws=${this._wsIndex(workspace)} (work area not ready)`);
             return;
         }
-        this._debugLog(`retile: ws=${this._wsIndex(workspace)} tiled=[${tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',')}] layout=${this._getWorkspaceLayout(workspace)} animTime=${this._getAnimationTime().toFixed(2)} animating=${this._animating}`);
+        this._debugLog(`retile: ws=${this._wsIndex(workspace)} tiled=[${tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',')}] ` +
+            `layout=${this._getWorkspaceLayout(workspace)} animTime=${this._getAnimationTime().toFixed(2)} animating=${this._animating}`);
 
         if (this._getAnimationTime() > 0 && !this._grabOp) {
             this._animRetile(workspace, tiledWindows);
@@ -1703,10 +1708,9 @@ export default class TilingWMExtension extends Extension {
         // here was DEAD CODE — _getAnimationTime() floors at 0.1 by design
         // (never gate placement on St.Settings.enable_animations), so the
         // animated path above is the only one that runs. The dead branch
-        // (direct retile + the _verifyRetileLandings audit) was deleted in
-        // the 2026-10-04 audit; the animated path's completion (dec())
-        // covers the _newWindowSet cleanup, the borders refresh, and the
-        // debounced layout save.
+        // (direct retile + the _verifyRetileLandings check) was deleted; the
+        // animated path's completion (dec()) covers the _newWindowSet cleanup,
+        // the borders refresh, and the debounced layout save.
     }
 
     // --- Animation ---
@@ -1727,6 +1731,7 @@ export default class TilingWMExtension extends Extension {
         }
         if (this._newWindowSet) {
             for (const win of this._newWindowSet) {
+                // A window can be disposed mid-animation; cleanup must continue.
                 try {
                     const a = win.get_compositor_private();
                     if (a) {
@@ -1769,7 +1774,7 @@ export default class TilingWMExtension extends Extension {
             // can't force-reveal a window that later moves to an inactive
             // workspace.
             if (s.win._plaidInvisibleTimer) {
-                try { GLib.source_remove(s.win._plaidInvisibleTimer); } catch (_e) {}
+                GLib.source_remove(s.win._plaidInvisibleTimer);
                 s.win._plaidInvisibleTimer = 0;
             }
             // Revealing = leaving the pending-warp state NOW: the offscreen
@@ -1799,7 +1804,7 @@ export default class TilingWMExtension extends Extension {
             // ticks would be missed.
             s.win._plaidSettleUntil = Date.now() + 6000;
             if (s.win._plaidSettlePollId) {
-                try { GLib.source_remove(s.win._plaidSettlePollId); } catch (_e) {}
+                GLib.source_remove(s.win._plaidSettlePollId);
                 s.win._plaidSettlePollId = 0;
             }
             s.win._plaidSettlePollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
@@ -1822,6 +1827,23 @@ export default class TilingWMExtension extends Extension {
                 if (this._destroyed) return;
                 if (!faded) {
                     faded = true;
+                    // The ease can be cancelled by another move/retile. Make
+                    // the fallback restore the final state instead of only
+                    // signalling completion, or the window stays see-through.
+                    if (!(this._pendingWarp && this._pendingWarp.has(s.win))) {
+                        try {
+                            const a = s.win.get_compositor_private();
+                            if (a) {
+                                a.visible = true;
+                                a.set_opacity(255);
+                            }
+                            const effect = this._windowMasks && this._windowMasks.get(s.win);
+                            if (effect && effect.setOpacityUniform)
+                                effect.setOpacityUniform(1);
+                        } catch (e) {
+                            this._debugLog(`fade finalize failed: ${e.message}`);
+                        }
+                    }
                     done();
                 }
             };
@@ -1872,7 +1894,7 @@ export default class TilingWMExtension extends Extension {
                 // Provably-ignored move: the frame is byte-identical across
                 // consecutive attempts while the verify keeps failing —
                 // mutter/Qt are not honoring geometry ops at all (the
-                // map-time settling race; the 2026-10-02 goverlay trace
+                // map-time settling race; the goverlay trace
                 // burned all 16 retries on a frozen frame, keeping the
                 // window invisible ~1.7s for nothing). Stop retrying and
                 // take the give-up path NOW: reveal at the spawn geometry,
@@ -1922,7 +1944,7 @@ export default class TilingWMExtension extends Extension {
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, attempt);
     }
 
-    _auditWorkspaceLandings(ws) {
+    _checkWorkspaceLandings(ws) {
         if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled')) return;
         if (this._grabOp) return;
         const layout = this._getWorkspaceLayout(ws);
@@ -1946,7 +1968,7 @@ export default class TilingWMExtension extends Extension {
                 off++;
         }
         if (off > 0) {
-            this._debugLog(`audit: ws re-tiled (${off}/${tiled.length} windows off-slot)`);
+            this._debugLog(`landing check: ws re-tiled (${off}/${tiled.length} windows off-slot)`);
             this._scheduleRetile(ws);
         }
     }
@@ -2027,15 +2049,14 @@ export default class TilingWMExtension extends Extension {
             }
             // Report and persist ONLY on a real ratio change: the old
             // unconditional log claimed "bent" even when every clamp was a
-            // no-op (it misled the 2026-10-02 triage).
+            // no-op (it misled the triage).
             if (!changed) return;
             this._debugLog(`constraint: pinned frame ${Math.round(f.width)}x${Math.round(f.height)} bent the split ratio (${minSrc})`);
             this._scheduleSaveLayouts();
         } catch (e) {
             // The whole bend used to be swallowed silently — any exception
             // (e.g. a finalized window's get_frame_rect) killed the min-size
-            // bend with zero trace while the window sat off-slot
-            // (2026-10-04 audit).
+            // bend with zero trace while the window sat off-slot.
             log(`[plaid] pinned adjust failed: ${e.message}`);
         }
     }
@@ -2060,7 +2081,8 @@ export default class TilingWMExtension extends Extension {
             if (Math.abs(f.x - s.targetX) > tol || Math.abs(f.y - s.targetY) > tol ||
                 Math.abs(f.width - s.targetW) > tol || Math.abs(f.height - s.targetH) > tol) {
                 if (!pure) {
-                    this._debugLog(`anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                    this._debugLog(`anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} ` +
+                        `frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
                     try {
                         const mws = win.get_workspace();
                         if (mws) {
@@ -2100,7 +2122,7 @@ export default class TilingWMExtension extends Extension {
                     // poll would silently skip the client-resize correction
                     // for give-up windows. The poll self-expires at 6s.
                     if (win._plaidInvisibleTimer) {
-                        try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+                        GLib.source_remove(win._plaidInvisibleTimer);
                         win._plaidInvisibleTimer = 0;
                     }
                     this._scheduleBorders();
@@ -2196,7 +2218,9 @@ export default class TilingWMExtension extends Extension {
             this._scheduleBorders();
             const ws = win.get_workspace();
             const list = ws
-                ? ws.list_windows().map(w => `${w.get_id()}:${w.get_wm_class_instance() || '?'}:min=${w.minimized}:${Math.round(w.get_frame_rect().width)}x${Math.round(w.get_frame_rect().height)}`).join(' | ')
+                ? ws.list_windows().map(w =>
+                    `${w.get_id()}:${w.get_wm_class_instance() || '?'}:min=${w.minimized}:` +
+                    `${Math.round(w.get_frame_rect().width)}x${Math.round(w.get_frame_rect().height)}`).join(' | ')
                 : 'no ws';
             log(`[plaid] anim: landing failed after retries for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} — floated (tiled set: ${list})`);
             if (ws) this._retileWorkspace(ws);
@@ -2294,7 +2318,8 @@ export default class TilingWMExtension extends Extension {
             const frame = win.get_frame_rect();
             const actor = win.get_compositor_private();
             const isNew = this._newWindowSet.has(win);
-            this._debugLog(`anim: start ws=${this._wsIndex(workspace)} win=${win.get_wm_class_instance() || '?'} new=${isNew} target=(${Math.round(target.x)},${Math.round(target.y)},${Math.round(target.w)},${Math.round(target.h)})`);
+            this._debugLog(`anim: start ws=${this._wsIndex(workspace)} win=${win.get_wm_class_instance() || '?'} new=${isNew} ` +
+                `target=(${Math.round(target.x)},${Math.round(target.y)},${Math.round(target.w)},${Math.round(target.h)})`);
             states.push({ win, actor, isNew, startX: frame.x, startY: frame.y, startW: frame.width, startH: frame.height, targetX: target.x, targetY: target.y, targetW: target.w, targetH: target.h });
         }
         this._animTargets = null;
@@ -2484,7 +2509,7 @@ export default class TilingWMExtension extends Extension {
             // A master window without a min-size hint would clamp to
             // 0 / stackMinW = 0 here (a zero-width master pane that the
             // landing verify can never satisfy) — fall back to a sane
-            // 50/50 split instead (2026-10-04 audit).
+            // 50/50 split instead.
             clamped = (need > 0 && masterMin > 0) ? masterMin / need : 0.5;
         } else {
             clamped = Math.max(lo, Math.min(hi, ratio));
@@ -2774,7 +2799,7 @@ export default class TilingWMExtension extends Extension {
             // needs the master column to move the OPPOSITE way, and in the
             // centered layout the master width is split between two side
             // columns, so each side moves by half — the mouse-resize path
-            // applies the same sign + 2x rules (2026-10-05 audit).
+            // applies the same sign + 2x rules.
             const idx = tiledWindows.indexOf(focused);
             let signedDelta = idx > 0 ? -delta : delta;
             if (layout === 'centered-master-stack' && idx > 0)
@@ -2860,7 +2885,7 @@ export default class TilingWMExtension extends Extension {
                 // Drop below the last left-column window targets the LAST
                 // column window (the drop lands at the column's bottom) —
                 // the old first-window fallback was inconsistent with the
-                // right column and the flat stack (2026-10-04 audit).
+                // right column and the flat stack.
                 return leftCount;
             }
 
@@ -3106,7 +3131,8 @@ export default class TilingWMExtension extends Extension {
 
     _onWindowIdentityChanged(win) {
         if (this._destroyed || !win) return;
-        this._debugLog(`identity: ${this._winClassCandidates(win).join('/') || '?'} appId=${win.get_gtk_application_id ? (win.get_gtk_application_id() || '?') : '?'} ws=${this._wsIndex(win.get_workspace())} managed=${this._windowWorkspaces.has(win)}`);
+        this._debugLog(`identity: ${this._winClassCandidates(win).join('/') || '?'} appId=${win.get_gtk_application_id ? (win.get_gtk_application_id() || '?') : '?'} ` +
+            `ws=${this._wsIndex(win.get_workspace())} managed=${this._windowWorkspaces.has(win)}`);
         // Backstop for the Extensions app / prefs window: its wm-class and GTK
         // app id can resolve AFTER the window was already added to the tiler.
         // If it identifies as the Extensions app now, un-tile it and restore
@@ -3242,7 +3268,7 @@ export default class TilingWMExtension extends Extension {
             // The grab skip must compare against the GRABBED window — the focus
             // window can differ mid-grab (hover-focus during a drag), and
             // the grabbed-but-unfocused window then got stale mask uniforms
-            // for the whole grab (2026-10-04 audit).
+            // for the whole grab.
             if (this._grabOp && this._grabWindow && win === this._grabWindow) continue;
             const actor = win.get_compositor_private();
             if (!actor) continue;
@@ -3273,12 +3299,12 @@ export default class TilingWMExtension extends Extension {
                 // windows. Border-only teardown: keep the mask alive.
                 if (!scratch && !this._isFloating(win) && this._windowBorders.has(win)) {
                     this._debugLog(`border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
-                    try { this._windowBorders.get(win).destroy(); } catch (_e) {}
+                    this._windowBorders.get(win).destroy();
                     this._windowBorders.delete(win);
                     if (this._scratchpadRings) {
                         const ring = this._scratchpadRings.get(win);
                         if (ring) {
-                            try { ring.destroy(); } catch (_e) {}
+                            ring.destroy();
                             this._scratchpadRings.delete(win);
                         }
                     }
@@ -3306,8 +3332,7 @@ export default class TilingWMExtension extends Extension {
             // missed the WIDGET border (and scratch ring) — a floating
             // window entering fullscreen kept its colored frame + ring
             // rendered on top of the fullscreen content (X11 floats; the
-            // mask is gone there so the widget is unclipped)
-            // (2026-10-04 audit).
+            // mask is gone there so the widget is unclipped).
             if (win.is_fullscreen()) { this._removeMask(win); this._removeBlur(win); this._removeBorder(win); continue; }
             const actor = win.get_compositor_private();
             if (!actor) continue;
@@ -3515,8 +3540,7 @@ export default class TilingWMExtension extends Extension {
                 // _bspTagGeometry during layout) so a deep-nested split
                 // moves by the same RELATIVE amount as a top-level one —
                 // the old full-work-area divisor made the resize feel
-                // shallower at depth and shift with the gap settings
-                // (2026-10-04 audit).
+                // shallower at depth and shift with the gap settings.
                 const axisSize = targetIsHorizontal
                     ? (split._w > 0 ? split._w : workArea.width)
                     : (split._h > 0 ? split._h : workArea.height);
@@ -3527,7 +3551,7 @@ export default class TilingWMExtension extends Extension {
                 // path flips its sign the same way). Without this, keyboard
                 // resize was inverted for every non-leftmost leaf — and the
                 // BSP builds a right-leaning tree, so that was almost all of
-                // them (2026-10-05 audit).
+                // them.
                 const inFirst = this._bspFindPath(split.first, focused, []);
                 const signedDelta = inFirst ? delta : -delta;
                 split.ratio = Math.max(0.15, Math.min(0.85, split.ratio + signedDelta / axisSize));
@@ -3723,8 +3747,8 @@ export default class TilingWMExtension extends Extension {
             this._layoutPopupHideId = 0;
         }
         if (this._layoutPopup) {
-            try { this._layoutPopup.remove_all_transitions(); } catch (_e) {}
-            try { this._layoutPopup.destroy(); } catch (_e) {}
+            this._layoutPopup.remove_all_transitions();
+            this._layoutPopup.destroy();
             this._layoutPopup = null;
         }
 
@@ -3873,7 +3897,7 @@ export default class TilingWMExtension extends Extension {
         if (!jpExt) {
             if (this._jpSettings) {
                 if (this._jpSettingsChangedId) {
-                    try { this._jpSettings.disconnect(this._jpSettingsChangedId); } catch (_e) {}
+                    this._jpSettings.disconnect(this._jpSettingsChangedId);
                 }
                 this._jpSettings = null;
                 this._jpSettingsChangedId = 0;
@@ -3915,44 +3939,42 @@ export default class TilingWMExtension extends Extension {
         const popup = this._warningPopup;
         if (!popup) return;
         this._warningPopup = null;
-        try { popup.remove_all_transitions(); } catch (_e) {}
+        popup.remove_all_transitions();
         popup.ease({
             opacity: 0,
             duration: 200,
             mode: Clutter.AnimationMode.EASE_IN_QUAD,
             onComplete: () => {
-                try { popup.destroy(); } catch (_e) {}
+                popup.destroy();
             },
         });
     }
 
     _showWarningPopup(title, subtitle, hint) {
-        try {
-            if (Main.overview && Main.overview.visible) {
-                this._pendingWarning = { title, subtitle, hint };
-                if (!this._pendingWarningOverviewId) {
-                    this._pendingWarningOverviewId = Main.overview.connect('hidden', () => {
-                        if (this._pendingWarningOverviewId) {
-                            try { Main.overview.disconnect(this._pendingWarningOverviewId); } catch (_e) {}
-                            this._pendingWarningOverviewId = 0;
-                        }
-                        if (this._pendingWarning) {
-                            const pending = this._pendingWarning;
-                            this._pendingWarning = null;
-                            this._displayWarningPopup(pending.title, pending.subtitle, pending.hint);
-                        }
-                    });
-                }
-                return;
+        if (Main.overview && Main.overview.visible) {
+            this._pendingWarning = { title, subtitle, hint };
+            if (!this._pendingWarningOverviewId) {
+                this._pendingWarningOverviewId = Main.overview.connect('hidden', () => {
+                    if (this._pendingWarningOverviewId) {
+                        Main.overview.disconnect(this._pendingWarningOverviewId);
+                        this._pendingWarningOverviewId = 0;
+                    }
+                    if (this._pendingWarning) {
+                        const pending = this._pendingWarning;
+                        this._pendingWarning = null;
+                        this._displayWarningPopup(pending.title, pending.subtitle, pending.hint);
+                    }
+                });
             }
-        } catch (_e) {}
+            return;
+        }
         this._displayWarningPopup(title, subtitle, hint);
     }
 
     _displayWarningPopup(title, subtitle, hint) {
         if (this._warningPopup) {
-            try { this._warningPopup.remove_all_transitions(); } catch (_e) {}
-            try { this._warningPopup.destroy(); } catch (_e) {}
+            this._warningPopup.remove_all_transitions();
+            this._warningPopup.destroy();
             this._warningPopup = null;
         }
 
@@ -4006,7 +4028,7 @@ export default class TilingWMExtension extends Extension {
                 mode: Clutter.AnimationMode.EASE_IN_QUAD,
                 onComplete: () => {
                     if (this._warningPopup === popup) {
-                        try { this._warningPopup.destroy(); } catch (_e) {}
+                        this._warningPopup.destroy();
                         this._warningPopup = null;
                     }
                 },
@@ -4116,7 +4138,8 @@ export default class TilingWMExtension extends Extension {
         }
 
         const wmClass = metaWindow.get_wm_class_instance() || '?';
-        this._debugLog(`GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(frame)} grabOp=${grabOp} isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
+        this._debugLog(`GRAB_BEGIN win=${wmClass} rect=${JSON.stringify(frame)} grabOp=${grabOp} ` +
+            `isResize=${this._isResizeGrab(grabOp)} isMove=${this._isMoveGrab(grabOp)} float=${this._isFloating(metaWindow)}`);
 
         if (this._isResizeGrab(grabOp) && !this._isFloating(metaWindow)) {
             const direction = (grabOp >> 12) & 0xF;
@@ -4153,12 +4176,10 @@ export default class TilingWMExtension extends Extension {
 
             this._startGrabLoop(metaWindow, 'resize');
             this._disconnectGrabBoundaryHooks();
-            try {
-                this._grabSizeChangedId = metaWindow.connect('size-changed', () =>
-                    this._enforceGrabBoundary(metaWindow));
-                this._grabPositionChangedId = metaWindow.connect('position-changed', () =>
-                    this._enforceGrabBoundary(metaWindow));
-            } catch (_e) {}
+            this._grabSizeChangedId = metaWindow.connect('size-changed', () =>
+                this._enforceGrabBoundary(metaWindow));
+            this._grabPositionChangedId = metaWindow.connect('position-changed', () =>
+                this._enforceGrabBoundary(metaWindow));
         } else if (this._isMoveGrab(grabOp) && !this._isFloating(metaWindow)) {
             this._startGrabLoop(metaWindow, 'move');
         } else {
@@ -4201,7 +4222,8 @@ export default class TilingWMExtension extends Extension {
                 const tree = this._bspGetTree(ws);
                 const treeWins = tree ? this._bspCollectWindows(tree) : [];
                 const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
-                this._debugLog(`GRAB_END win=${wmClass} treeWins=[${treeWins.map(w => w.get_wm_class_instance() || '?').join(',')}] tiled=[${tiled.map(w => w.get_wm_class_instance() || '?').join(',')}]`);
+                this._debugLog(`GRAB_END win=${wmClass} treeWins=[${treeWins.map(w => w.get_wm_class_instance() || '?').join(',')}] ` +
+                    `tiled=[${tiled.map(w => w.get_wm_class_instance() || '?').join(',')}]`);
             }
         }
 
@@ -4309,7 +4331,8 @@ export default class TilingWMExtension extends Extension {
                     if (this._grabWidthSign !== 0) {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
-                        this._debugLog(`MS_RESIZE dx=${dx} dy=${dy} wSign=${this._grabWidthSign} hSign=${this._grabHeightSign} idx=${idx} numTiled=${tiled.length} initMasterRatio=${this._grabInitialMasterRatio.toFixed(3)}`);
+                        this._debugLog(`MS_RESIZE dx=${dx} dy=${dy} wSign=${this._grabWidthSign} hSign=${this._grabHeightSign} ` +
+                            `idx=${idx} numTiled=${tiled.length} initMasterRatio=${this._grabInitialMasterRatio.toFixed(3)}`);
                         let sign = this._grabWidthSign;
                         if (idx > 0) sign = -sign;
                         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
@@ -4345,7 +4368,8 @@ export default class TilingWMExtension extends Extension {
                         const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
                         if (idx > 0 && this._grabInitialStackRatios) {
-                            this._debugLog(`MS_HEIGHT idx=${idx} dy=${dy} hSign=${this._grabHeightSign} initStackRatios=[${[...this._grabInitialStackRatios.entries()].map(([k,v])=>`${k}:${v.toFixed(2)}`).join(',')}]`);
+                            this._debugLog(`MS_HEIGHT idx=${idx} dy=${dy} hSign=${this._grabHeightSign} ` +
+                                `initStackRatios=[${[...this._grabInitialStackRatios.entries()].map(([k,v])=>`${k}:${v.toFixed(2)}`).join(',')}]`);
                             const numStack = tiled.length - 1;
                             const gapTotal = gap * (numStack - 1);
                             const totalStackH = areaH - gapTotal;
@@ -4443,7 +4467,7 @@ export default class TilingWMExtension extends Extension {
         // A single tiled window's slot IS its placement rect — the layouts
         // place the lone window via _singleWindowRect (the work area inset
         // by the per-edge outside-gap-* settings). The slot must agree
-        // EXACTLY or the re-assert/audit machinery sees a phantom mismatch
+        // EXACTLY or the re-assert/verification machinery sees a phantom mismatch
         // (or, for dwindle, no slot at all — the BSP tree is never built
         // for a single window, so the tree branch returned null and every
         // settle re-assert silently no-oped while the window sat off-slot).
@@ -4575,13 +4599,13 @@ export default class TilingWMExtension extends Extension {
         const win = this._grabWindow;
         if (this._grabSizeChangedId) {
             if (win) {
-                try { win.disconnect(this._grabSizeChangedId); } catch (_e) {}
+                win.disconnect(this._grabSizeChangedId);
             }
             this._grabSizeChangedId = 0;
         }
         if (this._grabPositionChangedId) {
             if (win) {
-                try { win.disconnect(this._grabPositionChangedId); } catch (_e) {}
+                win.disconnect(this._grabPositionChangedId);
             }
             this._grabPositionChangedId = 0;
         }
@@ -4664,10 +4688,12 @@ export default class TilingWMExtension extends Extension {
                 win._plaidSurfaceStrikes = strikes;
                 if (strikes > 3) {
                     if (strikes === 4)
-                        this._debugLog(`surface divergence: accepting client geometry for ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height})`);
+                        this._debugLog(`surface divergence: accepting client geometry for ${win.get_wm_class_instance() || '?'} ` +
+                            `frame=(${f.x},${f.y},${f.width},${f.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height})`);
                     return;
                 }
-                this._debugLog(`slot re-assert (surface): ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h}) (strike ${strikes}/3)`);
+                this._debugLog(`slot re-assert (surface): ${win.get_wm_class_instance() || '?'} frame=(${f.x},${f.y},${f.width},${f.height}) ` +
+                    `buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height}) slot=(${slot.x},${slot.y},${slot.w},${slot.h}) (strike ${strikes}/3)`);
                 off = true;
             } else {
                 // Surface (re)covered the frame — forget past strikes so a
@@ -4714,14 +4740,14 @@ export default class TilingWMExtension extends Extension {
 
     _startPickMode() {
         if (this._pickFocusId) {
-            try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+            global.display.disconnect(this._pickFocusId);
             this._pickFocusId = null;
         }
         this._pickFocusId = global.display.connect('notify::focus-window', () => {
             const win = global.display.focus_window;
             if (!win) return;
             if (this._pickFocusId) {
-                try { global.display.disconnect(this._pickFocusId); } catch (_e) {}
+                global.display.disconnect(this._pickFocusId);
                 this._pickFocusId = null;
             }
             const cls = this._winClassCandidates(win)[0] || '';
@@ -4981,7 +5007,7 @@ export default class TilingWMExtension extends Extension {
 
     _destroyDropPreview() {
         if (this._dropPreview) {
-            try { this._dropPreview.destroy(); } catch (_e) {}
+            this._dropPreview.destroy();
             this._dropPreview = null;
         }
     }
@@ -5018,8 +5044,7 @@ export default class TilingWMExtension extends Extension {
             // removal merges away) must leave the tree untouched: the old
             // code removed the window and never re-inserted it, so the
             // follow-up retile re-added it as the "newest" leaf — a silent
-            // arrangement reshuffle (and the reshuffled shape got persisted)
-            // (2026-10-04 audit).
+            // arrangement reshuffle (and the reshuffled shape got persisted).
             if (targetLeaf.window === window) {
                 this._bspTrees.set(ws, tree);
                 return;
@@ -5043,7 +5068,7 @@ export default class TilingWMExtension extends Extension {
             // (master=0, stack=1..N-1) while the order interleaves
             // toggle-floated windows — comparing/splicing across the two
             // spaces placed the window at the wrong relative position
-            // whenever a float was interleaved (2026-10-04 audit). Map
+            // whenever a float was interleaved. Map
             // both sides to the tiled space, then back to the order.
             const tiledIdx = tiled.indexOf(window);
             if (tiledIdx === -1) return;

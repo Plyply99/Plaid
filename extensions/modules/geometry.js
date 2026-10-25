@@ -4,7 +4,7 @@
 
 export function _isValidWorkArea(workArea) {
     // mutter can return a garbage rect from get_work_area_for_monitor
-    // while monitors are mid-reconfiguration (the 2026-10-04 login race:
+    // while monitors are mid-reconfiguration (the login race:
     // 9x 'get_logical_monitor_from_number' assertions → a (5,4,1,1)-class
     // rect passed the old width===0 guard and drove a false 1x1-slot
     // retile that floated Firefox at login). A healthy work area is
@@ -51,7 +51,7 @@ export function _bgAppRealToDisplay(realIdx) {
         this._wsIndex(this._backgroundAppParkingWs) : -1;
     // No parking workspace => no reserved slot => identity mapping. A
     // bare `realIdx > -1` is always true and would shift every label
-    // down by one (2026-10-05 audit).
+    // down by one.
     return parkingIdx >= 0 && realIdx > parkingIdx ? realIdx - 1 : realIdx;
 }
 

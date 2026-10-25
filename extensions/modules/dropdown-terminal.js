@@ -83,11 +83,11 @@ export function _handleDropdownWindowCreated(win) {
     let unmanagedId = 0;
     const cleanup = () => {
         if (unmanagedId) {
-            try { win.disconnect(unmanagedId); } catch (_e) {}
+            win.disconnect(unmanagedId);
             unmanagedId = 0;
         }
         for (const id of notifyIds) {
-            try { win.disconnect(id); } catch (_e) {}
+            win.disconnect(id);
         }
         notifyIds.length = 0;
         if (this._dropdownWaiters.get(win) === cleanup) {
@@ -127,7 +127,7 @@ export function _tryClaimDropdown(win) {
     // backstop timer must not force-reveal it later on a wrong
     // workspace. Clear both here.
     if (win._plaidInvisibleTimer) {
-        try { GLib.source_remove(win._plaidInvisibleTimer); } catch (_e) {}
+        GLib.source_remove(win._plaidInvisibleTimer);
         win._plaidInvisibleTimer = 0;
     }
     if (this._pendingWarp && this._pendingWarp.has(win))
@@ -299,12 +299,12 @@ export function _clearDropdownWindow() {
     if (!win) return;
     if (this._dropdownGeometryIds) {
         for (const id of this._dropdownGeometryIds) {
-            try { win.disconnect(id); } catch (_e) {}
+            win.disconnect(id);
         }
         this._dropdownGeometryIds = null;
     }
     if (this._dropdownUnmanagedId) {
-        try { win.disconnect(this._dropdownUnmanagedId); } catch (_e) {}
+        win.disconnect(this._dropdownUnmanagedId);
         this._dropdownUnmanagedId = 0;
     }
     this._removeBorder(win);

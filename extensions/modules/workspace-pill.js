@@ -87,8 +87,8 @@ export function _updateWorkspacePill() {
             focused && !focused.skip_taskbar && focused !== this._backgroundAppWin;
 
         if (this._workspacePillFocusedWin) {
-            try { this._workspacePillFocusedWin.disconnect(this._workspacePillTitleId); } catch (_e) {}
-            try { this._workspacePillFocusedWin.disconnect(this._workspacePillUnmanagedId); } catch (_e) {}
+            this._workspacePillFocusedWin.disconnect(this._workspacePillTitleId);
+            this._workspacePillFocusedWin.disconnect(this._workspacePillUnmanagedId);
             this._workspacePillFocusedWin = null;
             this._workspacePillTitleId = 0;
             this._workspacePillUnmanagedId = 0;
@@ -137,7 +137,7 @@ export function _updateWorkspacePill() {
                 focused.connect('notify::title', () => this._scheduleWorkspacePillUpdate());
             this._workspacePillUnmanagedId = focused.connect('unmanaged', () => {
                 if (this._workspacePillFocusedWin !== focused) return;
-                try { focused.disconnect(this._workspacePillTitleId); } catch (_e) {}
+                focused.disconnect(this._workspacePillTitleId);
                 this._workspacePillFocusedWin = null;
                 this._workspacePillTitleId = 0;
                 this._workspacePillUnmanagedId = 0;
@@ -156,16 +156,19 @@ export function _restoreWorkspacePill() {
         GLib.source_remove(this._workspacePillUpdateId);
         this._workspacePillUpdateId = 0;
     }
+    if (this._workspacePill) {
+        this._workspacePill.destroy();
+        this._workspacePill = null;
+    }
     if (this._workspacePillFocusedWin) {
-        try { this._workspacePillFocusedWin.disconnect(this._workspacePillTitleId); } catch (_e) {}
-        try { this._workspacePillFocusedWin.disconnect(this._workspacePillUnmanagedId); } catch (_e) {}
+        const win = this._workspacePillFocusedWin;
+        const titleId = this._workspacePillTitleId;
+        const unmanagedId = this._workspacePillUnmanagedId;
         this._workspacePillFocusedWin = null;
         this._workspacePillTitleId = 0;
         this._workspacePillUnmanagedId = 0;
-    }
-    if (this._workspacePill) {
-        try { this._workspacePill.destroy(); } catch (_e) {}
-        this._workspacePill = null;
+        win.disconnect(titleId);
+        win.disconnect(unmanagedId);
     }
     if (this._workspacePillIndicators) {
         try {

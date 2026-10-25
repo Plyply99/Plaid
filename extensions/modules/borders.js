@@ -84,7 +84,7 @@ export function _ensureWindowBorder(win, actor, frame, isFocused) {
         let alive = false;
         try { alive = old.get_parent() === actor; } catch (_e) { alive = false; }
         if (old._plaidSig === sig && alive) return true;
-        try { old.destroy(); } catch (_e) {}
+        old.destroy();
         this._windowBorders.delete(win);
     }
 
@@ -126,6 +126,7 @@ export function _ensureWindowBorder(win, actor, frame, isFocused) {
     // normal border stays, plus a flat ring outside it whose width
     // follows the user's active-border-width setting.
     if (this._scratchpadWindows && this._scratchpadWindows.has(win)) {
+        // Ring creation is best-effort; a failure must not break the border.
         try {
             const ringWidth = Math.max(2, activeWidth);
             const scratchColor =
@@ -144,9 +145,8 @@ export function _ensureWindowBorder(win, actor, frame, isFocused) {
             actor.add_child(ring);
             ring._plaidRing = true;
             const old = this._scratchpadRings.get(win);
-            if (old) {
-                try { old.destroy(); } catch (_e) {}
-            }
+            if (old)
+                old.destroy();
             this._scratchpadRings.set(win, ring);
         } catch (_e) {}
     }
@@ -343,12 +343,12 @@ export function _updateBordersDuringGrab() {
 
 export function _removeAllBorders() {
     for (const border of this._windowBorders.values()) {
-        try { border.destroy(); } catch (_e) {}
+        border.destroy();
     }
     this._windowBorders.clear();
     if (this._scratchpadRings) {
         for (const ring of this._scratchpadRings.values()) {
-            try { ring.destroy(); } catch (_e) {}
+            ring.destroy();
         }
         this._scratchpadRings.clear();
     }
@@ -359,11 +359,11 @@ export function _removeWidgetBorder(win) {
     // unlike _removeBorder, which also destroys the mask (correct for
     // fullscreen/clear, wrong when the SDF border should take over).
     if (this._windowBorders.has(win)) {
-        try { this._windowBorders.get(win).destroy(); } catch (_e) {}
+        this._windowBorders.get(win).destroy();
         this._windowBorders.delete(win);
     }
     if (this._scratchpadRings && this._scratchpadRings.has(win)) {
-        try { this._scratchpadRings.get(win).destroy(); } catch (_e) {}
+        this._scratchpadRings.get(win).destroy();
         this._scratchpadRings.delete(win);
     }
 }
@@ -371,13 +371,13 @@ export function _removeWidgetBorder(win) {
 export function _removeBorder(win) {
     const border = this._windowBorders.get(win);
     if (border) {
-        try { border.destroy(); } catch (_e) {}
+        border.destroy();
         this._windowBorders.delete(win);
     }
     if (this._scratchpadRings) {
         const ring = this._scratchpadRings.get(win);
         if (ring) {
-            try { ring.destroy(); } catch (_e) {}
+            ring.destroy();
             this._scratchpadRings.delete(win);
         }
     }

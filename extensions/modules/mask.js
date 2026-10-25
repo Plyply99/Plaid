@@ -391,13 +391,11 @@ export function _ensureWindowMask(win, actor, radius) {
         }
         effect.enabled = true;
         effect._metaWin = win;
-        try {
-            effect._watchActor = target;
-            effect._sizeWatchId = target.connect('notify::size', () => {
-                this._connectTextureWatch(win, actor, effect);
-                this._scheduleMaskRedraw(win, actor, effect);
-            });
-        } catch (_e) {}
+        effect._watchActor = target;
+        effect._sizeWatchId = target.connect('notify::size', () => {
+            this._connectTextureWatch(win, actor, effect);
+            this._scheduleMaskRedraw(win, actor, effect);
+        });
         this._connectTextureWatch(win, actor, effect);
     }
     this._updateMaskBounds(win, actor, effect, radius);
@@ -406,25 +404,23 @@ export function _ensureWindowMask(win, actor, radius) {
 
 export function _connectTextureWatch(win, actor, effect) {
     if (effect._textureWatchId) {
-        try { effect._watchTexture.disconnect(effect._textureWatchId); } catch (_e) {}
+        effect._watchTexture.disconnect(effect._textureWatchId);
         effect._textureWatchId = 0;
     }
     let texture = null;
     if (actor && actor.get_texture)
         texture = actor.get_texture();
     if (texture && texture.connect) {
-        try {
-            effect._watchTexture = texture;
-            effect._textureWatchId = texture.connect('size-changed', () => {
-                this._scheduleMaskRedraw(win, actor, effect);
-            });
-        } catch (_e) {}
+        effect._watchTexture = texture;
+        effect._textureWatchId = texture.connect('size-changed', () => {
+            this._scheduleMaskRedraw(win, actor, effect);
+        });
     }
 }
 
 export function _scheduleMaskRedraw(win, actor, effect) {
     if (effect._refreshTimeoutId) {
-        try { GLib.source_remove(effect._refreshTimeoutId); } catch (_e) {}
+        GLib.source_remove(effect._refreshTimeoutId);
     }
     effect._refreshTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         effect._refreshTimeoutId = 0;
@@ -447,7 +443,7 @@ export function _kickMaskNow(win) {
     const effect = this._windowMasks.get(win);
     if (!effect) return;
     if (effect._refreshTimeoutId) {
-        try { GLib.source_remove(effect._refreshTimeoutId); } catch (_e) {}
+        GLib.source_remove(effect._refreshTimeoutId);
         effect._refreshTimeoutId = 0;
     }
     const actor = win.get_compositor_private();
@@ -616,16 +612,16 @@ export function _updateMaskBounds(win, actor, effect, radius) {
 
 export function _teardownMaskEffect(win, effect) {
     if (effect._refreshTimeoutId) {
-        try { GLib.source_remove(effect._refreshTimeoutId); } catch (_e) {}
+        GLib.source_remove(effect._refreshTimeoutId);
         effect._refreshTimeoutId = 0;
     }
     effect._metaWin = null;
     if (effect._sizeWatchId) {
-        try { effect._watchActor.disconnect(effect._sizeWatchId); } catch (_e) {}
+        effect._watchActor.disconnect(effect._sizeWatchId);
         effect._sizeWatchId = 0;
     }
     if (effect._textureWatchId) {
-        try { effect._watchTexture.disconnect(effect._textureWatchId); } catch (_e) {}
+        effect._watchTexture.disconnect(effect._textureWatchId);
         effect._textureWatchId = 0;
     }
     effect._watchActor = null;

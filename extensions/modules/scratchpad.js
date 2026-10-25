@@ -160,7 +160,7 @@ export function _scratchpadRemove() {
     // _ensureWindowBorder was tried first and correlated with the
     // scratchpad keybind handler dying — keep this cleanup HERE.
     if (this._scratchpadRings && this._scratchpadRings.has(win)) {
-        try { this._scratchpadRings.get(win).destroy(); } catch (_e) {}
+        this._scratchpadRings.get(win).destroy();
         this._scratchpadRings.delete(win);
     }
     try {

@@ -545,7 +545,7 @@ export function _ensureWindowBlur(win, actor) {
                     currentActor.remove_effect_by_name(BLUR_EFFECT_NAME);
                 if (blur._sibling) {
                     this._unbindBlurSibling(blur);
-                    try { blur._sibling.destroy(); } catch (_e) {}
+                    blur._sibling.destroy();
                     blur._sibling = null;
                 }
                 this._windowBlurs.delete(win);
@@ -608,13 +608,9 @@ export function _ensureWindowBlur(win, actor) {
             blur._sibling = sibling;
             blur._sourceActor = actor;
             this._windowBlurs.set(win, blur);
-            try {
-                blur._actorDestroyId = actor.connect('destroy', () => this._removeBlur(win));
-            } catch (_e) {}
-            try {
-                blur._actorParentSetId = actor.connect('parent-set',
-                    () => this._syncBlurStacking());
-            } catch (_e) {}
+            blur._actorDestroyId = actor.connect('destroy', () => this._removeBlur(win));
+            blur._actorParentSetId = actor.connect('parent-set',
+                () => this._syncBlurStacking());
             // Suppress the blur while the actor animates: a scaled/faded actor
             // would stretch the full-size backdrop paint into a smear. Disable
             // the effect while scaling or fading, re-enable at rest, and re-sync
@@ -641,11 +637,8 @@ export function _ensureWindowBlur(win, actor) {
                 } catch (_e) {}
             };
             for (const sig of ['notify::scale-x', 'notify::scale-y',
-                               'notify::opacity', 'notify::x', 'notify::y']) {
-                try {
-                    blur._settleNotifyIds.push(actor.connect(sig, syncBlurState));
-                } catch (_e) {}
-            }
+                               'notify::opacity', 'notify::x', 'notify::y'])
+                blur._settleNotifyIds.push(actor.connect(sig, syncBlurState));
             syncBlurState();
             try {
                 const frame = win.get_frame_rect();
@@ -740,7 +733,7 @@ export function _syncBlurStacking() {
     this._syncBlurStackingNow();
 }
 
-export function _syncBlurStackingNow() {
+export function _syncBlurStackingNow(recheck = false) {
     if (!this._windowBlurs) return false;
     let changed = false;
     const monitors = global.display.get_n_monitors();
@@ -829,6 +822,16 @@ export function _syncBlurStackingNow() {
                 if (si !== -1 && ai !== -1 && si > ai) {
                     global.window_group.set_child_below_sibling(sibling, source);
                     changed = true;
+                    // restacked can fire before mutter finishes the re-stack;
+                    // re-check once after it settles (only if we moved).
+                    if (!recheck && !this._blurStackRecheckId) {
+                        this._blurStackRecheckId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                            this._blurStackRecheckId = 0;
+                            if (this._destroyed) return GLib.SOURCE_REMOVE;
+                            this._syncBlurStackingNow(true);
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    }
                 }
             }
         } catch (_e) {}
@@ -840,41 +843,60 @@ export function _removeBlur(win) {
     if (!this._windowBlurs) return;
     const blur = this._windowBlurs.get(win);
     if (!blur) return;
-    if (blur._actorDestroyId) {
-        const a = win.get_compositor_private();
-        if (a) {
-            try { a.disconnect(blur._actorDestroyId); } catch (_e) {}
-        }
-        blur._actorDestroyId = 0;
-    }
-    if (blur._actorParentSetId) {
-        const a = win.get_compositor_private();
-        if (a) {
-            try { a.disconnect(blur._actorParentSetId); } catch (_e) {}
-        }
-        blur._actorParentSetId = 0;
-    }
-    if (blur._settleNotifyIds && blur._settleNotifyIds.length) {
-        const a = win.get_compositor_private();
-        for (const id of blur._settleNotifyIds) {
-            if (a) {
-                try { a.disconnect(id); } catch (_e) {}
-            }
-        }
-        blur._settleNotifyIds = [];
-    }
+    // Drop the visible sibling FIRST: the blur is painted by that actor, so a
+    // stale signal below must never leave it on screen when blur is turned off.
     if (blur._sibling) {
         this._unbindBlurSibling(blur);
-        // The blur effect lives on the sibling — destroying it drops the
-        // effect; the window actor carries no blur effect to remove.
-        try { blur._sibling.destroy(); } catch (_e) {}
+        const sibling = blur._sibling;
         blur._sibling = null;
+        try {
+            sibling.destroy();
+        } catch (e) {
+            this._debugLog(`blur remove: sibling destroy failed: ${e.message}`);
+        }
+    }
+    // These signals can outlive their actor; a failed disconnect must not abort
+    // the rest of the teardown (the sibling is already gone).
+    if (blur._actorDestroyId) {
+        const id = blur._actorDestroyId;
+        blur._actorDestroyId = 0;
+        try {
+            const a = win.get_compositor_private();
+            if (a) a.disconnect(id);
+        } catch (e) {
+            this._debugLog(`blur remove: destroy disconnect failed: ${e.message}`);
+        }
+    }
+    if (blur._actorParentSetId) {
+        const id = blur._actorParentSetId;
+        blur._actorParentSetId = 0;
+        try {
+            const a = win.get_compositor_private();
+            if (a) a.disconnect(id);
+        } catch (e) {
+            this._debugLog(`blur remove: parent-set disconnect failed: ${e.message}`);
+        }
+    }
+    if (blur._settleNotifyIds && blur._settleNotifyIds.length) {
+        const ids = blur._settleNotifyIds;
+        blur._settleNotifyIds = [];
+        try {
+            const a = win.get_compositor_private();
+            if (a)
+                for (const id of ids) a.disconnect(id);
+        } catch (e) {
+            this._debugLog(`blur remove: settle disconnect failed: ${e.message}`);
+        }
     }
     this._windowBlurs.delete(win);
 }
 
 export function _removeAllBlurs() {
     if (!this._windowBlurs) return;
+    if (this._blurStackRecheckId) {
+        GLib.source_remove(this._blurStackRecheckId);
+        this._blurStackRecheckId = 0;
+    }
     // Fresh attempt on the next blur enable, including windows stuck on the
     // square fallback — the healer re-sticks them if the GL problem persists.
     for (const win of [...this._windowBlurs.keys()]) {
@@ -891,7 +913,7 @@ export function _purgeOrphanBlurs() {
     for (const child of global.window_group.get_children()) {
         if (!child || !child.get_effect || child.get_effect(BLUR_EFFECT_NAME) === null) continue;
         if (!tracked.has(child)) {
-            try { child.destroy(); } catch (_e) {}
+            child.destroy();
         }
     }
 }

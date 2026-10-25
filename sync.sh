@@ -35,14 +35,6 @@ for file in "$SOURCE"/*; do
     sync_file "$file" "$DEST/$(basename "$file")"
 done
 
-if [ -d "$SOURCE/assets" ]; then
-    mkdir -p "$DEST/assets"
-    for file in "$SOURCE"/assets/*; do
-        [ -f "$file" ] || continue
-        sync_file "$file" "$DEST/assets/$(basename "$file")"
-    done
-fi
-
 if [ -d "$SOURCE/schemas" ]; then
     mkdir -p "$DEST/schemas"
     for file in "$SOURCE"/schemas/*; do

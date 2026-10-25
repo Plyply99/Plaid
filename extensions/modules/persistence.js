@@ -141,7 +141,9 @@ export function _loadPersistedLayoutRules() {
             if (map.size > 0)
                 this._persistedStackByIndex.set(idx, map);
         }
-        this._debugLog(`persisted rules: ${this._persistedLayoutByIndex.size} layouts, ${this._persistedMasterByIndex.size} master, ${this._persistedStackByIndex.size} stack, ${this._persistedDwindleByIndex.size} dwindle`);
+        this._debugLog(`persisted rules: ${this._persistedLayoutByIndex.size} layouts, ` +
+            `${this._persistedMasterByIndex.size} master, ${this._persistedStackByIndex.size} stack, ` +
+            `${this._persistedDwindleByIndex.size} dwindle`);
     } catch (e) {
         log(`[plaid] load persisted layout rules failed: ${e.message}`);
     }

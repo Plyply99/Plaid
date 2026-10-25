@@ -72,18 +72,14 @@ export function _scheduleBackgroundAppReleaseWatch() {
 export function _releaseBackgroundAppReservation() {
     if (this._destroyed || !this._backgroundAppParkingWs) return;
     this._debugLog('background app: release reservation (no window after 20s)');
-    try {
-        if (this._backgroundAppNWorkspacesId) {
-            global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId);
-            this._backgroundAppNWorkspacesId = 0;
-        }
-    } catch (_e) {}
-    try {
-        if (this._backgroundAppKeepAliveId) {
-            GLib.source_remove(this._backgroundAppKeepAliveId);
-            this._backgroundAppKeepAliveId = 0;
-        }
-    } catch (_e) {}
+    if (this._backgroundAppNWorkspacesId) {
+        global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId);
+        this._backgroundAppNWorkspacesId = 0;
+    }
+    if (this._backgroundAppKeepAliveId) {
+        GLib.source_remove(this._backgroundAppKeepAliveId);
+        this._backgroundAppKeepAliveId = 0;
+    }
     this._backgroundAppParkingWs = null;
     this._backgroundAppParkingFront = false;
     try { this._restoreBackgroundAppHiding(); } catch (_e) {}
@@ -603,7 +599,7 @@ export function _handleBackgroundAppWindowCreated(win) {
             try { win.skip_taskbar = false; } catch (_e) {}
         }
         for (const id of ids) {
-            try { win.disconnect(id); } catch (_e) {}
+            win.disconnect(id);
         }
         ids.length = 0;
         if (this._backgroundAppWaiter && this._backgroundAppWaiter.win === win)
@@ -702,12 +698,14 @@ export function _configureBackgroundApp(win) {
         });
         return GLib.SOURCE_REMOVE;
     };
+    // The window actor can be gone during the login burst; the 5s fallback
+    // timer below still schedules the park.
     try {
         const actor = win.get_compositor_private();
         if (actor) {
             this._backgroundAppFirstFrameId = actor.connect('first-frame', () => {
                 if (this._backgroundAppFirstFrameId) {
-                    try { actor.disconnect(this._backgroundAppFirstFrameId); } catch (_e) {}
+                    actor.disconnect(this._backgroundAppFirstFrameId);
                     this._backgroundAppFirstFrameId = 0;
                 }
                 this._debugLog('background app: first-frame fired, scheduling park in 3s');
@@ -771,7 +769,7 @@ export function _disconnectBackgroundAppParkWatch() {
     this._backgroundAppParkCount = 0;
     if (this._backgroundAppParkIds) {
         for (const { emitter, id } of this._backgroundAppParkIds) {
-            try { emitter.disconnect(id); } catch (_e) {}
+            emitter.disconnect(id);
         }
         this._backgroundAppParkIds = null;
     }
@@ -1177,7 +1175,7 @@ export function _startBackgroundAppCloneWatch(win) {
                 // The window actor can be replaced (surface round-trips):
                 // the clone would keep painting the dead source (blank).
                 this._debugLog('background app: clone source actor replaced — recreating clone');
-                try { this._backgroundAppClone.destroy(); } catch (_e) {}
+                this._backgroundAppClone.destroy();
                 this._backgroundAppClone = null;
                 this._ensureBackgroundAppClone(win);
             }
@@ -1299,7 +1297,7 @@ export function _clearBackgroundApp(releaseReservation = true) {
     // wraps, and the n-workspaces re-hide hook — only a full release
     // (extension disable) tears them down.
     if (releaseReservation && this._backgroundAppNWorkspacesId) {
-        try { global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId); } catch (_e) {}
+        global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId);
         this._backgroundAppNWorkspacesId = 0;
     }
     if (this._backgroundAppParkRetryId) {
@@ -1318,14 +1316,12 @@ export function _clearBackgroundApp(releaseReservation = true) {
         this._backgroundAppParkingFixId = 0;
     }
     if (this._backgroundAppClone) {
-        try { this._backgroundAppClone.destroy(); } catch (_e) {}
+        this._backgroundAppClone.destroy();
         this._backgroundAppClone = null;
     }
     if (this._backgroundAppGroupAddedId) {
-        try {
-            const bg = Main.layoutManager._backgroundGroup;
-            if (bg) bg.disconnect(this._backgroundAppGroupAddedId);
-        } catch (_e) {}
+        const bg = Main.layoutManager._backgroundGroup;
+        if (bg) bg.disconnect(this._backgroundAppGroupAddedId);
         this._backgroundAppGroupAddedId = 0;
     }
     if (this._backgroundAppWaiter) {
@@ -1344,11 +1340,12 @@ export function _clearBackgroundApp(releaseReservation = true) {
         `waiter=${!!this._backgroundAppWaiter} lockCycle=${sessionState.lockCycle}`);
     if (this._backgroundAppUnmanagedId) {
         if (win) {
-            try { win.disconnect(this._backgroundAppUnmanagedId); } catch (_e) {}
+            win.disconnect(this._backgroundAppUnmanagedId);
         }
         this._backgroundAppUnmanagedId = 0;
     }
     if (this._backgroundAppFirstFrameId && win) {
+        // A destroyed window actor cannot be disconnected; teardown continues.
         try {
             const actor = win.get_compositor_private();
             if (actor) actor.disconnect(this._backgroundAppFirstFrameId);

@@ -216,8 +216,7 @@ export function _bspInsertForWorkspace(ws, win) {
         // resolved against the primary gapped area to an ARBITRARY leaf
         // (the top-left-most), landing the new window in a slot
         // unrelated to where the user works; the append-at-end fallback
-        // matches the plain new-window behavior instead
-        // (2026-10-04 audit).
+        // matches the plain new-window behavior instead.
         const inside = px >= areaX && px < areaX + areaW &&
             py >= areaY && py < areaY + areaH;
         const target = inside
@@ -360,7 +359,7 @@ export function _adjustForConstraints(node, parent, isFirst, x, y, w, h, gap, pa
         // axis — `1 - frame/ownSlot` for a second child goes negative
         // whenever the frame exceeds its (too-small) slot, clamping the
         // ratio to 0.05 (and a stale mid-animation first-child frame
-        // clamps it to 0.95): the 2026-10-02 goverlay/emacs oscillation
+        // clamps it to 0.95): the goverlay/emacs oscillation
         // that produced 95px slots and a give-up float.
         const axisSize = parentAxis;
         if (axisSize <= 0) return false;
@@ -411,8 +410,7 @@ export function _dwindleShapeToString(node) {
     // Clamp before toFixed(4): a ratio ≥ 0.99995 serializes to "1.0000"
     // (and ≤ 0.00005 to "0.0000") which _dwindleShapeFromString REJECTS
     // (ratio must be strictly between 0 and 1) — the whole entry was
-    // silently dropped from the written strv, losing the saved shape
-    // (2026-10-04 audit).
+    // silently dropped from the written strv, losing the saved shape.
     const r = Math.min(0.9999, Math.max(0.0001, ratio));
     return `${node.direction === 'v' ? 'v' : 'h'}${r.toFixed(4)}` +
         `(${this._dwindleShapeToString(node.first)},${this._dwindleShapeToString(node.second)})`;
@@ -493,7 +491,7 @@ export function _findDirectionalTarget(win, direction, windows) {
     // overlap > bestOverlap + 5, so the OLD -1 made the first candidate
     // need overlap > 4 — tall narrow panes sharing only a few pixels of
     // edge were unnavigable by the focus/swap keybinds even when they
-    // were the only neighbor in that direction (2026-10-04 audit).
+    // were the only neighbor in that direction.
     let bestOverlap = 0;
     let bestDist = Infinity;
     let bestPerp = Infinity;
