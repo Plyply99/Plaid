@@ -5,6 +5,13 @@
 // are attached to TilingWMExtension.prototype in extension.js, so their bodies
 // and call sites are unchanged.
 
+export const LAYOUT_NAMES = {
+    'dwindle': 'Dwindle',
+    'master-stack': 'Master-stack',
+    'centered-master-stack': 'Centered Master-stack',
+    'floating': 'Floating',
+};
+
 // Canonical form of an accelerator for comparison: '<Shift><Super>h' and
 // '<Super><Shift>h' are the same shortcut (GTK, mutter, and users write the
 // modifier order differently) — lowercased sorted modifiers + key.
