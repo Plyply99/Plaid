@@ -63,10 +63,10 @@ export function _scheduleWorkspacePillUpdate() {
     // Never churn actors synchronously inside a signal — the compositor is
     // mid-cycle (stacking/redraw) and a destroy/create there can segfault.
     // Coalesce the update onto the idle loop instead.
-    if (this._destroyed || this._workspacePillUpdateId) return;
+    if (!this._settings || this._workspacePillUpdateId) return;
     this._workspacePillUpdateId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
         this._workspacePillUpdateId = 0;
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._updateWorkspacePill();
         return GLib.SOURCE_REMOVE;
     });

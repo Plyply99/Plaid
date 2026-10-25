@@ -159,7 +159,7 @@ export function _tryClaimDropdown(win) {
 }
 
 export function _recheckDropdownWaiters() {
-    if (this._destroyed || !this._settings || !this._dropdownPending) return;
+    if (!this._settings || !this._dropdownPending) return;
     for (const win of [...this._dropdownWaiters.keys()]) {
         const cleanup = this._dropdownWaiters.get(win);
         if (!this._tryClaimDropdown(win)) continue;
@@ -222,7 +222,7 @@ export function _scheduleDropdownWorkspaceSync() {
     if (this._dropdownSyncId) return;
     this._dropdownSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 120, () => {
         this._dropdownSyncId = 0;
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._syncDropdownWorkspace();
         return GLib.SOURCE_REMOVE;
     });
@@ -253,7 +253,7 @@ export function _dropdownRect() {
 export function _positionDropdownTerminal(win) {
     let retries = 0;
     const apply = () => {
-        if (this._destroyed) return false;
+        if (!this._settings) return false;
         let rect = null;
         try { rect = this._dropdownRect(); } catch (_e) {}
         if (!rect) return false;
@@ -286,7 +286,7 @@ export function _positionDropdownTerminal(win) {
         return true;
     };
     const retry = () => {
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
     };
     if (apply())

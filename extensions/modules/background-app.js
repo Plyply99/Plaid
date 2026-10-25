@@ -44,7 +44,7 @@ export function _scheduleBackgroundAppReleaseWatch() {
     if (this._backgroundAppReleaseId) return;
     this._backgroundAppReleaseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 20000, () => {
         this._backgroundAppReleaseId = 0;
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         if (this._backgroundAppWin || !this._backgroundAppPending) return GLib.SOURCE_REMOVE;
         this._releaseBackgroundAppReservation();
         return GLib.SOURCE_REMOVE;
@@ -52,7 +52,7 @@ export function _scheduleBackgroundAppReleaseWatch() {
 }
 
 export function _releaseBackgroundAppReservation() {
-    if (this._destroyed || !this._backgroundAppParkingWs) return;
+    if (!this._settings || !this._backgroundAppParkingWs) return;
     this._debugLog('background app: release reservation (no window after 20s)');
     if (this._backgroundAppNWorkspacesId) {
         global.workspace_manager.disconnect(this._backgroundAppNWorkspacesId);
@@ -88,7 +88,7 @@ export function _reserveBackgroundAppWorkspace() {
     // BGAPP lives on the first real workspace (ws0, the user's "workspace 1"),
     // permanently reserved at the front (never reordered); its card is hidden so
     // the overview row stays gapless. Content lives on ws1+ (_bgAppRealToDisplay).
-    if (this._destroyed || this._backgroundAppParkingWs) return;
+    if (!this._settings || this._backgroundAppParkingWs) return;
     try {
         const first = global.workspace_manager.get_workspace_by_index(0);
         if (!first) return;
@@ -119,7 +119,7 @@ export function _reserveBackgroundAppWorkspace() {
             if (global.workspace_manager.get_active_workspace() === this._backgroundAppParkingWs) {
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
-                    if (this._destroyed) return GLib.SOURCE_REMOVE;
+                    if (!this._settings) return GLib.SOURCE_REMOVE;
                     try {
                         const next = global.workspace_manager.get_workspace_by_index(1);
                         if (next) next.activate(this._currentTime());
@@ -139,16 +139,16 @@ export function _reserveBackgroundAppWorkspace() {
         if (!this._backgroundAppNWorkspacesId) {
             this._backgroundAppNWorkspacesId =
                 global.workspace_manager.connect('notify::n-workspaces', () => {
-                    if (this._destroyed) return;
+                    if (!this._settings) return;
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
-                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        if (!this._settings) return GLib.SOURCE_REMOVE;
                         this._hideParkingCard();
                         return GLib.SOURCE_REMOVE;
                     });
                 });
         }
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (!this._settings) return GLib.SOURCE_REMOVE;
             this._hideParkingCard();
             return GLib.SOURCE_REMOVE;
         });
@@ -186,7 +186,7 @@ export function _hideParkingCard() {
 export function _startBackgroundAppKeepAlive() {
     if (this._backgroundAppKeepAliveId) return;
     const rekeep = () => {
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         if (this._backgroundAppParkingWs) {
             try {
                 Main.wm.keepWorkspaceAlive(this._backgroundAppParkingWs, 12 * 60 * 60 * 1000);
@@ -199,12 +199,12 @@ export function _startBackgroundAppKeepAlive() {
 }
 
 export function _scheduleBackgroundAppRestart() {
-    if (this._destroyed) return;
+    if (!this._settings) return;
     if (this._backgroundAppRestartId)
         GLib.source_remove(this._backgroundAppRestartId);
     this._backgroundAppRestartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
         this._backgroundAppRestartId = 0;
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._clearBackgroundApp(false);
         this._launchBackgroundApp(true);
         return GLib.SOURCE_REMOVE;
@@ -221,7 +221,7 @@ export function _isDynamicWorkspaces() {
 }
 
 export function _checkDynamicWorkspaces() {
-    if (this._destroyed || this._dynamicWsWarned) return;
+    if (!this._settings || this._dynamicWsWarned) return;
     if (this._isDynamicWorkspaces()) return;
     this._dynamicWsWarned = true;
     this._showWarningPopup('Dynamic Workspaces Required',
@@ -230,7 +230,7 @@ export function _checkDynamicWorkspaces() {
 }
 
 export function _launchBackgroundApp(force = false) {
-    if (this._destroyed || !this._settings) return;
+    if (!this._settings) return;
     if (!this._settings.get_boolean('background-app-enabled')) return;
     const command = this._settings.get_string('background-app');
     if (!command) return;
@@ -306,7 +306,7 @@ export function _spawnBackgroundAppProcess(command) {
 export function _onBackgroundAppProcExit(proc) {
     // The spawned shell exited. Only respawn when it died BEFORE any window
     // was claimed and nothing else has already resolved the launch.
-    if (this._destroyed || !this._settings) return;
+    if (!this._settings) return;
     if (proc !== this._backgroundAppProc) return; // superseded (restart/relaunch)
     if (!this._settings.get_boolean('background-app-enabled')) return;
     const command = this._settings.get_string('background-app');
@@ -364,7 +364,7 @@ export function _adoptBackgroundAppWindow() {
     let attempt = 0;
     const command = this._settings.get_string('background-app');
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         if (this._backgroundAppWin) {
             this._debugLog('adopt: window already claimed elsewhere — cancelling retry');
             return GLib.SOURCE_REMOVE;
@@ -499,7 +499,7 @@ export function _isExtensionsAppWindow(win) {
             if (isExtensionsCmd(cached)) return true;
         } else {
             this._getProcCmdline(pid, (cmd) => {
-                if (this._destroyed) return;
+                if (!this._settings) return;
                 if (isExtensionsCmd(cmd) && !win._plaidProcIdentityNotified) {
                     win._plaidProcIdentityNotified = true;
                     this._addIdle(() => { this._onWindowIdentityChanged(win); return false; });
@@ -522,7 +522,7 @@ export function _procEnvironHasMarker(pid, marker) {
     if (data !== undefined)
         return data.split('\0').includes(marker);
     this._getProcEnviron(pid, (env) => {
-        if (this._destroyed) return;
+        if (!this._settings) return;
         if (env.split('\0').includes(marker))
             this._recheckMarkerWaiters();
     });
@@ -535,19 +535,19 @@ export function _markerSweepAllowed() {
 }
 
 export function _recheckMarkerWaiters() {
-    if (this._destroyed || !this._settings) return;
+    if (!this._settings) return;
     this._recheckDropdownWaiters();
     this._recheckBackgroundAppAfterProc();
 }
 
 export function _recheckBackgroundAppAfterProc() {
-    if (this._destroyed || !this._settings || this._bgAppRecheckPending) return;
+    if (!this._settings || this._bgAppRecheckPending) return;
     if (!this._settings.get_boolean('background-app-enabled')) return;
     const gen = this._markerSweepGen;
     const id = this._addIdle(() => {
         this._bgAppRecheckId = 0;
         this._bgAppRecheckPending = false;
-        if (this._destroyed || !this._settings) return false;
+        if (!this._settings) return false;
         if (this._markerSweepGen !== gen) return false;
         if (!this._settings.get_boolean('background-app-enabled')) return false;
         const win = this._findBackgroundAppWindow();
@@ -620,7 +620,7 @@ export function _startMarkerPidSweep(marker) {
         } catch (_e) {}
         if (this._markerSweepGen !== gen) return;
         this._markerSweepPending = false;
-        if (this._destroyed || !this._settings) return;
+        if (!this._settings) return;
         if (!this._settings.get_boolean('background-app-enabled')) return;
         this._markerPidCache = { marker, at: Date.now(), set };
         if (set.size > 0)
@@ -710,7 +710,7 @@ export function _configureBackgroundApp(win) {
     // construction, smooth (the parked window is never animated).
     this._debugLog('background app: clone mode (parked window + background clone)');
     const deferredPark = () => {
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._debugLog('background app: deferred park firing');
         if (win !== this._backgroundAppWin) {
             this._debugLog('background app: deferred park skipped (window no longer the bg app)');
@@ -742,7 +742,7 @@ export function _configureBackgroundApp(win) {
         // after the clone is created and can land above it in the
         // background group — re-insert on top once the startup is done.
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (!this._settings) return GLib.SOURCE_REMOVE;
             this._raiseBackgroundAppClone();
             this._debugLog('background app: clone re-raised after startup settle');
             return GLib.SOURCE_REMOVE;
@@ -769,7 +769,7 @@ export function _configureBackgroundApp(win) {
     // pipeline would never run. This timer guarantees it regardless.
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, deferredPark);
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
         this._positionBackgroundAppClone();
         return GLib.SOURCE_REMOVE;
@@ -784,7 +784,7 @@ export function _startBackgroundAppParkWatch(win) {
         if (this._backgroundAppParkCoalesceId) return;
         this._backgroundAppParkCoalesceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
             this._backgroundAppParkCoalesceId = 0;
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (!this._settings) return GLib.SOURCE_REMOVE;
             if (this._backgroundAppParkCount >= 15) {
                 this._disconnectBackgroundAppParkWatch();
                 return GLib.SOURCE_REMOVE;
@@ -849,7 +849,7 @@ export function _parkBackgroundAppOnWorkspace(win) {
             this._backgroundAppParkRetryId =
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
                     this._backgroundAppParkRetryId = 0;
-                    if (this._destroyed) return GLib.SOURCE_REMOVE;
+                    if (!this._settings) return GLib.SOURCE_REMOVE;
                     if (this._backgroundAppWin)
                         this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
                     return GLib.SOURCE_REMOVE;
@@ -1109,18 +1109,18 @@ export function _raiseBackgroundAppClone() {
 }
 
 export function _scheduleBackgroundAppParkingFix() {
-    if (this._destroyed || !this._backgroundAppWin) return;
+    if (!this._settings || !this._backgroundAppWin) return;
     if (this._backgroundAppParkingFixId) return;
     this._backgroundAppParkingFixId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
         this._backgroundAppParkingFixId = 0;
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._reassertBackgroundAppParking();
         return GLib.SOURCE_REMOVE;
     });
 }
 
 export function _reassertBackgroundAppParking() {
-    if (this._destroyed || !this._backgroundAppWin) return;
+    if (!this._settings || !this._backgroundAppWin) return;
     if (!this._backgroundAppParkingWs) {
         this._parkBackgroundAppOnWorkspace(this._backgroundAppWin);
         return;
@@ -1213,7 +1213,7 @@ export function _startBackgroundAppCloneWatch(win) {
     let ticks = 0;
     let good = 0;
     this._backgroundAppCloneWatchId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-        if (this._destroyed || win !== this._backgroundAppWin) {
+        if (!this._settings || win !== this._backgroundAppWin) {
             this._backgroundAppCloneWatchId = 0;
             return GLib.SOURCE_REMOVE;
         }
@@ -1294,7 +1294,7 @@ export function _refillBackgroundApp() {
 }
 
 export function _restoreFocusFromBackgroundApp() {
-    if (this._destroyed || !this._backgroundAppWin) return;
+    if (!this._settings || !this._backgroundAppWin) return;
     const ws = global.workspace_manager.get_active_workspace();
     if (!ws || ws === this._backgroundAppParkingWs) return;
     // NEVER restore focus across workspaces: activating a window on another
@@ -1309,7 +1309,7 @@ export function _restoreFocusFromBackgroundApp() {
         return;
     this._debugLog('background app: stealing focus back');
     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-        if (this._destroyed) return false;
+        if (!this._settings) return false;
         if (global.display.focus_window === prev) return false;
         // The workspace may have moved while the idle was queued.
         if (prev.get_workspace() !== global.workspace_manager.get_active_workspace()) return false;

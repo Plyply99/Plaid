@@ -770,7 +770,7 @@ export function _syncBlurStackingNow(recheck = false) {
                 this._debugLog(`blur: ${sourceDead ? 'source detached' : 'sibling detached'} → deferred re-attach (${win.get_wm_class_instance() || '?'})`);
                 blur._reAttachPending = true;
                 GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                    if (this._destroyed) return GLib.SOURCE_REMOVE;
+                    if (!this._settings) return GLib.SOURCE_REMOVE;
                     blur._reAttachPending = false;
                     if (!this._windowBlurs || !this._windowBlurs.has(win)) return GLib.SOURCE_REMOVE;
                     try {
@@ -800,7 +800,7 @@ export function _syncBlurStackingNow(recheck = false) {
                     this._debugLog(`blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
                     blur._reAttachPending = true;
                     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        if (!this._settings) return GLib.SOURCE_REMOVE;
                         blur._reAttachPending = false;
                         if (!this._windowBlurs || !this._windowBlurs.has(win)) return GLib.SOURCE_REMOVE;
                         try {
@@ -827,7 +827,7 @@ export function _syncBlurStackingNow(recheck = false) {
                     if (!recheck && !this._blurStackRecheckId) {
                         this._blurStackRecheckId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                             this._blurStackRecheckId = 0;
-                            if (this._destroyed) return GLib.SOURCE_REMOVE;
+                            if (!this._settings) return GLib.SOURCE_REMOVE;
                             this._syncBlurStackingNow(true);
                             return GLib.SOURCE_REMOVE;
                         });

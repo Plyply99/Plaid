@@ -25,7 +25,7 @@ export function _syncPointerFocus() {
     }
     if (this._pointerFocusId) return;
     this._pointerFocusId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._pointerFocusTick();
         return GLib.SOURCE_CONTINUE;
     });

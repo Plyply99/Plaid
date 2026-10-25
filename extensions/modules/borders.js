@@ -154,7 +154,7 @@ export function _ensureWindowBorder(win, actor, frame, isFocused) {
 }
 
 export function _applyDropdownEffects(win) {
-    if (!this._settings || this._destroyed || !win) return;
+    if (!this._settings || !win) return;
     const actor = win.get_compositor_private();
     if (!actor) return;
     const frame = win.get_frame_rect();
@@ -240,7 +240,7 @@ export function _startBorderAnimation() {
     this._debugLog('border animation: start');
     this._borderAnimId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
         try {
-            if (this._destroyed ||
+            if (!this._settings ||
                 !this._settings.get_boolean('gradient-borders') ||
                 this._settings.get_int('border-animation-speed') <= 0) {
                 this._debugLog('border animation: stop (settings)');
@@ -282,7 +282,7 @@ export function _stopBorderAnimation() {
 
 export function _syncBorderAnimation() {
     try {
-        if (!this._settings || this._destroyed) return;
+        if (!this._settings) return;
         const wantAnim = this._settings.get_boolean('gradient-borders') &&
             this._settings.get_int('border-animation-speed') > 0 &&
             (this._windowBorders.size > 0 || this._windowMasks.size > 0);

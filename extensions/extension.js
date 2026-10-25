@@ -91,7 +91,6 @@ export default class TilingWMExtension extends Extension {
                 this._debugLog(`session mode: ${sm.currentMode} lockCycle=${sessionState.lockCycle}`);
             });
         }
-        this._destroyed = false;
         this._settings = this.getSettings();
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
         this._floatingTitles = new Set(this._settings.get_strv('float-titles'));
@@ -107,7 +106,7 @@ export default class TilingWMExtension extends Extension {
         this._windowBlurs = new Map();
         this._sourceIds = new Set();
         this._addIdle(() => {
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             try { this._purgeOrphanBlurs(); } catch (_e) {}
             return false;
         });
@@ -269,7 +268,7 @@ export default class TilingWMExtension extends Extension {
         this._initBackgroundApp();
         this._initPointerFocus();
         this._addIdle(() => {
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             this._updateDropOverlaySize();
             const resumeLockCycle = sessionState.lockCycle;
             // Any re-enable within this shell (lock cycle OR manual toggle)
@@ -421,6 +420,18 @@ export default class TilingWMExtension extends Extension {
     }
 
     disable() {
+        try {
+            this._disable();
+        } finally {
+            // If any teardown step throws, late callbacks must not see a live
+            // instance. Keep _settings valid through _disable() so cleanup
+            // that needs settings (BGAPP/DDT) still runs.
+            this._settings = null;
+            this._sourceIds = null;
+        }
+    }
+
+    _disable() {
         // X11 early-return path in enable() never initialized the instance
         // fields — teardown must not touch them.
         if (!this._settings) return;
@@ -473,7 +484,6 @@ export default class TilingWMExtension extends Extension {
             };
             this._debugLog(`disable: tiling state stashed (trees=${this._bspTrees ? this._bspTrees.size : 0})`);
         }
-        this._destroyed = true;
         this._removeAllSources();
         if (this._pickFocusId) {
             global.display.disconnect(this._pickFocusId);
@@ -646,7 +656,7 @@ export default class TilingWMExtension extends Extension {
             if (this._shouldManage(win)) {
                 this._addWindow(win);
                 const doRetile = () => {
-                    if (this._destroyed) return;
+                    if (!this._settings) return;
                     const ws = win.get_workspace();
                     if (ws) this._retileWorkspace(ws);
                 };
@@ -666,14 +676,14 @@ export default class TilingWMExtension extends Extension {
                 }
             } else if (this._isFloating(win)) {
                 const doRestore = () => {
-                    if (this._destroyed) return;
+                    if (!this._settings) return;
                     this._restoreFloatNaturalRect(win);
                 };
                 const actor = win.get_compositor_private();
                 if (actor) {
                     const firstFrameId = actor.connect('first-frame', () => {
                         actor.disconnect(firstFrameId);
-                        if (this._destroyed || !this._settings) return;
+                        if (!this._settings) return;
                         doRestore();
                         if (this._settings.get_boolean('follow-focus') &&
                             win.get_window_type() === Meta.WindowType.NORMAL)
@@ -683,7 +693,7 @@ export default class TilingWMExtension extends Extension {
                     });
                 } else {
                     this._addIdle(() => {
-                        if (this._destroyed || !this._settings) return false;
+                        if (!this._settings) return false;
                         doRestore();
                         if (this._settings.get_boolean('follow-focus') &&
                             win.get_window_type() === Meta.WindowType.NORMAL)
@@ -778,18 +788,18 @@ export default class TilingWMExtension extends Extension {
             this._scheduleDropdownWorkspaceSync();
             this._raiseBackgroundAppClone();
             this._addIdle(() => {
-                if (this._destroyed) return false;
+                if (!this._settings) return false;
                 this._raiseBackgroundAppClone();
                 return false;
             });
             this._addTimeout(150, () => {
-                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                if (!this._settings) return GLib.SOURCE_REMOVE;
                 this._raiseBackgroundAppClone();
                 return GLib.SOURCE_REMOVE;
             });
         }));
         this._addSignal(global.workspace_manager, global.workspace_manager.connect('active-workspace-changed', () => {
-            if (this._destroyed || !this._settings.get_boolean('enabled')) return;
+            if (!this._settings || !this._settings.get_boolean('enabled')) return;
             const ws = global.workspace_manager.get_active_workspace();
             if (!ws) return;
             if (ws === this._backgroundAppParkingWs) {
@@ -838,13 +848,13 @@ export default class TilingWMExtension extends Extension {
             let settleTicks = 0;
             let settleChanged = false;
             this._stackSettleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
-                if (this._destroyed || ++settleTicks > 30) {
+                if (!this._settings || ++settleTicks > 30) {
                     this._stackSettleId = 0;
                     // Borders refresh ONLY when the poll corrected something:
                     // an unconditional pass re-uploads mask uniforms +
                     // stage queue_redraw — a visible flash on calm switches
                     // where nothing needed fixing.
-                    if (!this._destroyed && settleChanged) {
+                    if (this._settings && settleChanged) {
                         try { this._updateBorders(); } catch (_e) {}
                     }
                     return GLib.SOURCE_REMOVE;
@@ -861,7 +871,7 @@ export default class TilingWMExtension extends Extension {
             }
             this._keyboardFocusChange = true;
             this._addIdle(() => {
-                if (this._destroyed) return false;
+                if (!this._settings) return false;
                 try { target.activate(this._currentTime()); } catch (_e) {}
                 this._keyboardFocusChange = false;
                 return false;
@@ -947,7 +957,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _addIdle(callback) {
-        if (this._destroyed || !this._sourceIds) return 0;
+        if (!this._settings || !this._sourceIds) return 0;
         let id = 0;
         id = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             let result = GLib.SOURCE_REMOVE;
@@ -963,7 +973,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _addTimeout(delay, callback) {
-        if (this._destroyed || !this._sourceIds) return 0;
+        if (!this._settings || !this._sourceIds) return 0;
         let id = 0;
         id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             let result = GLib.SOURCE_REMOVE;
@@ -1020,7 +1030,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _scheduleRetile(workspace) {
-        if (this._destroyed || !workspace) return;
+        if (!this._settings || !workspace) return;
         if (this._pendingRetileIds.has(workspace))
             GLib.source_remove(this._pendingRetileIds.get(workspace));
         const now = Date.now();
@@ -1028,7 +1038,7 @@ export default class TilingWMExtension extends Extension {
         const delay = Math.max(0, 50 - (now - last));
         const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             this._pendingRetileIds.delete(workspace);
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             this._doRetileWorkspace(workspace);
             return false;
         });
@@ -1037,12 +1047,12 @@ export default class TilingWMExtension extends Extension {
     }
 
     _scheduleBorders() {
-        if (this._destroyed) return;
+        if (!this._settings) return;
         if (this._pendingBorderId)
             GLib.source_remove(this._pendingBorderId);
         this._pendingBorderId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._pendingBorderId = 0;
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             try {
                 this._doUpdateBorders();
             } catch (e) {
@@ -1108,12 +1118,12 @@ export default class TilingWMExtension extends Extension {
     }
 
     _cursorWarpDeferred(win) {
-        if (this._destroyed) return;
+        if (!this._settings) return;
         let prevFrame = null;
         let retries = 0;
         const MAX_RETRIES = 6;
         const tryWarp = () => {
-            if (this._destroyed || retries >= MAX_RETRIES) return false;
+            if (!this._settings || retries >= MAX_RETRIES) return false;
             retries++;
             if (!win || !win.get_workspace()) return false;
             const frame = win.get_frame_rect();
@@ -1164,7 +1174,7 @@ export default class TilingWMExtension extends Extension {
             if (cached !== undefined) return cached;
         }
         const evaluate = (cmd) => {
-            if (this._destroyed) return;
+            if (!this._settings) return;
             const lower = (cmd || '').toLowerCase();
             let verdict = false;
             for (const token of this._floatingClasses) {
@@ -1227,8 +1237,8 @@ export default class TilingWMExtension extends Extension {
     }
 
     _markPendingWindowInvisible(win, actor) {
-        if (this._destroyed || !win || !actor) {
-            this._debugLog(`hide skip: ${this._destroyed ? 'destroyed' : 'null actor'} class=${win ? (win.get_wm_class_instance() || '?') : '?'}`);
+        if (!this._settings || !win || !actor) {
+            this._debugLog(`hide skip: ${!this._settings ? 'disabled' : 'null actor'} class=${win ? (win.get_wm_class_instance() || '?') : '?'}`);
             return;
         }
         if (!this._settings || !this._settings.get_boolean('enabled')) {
@@ -1272,7 +1282,7 @@ export default class TilingWMExtension extends Extension {
         if (!win._plaidInvisibleTimer) {
             win._plaidInvisibleTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
                 win._plaidInvisibleTimer = 0;
-                if (this._destroyed) return GLib.SOURCE_REMOVE;
+                if (!this._settings) return GLib.SOURCE_REMOVE;
                 const fr = win.get_frame_rect();
                 this._debugLog(`backstop reveal: ${win.get_wm_class_instance() || '?'} ws=${this._wsIndex(win.get_workspace())} tiled=${this._windowWorkspaces.has(win)} ` +
                     `frame=(${Math.round(fr.x)},${Math.round(fr.y)},${Math.round(fr.width)},${Math.round(fr.height)})`);
@@ -1538,7 +1548,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _connectFloatHooks(win) {
-        if (this._destroyed || !this._floatHooks || this._floatHooks.has(win)) return;
+        if (!this._settings || !this._floatHooks || this._floatHooks.has(win)) return;
         const ids = [
             win.connect('position-changed', () => {
                 this._updateBorders();
@@ -1592,7 +1602,7 @@ export default class TilingWMExtension extends Extension {
 
     _reassertFloatingTransients() {
         try {
-            if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled'))
+            if (!this._settings || !this._settings.get_boolean('enabled'))
                 return false;
             let moved = false;
             const index = (w) => {
@@ -1711,7 +1721,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _retileAll() {
-        if (!this._settings || this._destroyed) return;
+        if (!this._settings) return;
         for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
             const w = global.workspace_manager.get_workspace_by_index(i);
             this._scheduleRetile(w);
@@ -1720,7 +1730,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _retileWorkspace(workspace) {
-        if (!this._settings || this._destroyed) return;
+        if (!this._settings) return;
         this._scheduleRetile(workspace);
     }
 
@@ -1806,7 +1816,7 @@ export default class TilingWMExtension extends Extension {
     _deferNewWindowPlacement(s, duration, done) {
         const fadeDuration = Math.min(duration, 80);
         const fadeIn = () => {
-            if (this._destroyed) return;
+            if (!this._settings) return;
             try {
                 const f = s.win.get_frame_rect();
                 this._debugLog(`place: fading frame=(${Math.round(f.x)},${Math.round(f.y)},${Math.round(f.width)},${Math.round(f.height)}) ` +
@@ -1859,7 +1869,7 @@ export default class TilingWMExtension extends Extension {
             }
             s.win._plaidSettlePollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
                 const w = s.win;
-                if (this._destroyed || !w || !w.get_compositor_private() ||
+                if (!this._settings || !w || !w.get_compositor_private() ||
                     !this._windowWorkspaces || !this._windowWorkspaces.has(w)) {
                     if (w) w._plaidSettlePollId = 0;
                     return GLib.SOURCE_REMOVE;
@@ -1874,7 +1884,7 @@ export default class TilingWMExtension extends Extension {
             this._scheduleBorders();
             let faded = false;
             const finishFade = () => {
-                if (this._destroyed) return;
+                if (!this._settings) return;
                 if (!faded) {
                     faded = true;
                     // The ease can be cancelled by another move/retile. Make
@@ -1911,7 +1921,7 @@ export default class TilingWMExtension extends Extension {
         let lastFrameKey = null;
         let sameFrameCount = 0;
         const attempt = () => {
-            if (this._destroyed) return;
+            if (!this._settings) return;
             try {
                 if (!s.win || !s.win.get_compositor_private()) {
                     done();
@@ -1978,7 +1988,7 @@ export default class TilingWMExtension extends Extension {
                     // happened, so the window never sits hidden.
                     const settleWin = s.win;
                     this._addTimeout(2000, () => {
-                        if (this._destroyed) return GLib.SOURCE_REMOVE;
+                        if (!this._settings) return GLib.SOURCE_REMOVE;
                         if (!settleWin || !settleWin.get_compositor_private()) return GLib.SOURCE_REMOVE;
                         if (!this._windowWorkspaces || !this._windowWorkspaces.has(settleWin))
                             return GLib.SOURCE_REMOVE;
@@ -1995,7 +2005,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _checkWorkspaceLandings(ws) {
-        if (this._destroyed || !this._settings || !this._settings.get_boolean('enabled')) return;
+        if (!this._settings || !this._settings.get_boolean('enabled')) return;
         if (this._grabOp) return;
         const layout = this._getWorkspaceLayout(ws);
         if (layout === 'floating') return;
@@ -2231,7 +2241,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _retryLanding(win) {
-        if (!this._landingRetries || !this._landingGivenUp || this._destroyed || !win) return;
+        if (!this._landingRetries || !this._landingGivenUp || !this._settings || !win) return;
         if (!win.get_compositor_private()) {
             this._debugLog(`anim: landing retry skipped (window gone) id=${win.get_id()}`);
             return;
@@ -2278,7 +2288,7 @@ export default class TilingWMExtension extends Extension {
         }
         this._landingRetries.set(win, n);
         this._addTimeout(200, () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (!this._settings) return GLib.SOURCE_REMOVE;
             if (this._landingGivenUp && this._landingGivenUp.has(win)) return GLib.SOURCE_REMOVE;
             // Window-liveness: _removeWindow prunes the given-up set on
             // close, so that guard no longer covers a window closed within
@@ -2413,7 +2423,7 @@ export default class TilingWMExtension extends Extension {
             this._animStates = existingStates;
             this._animStartTime = Date.now();
             this._animTickId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
-                if (this._destroyed) { this._animTickId = 0; return GLib.SOURCE_REMOVE; }
+                if (!this._settings) { this._animTickId = 0; return GLib.SOURCE_REMOVE; }
                 if (!this._animStates) { this._animTickId = 0; this._animating = false; return GLib.SOURCE_REMOVE; }
                 const elapsed = Date.now() - this._animStartTime;
                 const t = Math.min(elapsed / duration, 1);
@@ -3087,7 +3097,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _convertMaximizedToGaps(win) {
-        if (this._destroyed || !win) return;
+        if (!this._settings || !win) return;
         if (!this._settings || !this._settings.get_boolean('enabled')) return;
         if (this._dropdownWin === win) return;
         if (win.is_fullscreen() || !win.is_maximized()) return;
@@ -3144,7 +3154,7 @@ export default class TilingWMExtension extends Extension {
     _applyFloatRect(win, x, y, w, h, onDone) {
         let retries = 0;
         const apply = () => {
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             if (!win.get_workspace()) return false;
             try {
                 if (win.is_maximized()) win.unmaximize();
@@ -3163,7 +3173,7 @@ export default class TilingWMExtension extends Extension {
             return true;
         };
         const retry = () => {
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (!this._settings) return GLib.SOURCE_REMOVE;
             return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
         };
         if (apply())
@@ -3180,7 +3190,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _onWindowIdentityChanged(win) {
-        if (this._destroyed || !win) return;
+        if (!this._settings || !win) return;
         this._debugLog(`identity: ${this._winClassCandidates(win).join('/') || '?'} appId=${win.get_gtk_application_id ? (win.get_gtk_application_id() || '?') : '?'} ` +
             `ws=${this._wsIndex(win.get_workspace())} managed=${this._windowWorkspaces.has(win)}`);
         // Backstop for the Extensions app / prefs window: its wm-class and GTK
@@ -3263,7 +3273,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _reapplyFloatRules() {
-        if (this._destroyed || !this._settings) return;
+        if (!this._settings) return;
         for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
             const ws = global.workspace_manager.get_workspace_by_index(i);
             for (const win of ws.list_windows()) {
@@ -3276,7 +3286,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _updateBorders() {
-        if (!this._settings || this._destroyed) return;
+        if (!this._settings) return;
         this._scheduleBorders();
     }
 
@@ -3415,7 +3425,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _debugLog(...args) {
-        if (this._destroyed || !this._settings) return;
+        if (!this._settings) return;
         if (!this._settings.get_boolean('debug')) return;
         log(`[plaid] ${args.join(' ')}`);
     }
@@ -3454,7 +3464,7 @@ export default class TilingWMExtension extends Extension {
         this._keyboardFocusChange = true;
         bestWindow.activate(this._currentTime());
         this._addIdle(() => {
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3495,7 +3505,7 @@ export default class TilingWMExtension extends Extension {
         focused.activate(this._currentTime());
         this._cursorWarpDeferred(focused);
         this._addIdle(() => {
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3650,7 +3660,7 @@ export default class TilingWMExtension extends Extension {
         this._keyboardFocusChange = true;
         this._retileWorkspace(ws);
         this._addIdle(() => {
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3755,7 +3765,7 @@ export default class TilingWMExtension extends Extension {
         this._moveCursorToWindow(win);
 
         this._addIdle(() => {
-            if (this._destroyed) return false;
+            if (!this._settings) return false;
             this._keyboardFocusChange = false;
             return false;
         });
@@ -3948,14 +3958,14 @@ export default class TilingWMExtension extends Extension {
         }
         this._warningPopupId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
             this._warningPopupId = 0;
-            if (this._destroyed) return GLib.SOURCE_REMOVE;
+            if (!this._settings) return GLib.SOURCE_REMOVE;
             this._updateWorkspacePopupWarning();
             return GLib.SOURCE_REMOVE;
         });
     }
 
     _updateWorkspacePopupWarning() {
-        if (this._destroyed) return;
+        if (!this._settings) return;
         let jpEnabled = false;
         try {
             jpEnabled = !!(this._shellSettings &&
@@ -4137,7 +4147,7 @@ export default class TilingWMExtension extends Extension {
                 this._gappedMaxSet.delete(metaWindow);
                 this._floatMaxRects.delete(metaWindow);
             }
-            if (this._destroyed || !this._settings || !this._settings.get_boolean('mouse-resize')) return;
+            if (!this._settings || !this._settings.get_boolean('mouse-resize')) return;
             if (!this._settings.get_boolean('enabled')) return;
             this._handleGrabBegin(metaWindow, grabOp);
         }));
@@ -4324,7 +4334,7 @@ export default class TilingWMExtension extends Extension {
         const ws = metaWindow.get_workspace();
 
         this._liveResizeId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
-            if (this._destroyed || !metaWindow || !this._grabOp) {
+            if (!this._settings || !metaWindow || !this._grabOp) {
                 this._liveResizeId = 0;
                 return GLib.SOURCE_REMOVE;
             }
@@ -4629,7 +4639,7 @@ export default class TilingWMExtension extends Extension {
 
     _enforceGrabBoundary(win) {
         try {
-            if (this._destroyed || !this._grabOp || !win) return;
+            if (!this._settings || !this._grabOp || !win) return;
             const ws = win.get_workspace();
             if (!ws) return;
             const gap = this._settings.get_int('inside-gap');
@@ -4677,7 +4687,7 @@ export default class TilingWMExtension extends Extension {
     }
 
     _maybeReassertSlot(win, tol = 16, mode = 'retile') {
-        if (this._destroyed || !this._settings) return;
+        if (!this._settings) return;
         if (!this._settings.get_boolean('enabled')) return;
         if (this._grabOp) return;
         if (!win || win.is_fullscreen() || win.minimized) return;

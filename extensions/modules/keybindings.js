@@ -321,7 +321,7 @@ export function _scheduleConflictScan(bindings) {
     }
     this._conflictScanId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
         this._conflictScanId = 0;
-        if (this._destroyed || !this._settings) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._debugLog('conflict scan: running');
         this._checkKeybindingConflicts(bindings, 150);
         return GLib.SOURCE_REMOVE;
@@ -398,7 +398,7 @@ export function _showConflictDialog(conflicts, delayMs = 2000) {
 
         this._conflictDialogId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
             this._conflictDialogId = 0;
-            if (this._destroyed || !this._conflictDialog) return GLib.SOURCE_REMOVE;
+            if (!this._settings || !this._conflictDialog) return GLib.SOURCE_REMOVE;
             try { dialog.open(); } catch (_e) {}
             return GLib.SOURCE_REMOVE;
         });

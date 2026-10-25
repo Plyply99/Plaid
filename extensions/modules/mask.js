@@ -424,7 +424,7 @@ export function _scheduleMaskRedraw(win, actor, effect) {
     }
     effect._refreshTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         effect._refreshTimeoutId = 0;
-        if (this._destroyed) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._debugLog(`mask redraw kick r=${effect._radius}`);
         this._updateMaskBounds(win, actor, effect, effect._radius);
         this._ensureWindowBlur(win, actor);

@@ -10,7 +10,7 @@ export function _scheduleSaveLayouts() {
     // Trailing (quiet-period) debounce: every change RESETS the timer, so
     // exactly one write lands 10s after interaction stops. A fixed-from-
     // first-event window would hammer dconf during sustained resizing.
-    if (this._destroyed || !this._settings) return;
+    if (!this._settings) return;
     const now = Date.now();
     if (!this._saveDirtySince) this._saveDirtySince = now;
     // Starvation cap: under back-to-back activity the quiet timer keeps
@@ -30,7 +30,7 @@ export function _scheduleSaveLayouts() {
         GLib.source_remove(this._workspaceLayoutsSaveId);
     this._workspaceLayoutsSaveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
         this._workspaceLayoutsSaveId = 0;
-        if (this._destroyed || !this._settings) return GLib.SOURCE_REMOVE;
+        if (!this._settings) return GLib.SOURCE_REMOVE;
         this._saveDirtySince = 0;
         this._savePersistedLayouts();
         return GLib.SOURCE_REMOVE;
