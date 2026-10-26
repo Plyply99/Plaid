@@ -316,105 +316,6 @@ export default class TilingWMExtension extends Extension {
         });
     }
 
-    _restoreTilingState() {
-        const s = _stashedTiling;
-        _stashedTiling = null;
-        if (!s) return;
-        try {
-            const alive = (win) => {
-                try {
-                    return !!(win && win.get_compositor_private());
-                } catch (_e) {
-                    return false;
-                }
-            };
-            // Prune windows that died while locked.
-            for (const [win] of s.windowWorkspaces) {
-                if (!alive(win)) {
-                    s.windowWorkspaces.delete(win);
-                    s.windowWSIndices.delete(win);
-                }
-            }
-            for (const [win] of s.windowWSIndices) {
-                if (!alive(win))
-                    s.windowWSIndices.delete(win);
-            }
-            for (const [ws, order] of s.workspaceOrders) {
-                if (!order) continue;
-                s.workspaceOrders.set(ws, order.filter(alive));
-            }
-            for (const [ws, tree] of s.bspTrees) {
-                if (!tree) continue;
-                let t = tree;
-                for (const w of this._bspCollectWindows(tree)) {
-                    if (!alive(w))
-                        t = this._bspRemove(t, w);
-                }
-                s.bspTrees.set(ws, t);
-            }
-            // Restore the exact pre-lock state.
-            this._bspTrees = s.bspTrees;
-            this._workspaceLayouts = s.workspaceLayouts;
-            this._masterRatios = s.masterRatios;
-            this._stackRatios = s.stackRatios;
-            this._workspaceOrders = s.workspaceOrders;
-            this._windowWorkspaces = s.windowWorkspaces;
-            this._windowWSIndices = s.windowWSIndices;
-            this._lastFocusedPerWorkspace = s.lastFocusedPerWorkspace;
-            if (s.lastRealFocusedWindow && alive(s.lastRealFocusedWindow))
-                this._lastRealFocusedWindow = s.lastRealFocusedWindow;
-            // Scratchpad / toggle-float survive lock cycles (the pre-lock
-            // maps were stashed; prune members that died while locked).
-            if (s.scratchpadWindows) {
-                for (const [win] of s.scratchpadWindows) {
-                    if (!alive(win))
-                        s.scratchpadWindows.delete(win);
-                }
-                this._scratchpadWindows = s.scratchpadWindows;
-            }
-            if (s.toggleFloatWindows) {
-                for (const win of s.toggleFloatWindows) {
-                    if (!alive(win))
-                        s.toggleFloatWindows.delete(win);
-                }
-                this._toggleFloatWindows = s.toggleFloatWindows;
-            }
-            if (s.scratchpadVisible !== undefined)
-                this._scratchpadVisible = !!s.scratchpadVisible;
-            if (s.observedMinSizes) {
-                for (const [w] of s.observedMinSizes) {
-                    if (!alive(w))
-                        s.observedMinSizes.delete(w);
-                }
-                this._observedMinSizes = s.observedMinSizes;
-            }
-            this._debugLog(`tiling state restored (windows=${this._windowWorkspaces.size} trees=${this._bspTrees.size})`);
-        } catch (e) {
-            log(`[plaid] tiling state restore failed: ${e.message}`);
-            // Fall back to a clean rebuild if anything went wrong.
-            this._bspTrees = new Map();
-            this._dwindleLeafSigs = new Map();
-            this._workspaceOrders = new Map();
-            this._windowWorkspaces = new Map();
-            this._windowWSIndices = new Map();
-        }
-    }
-
-    _currentTime() {
-        try { return global.get_current_time(); } catch (_e) { return 0; }
-    }
-
-    _wsIndex(ws) {
-        if (!ws) return -1;
-        try { return ws.index(); } catch (_e) {}
-        try {
-            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
-                if (global.workspace_manager.get_workspace_by_index(i) === ws) return i;
-            }
-        } catch (_e) {}
-        return -1;
-    }
-
     disable() {
         try {
             this._disable();
@@ -643,6 +544,105 @@ export default class TilingWMExtension extends Extension {
         this._pinnedAdjustCounts = null;
         this._stackDiagnostics = null;
         this._maximizeToggleRects = null;
+    }
+
+    _restoreTilingState() {
+        const s = _stashedTiling;
+        _stashedTiling = null;
+        if (!s) return;
+        try {
+            const alive = (win) => {
+                try {
+                    return !!(win && win.get_compositor_private());
+                } catch (_e) {
+                    return false;
+                }
+            };
+            // Prune windows that died while locked.
+            for (const [win] of s.windowWorkspaces) {
+                if (!alive(win)) {
+                    s.windowWorkspaces.delete(win);
+                    s.windowWSIndices.delete(win);
+                }
+            }
+            for (const [win] of s.windowWSIndices) {
+                if (!alive(win))
+                    s.windowWSIndices.delete(win);
+            }
+            for (const [ws, order] of s.workspaceOrders) {
+                if (!order) continue;
+                s.workspaceOrders.set(ws, order.filter(alive));
+            }
+            for (const [ws, tree] of s.bspTrees) {
+                if (!tree) continue;
+                let t = tree;
+                for (const w of this._bspCollectWindows(tree)) {
+                    if (!alive(w))
+                        t = this._bspRemove(t, w);
+                }
+                s.bspTrees.set(ws, t);
+            }
+            // Restore the exact pre-lock state.
+            this._bspTrees = s.bspTrees;
+            this._workspaceLayouts = s.workspaceLayouts;
+            this._masterRatios = s.masterRatios;
+            this._stackRatios = s.stackRatios;
+            this._workspaceOrders = s.workspaceOrders;
+            this._windowWorkspaces = s.windowWorkspaces;
+            this._windowWSIndices = s.windowWSIndices;
+            this._lastFocusedPerWorkspace = s.lastFocusedPerWorkspace;
+            if (s.lastRealFocusedWindow && alive(s.lastRealFocusedWindow))
+                this._lastRealFocusedWindow = s.lastRealFocusedWindow;
+            // Scratchpad / toggle-float survive lock cycles (the pre-lock
+            // maps were stashed; prune members that died while locked).
+            if (s.scratchpadWindows) {
+                for (const [win] of s.scratchpadWindows) {
+                    if (!alive(win))
+                        s.scratchpadWindows.delete(win);
+                }
+                this._scratchpadWindows = s.scratchpadWindows;
+            }
+            if (s.toggleFloatWindows) {
+                for (const win of s.toggleFloatWindows) {
+                    if (!alive(win))
+                        s.toggleFloatWindows.delete(win);
+                }
+                this._toggleFloatWindows = s.toggleFloatWindows;
+            }
+            if (s.scratchpadVisible !== undefined)
+                this._scratchpadVisible = !!s.scratchpadVisible;
+            if (s.observedMinSizes) {
+                for (const [w] of s.observedMinSizes) {
+                    if (!alive(w))
+                        s.observedMinSizes.delete(w);
+                }
+                this._observedMinSizes = s.observedMinSizes;
+            }
+            this._debugLog(`tiling state restored (windows=${this._windowWorkspaces.size} trees=${this._bspTrees.size})`);
+        } catch (e) {
+            log(`[plaid] tiling state restore failed: ${e.message}`);
+            // Fall back to a clean rebuild if anything went wrong.
+            this._bspTrees = new Map();
+            this._dwindleLeafSigs = new Map();
+            this._workspaceOrders = new Map();
+            this._windowWorkspaces = new Map();
+            this._windowWSIndices = new Map();
+        }
+    }
+
+    _currentTime() {
+        try { return global.get_current_time(); } catch (_e) { return 0; }
+    }
+
+    _wsIndex(ws) {
+        if (!ws) return -1;
+        try { return ws.index(); } catch (_e) {}
+        try {
+            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+                if (global.workspace_manager.get_workspace_by_index(i) === ws) return i;
+            }
+        } catch (_e) {}
+        return -1;
     }
 
     _connectSignals() {

@@ -109,9 +109,7 @@ export function _reserveBackgroundAppWorkspace() {
         // Keep the parking alive: the shell's dynamic-workspace check
         // removes empty inactive workspaces — the reservation must be
         // armed before the append below queues that check.
-        try {
-            Main.wm.keepWorkspaceAlive(this._backgroundAppParkingWs, 12 * 60 * 60 * 1000);
-        } catch (_e) {}
+        Main.wm.keepWorkspaceAlive(this._backgroundAppParkingWs, 12 * 60 * 60 * 1000);
         this._startBackgroundAppKeepAlive();
         // append_new_workspace(true) activates before n-workspaces is emitted, so
         // append inert and activate after the shell rebuilds its card list.
@@ -188,9 +186,7 @@ export function _startBackgroundAppKeepAlive() {
     const rekeep = () => {
         if (!this._settings) return GLib.SOURCE_REMOVE;
         if (this._backgroundAppParkingWs) {
-            try {
-                Main.wm.keepWorkspaceAlive(this._backgroundAppParkingWs, 12 * 60 * 60 * 1000);
-            } catch (_e) {}
+            Main.wm.keepWorkspaceAlive(this._backgroundAppParkingWs, 12 * 60 * 60 * 1000);
         }
         return GLib.SOURCE_CONTINUE;
     };

@@ -190,11 +190,9 @@ export function _initWorkspacePopupWarning() {
 export function _updateWorkspacePopupWarning() {
     if (!this._settings) return;
     let jpEnabled = false;
-    try {
-        jpEnabled = !!(this._shellSettings &&
-            this._shellSettings.get_strv('enabled-extensions')
-                .includes('just-perfection-desktop@just-perfection'));
-    } catch (_e) {}
+    jpEnabled = !!(this._shellSettings &&
+        this._shellSettings.get_strv('enabled-extensions')
+            .includes('just-perfection-desktop@just-perfection'));
     if (!jpEnabled) {
         if (this._jpSettings) {
             if (this._jpSettingsChangedId) {
