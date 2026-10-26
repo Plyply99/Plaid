@@ -69,10 +69,10 @@
     </key>
 
     <key name="dwindle-ratio" type="d">
-      <default>0.618</default>
+      <default>0.5</default>
       <range min="0" max="1"/>
       <summary>Dwindle split ratio</summary>
-      <description>Ratio for dwindle splits (0.0 to 1.0). Default 0.618 is the golden ratio (1/φ)</description>
+      <description>Ratio for dwindle splits (0.0 to 1.0). Default 0.5 is an even split</description>
     </key>
 
     <key name="master-ratio" type="d">
@@ -96,64 +96,64 @@
     </key>
 
     <key name="active-border-color" type="as">
-      <default>['#3584e4']</default>
+      <default><![CDATA[['#bd93f9']]]></default>
       <summary>Active window border color</summary>
       <description>Color of the active window border as hex string</description>
     </key>
 
     <key name="active-border-color-2" type="as">
-      <default>['#62a0ea']</default>
+      <default><![CDATA[['#50fa7b']]]></default>
       <summary>Active window border gradient color</summary>
       <description>Second color of the active window border gradient as hex string</description>
     </key>
 
     <key name="inactive-border-width" type="i">
-      <default>1</default>
+      <default>2</default>
       <range min="0" max="20"/>
       <summary>Inactive window border thickness</summary>
       <description>Thickness of inactive window borders in pixels</description>
     </key>
 
     <key name="inactive-border-color" type="as">
-      <default>['#555555']</default>
+      <default><![CDATA[['#1e1f29']]]></default>
       <summary>Inactive window border color</summary>
       <description>Color of inactive window borders as hex string</description>
     </key>
 
     <key name="inactive-border-color-2" type="as">
-      <default>['#777777']</default>
+      <default><![CDATA[['#282a36']]]></default>
       <summary>Inactive window border gradient color</summary>
       <description>Second color of the inactive window border gradient as hex string</description>
     </key>
 
     <key name="border-radius" type="i">
-      <default>0</default>
+      <default>15</default>
       <range min="0" max="50"/>
       <summary>Border corner radius</summary>
       <description>Radius of border corners in pixels (0 for square corners)</description>
     </key>
 
     <key name="rounded-corners" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Round window corners</summary>
       <description>When enabled, window content corners are masked to match the border corner radius</description>
     </key>
 
     <key name="window-blur" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Blur windows</summary>
       <description>When enabled, the content behind windows is blurred</description>
     </key>
 
     <key name="window-blur-radius" type="i">
-      <default>20</default>
+      <default>30</default>
       <range min="0" max="100"/>
       <summary>Window blur radius</summary>
       <description>Strength of the window blur in pixels</description>
     </key>
 
     <key name="window-blur-brightness" type="d">
-      <default>0.6</default>
+      <default>1.0</default>
       <range min="0.1" max="1"/>
       <summary>Window blur brightness</summary>
       <description>Brightness of the blurred layer (1.0 leaves it unchanged)</description>
@@ -167,7 +167,7 @@
     </key>
 
     <key name="gradient-borders" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Use gradient borders</summary>
       <description>When enabled, window borders use a gradient between the two border colors instead of a single color</description>
     </key>
@@ -242,22 +242,22 @@
 
     <!-- Keybindings: Window Swapping -->
     <key name="swap-left" type="as">
-      <default><![CDATA[['<Super><Shift>h']]]></default>
+      <default><![CDATA[['<Super><Control>h']]]></default>
       <summary>Swap window with left</summary>
     </key>
 
     <key name="swap-right" type="as">
-      <default><![CDATA[['<Super><Shift>l']]]></default>
+      <default><![CDATA[['<Super><Control>l']]]></default>
       <summary>Swap window with right</summary>
     </key>
 
     <key name="swap-up" type="as">
-      <default><![CDATA[['<Super><Shift>k']]]></default>
+      <default><![CDATA[['<Super><Control>k']]]></default>
       <summary>Swap window with above</summary>
     </key>
 
     <key name="swap-down" type="as">
-      <default><![CDATA[['<Super><Shift>j']]]></default>
+      <default><![CDATA[['<Super><Control>j']]]></default>
       <summary>Swap window with below</summary>
     </key>
 
@@ -271,22 +271,22 @@
 
     <!-- Keybindings: Window Resizing -->
     <key name="resize-shrink-width" type="as">
-      <default><![CDATA[['<Super><Control>h']]]></default>
+      <default><![CDATA[['<Super><Shift>h']]]></default>
       <summary>Shrink window width</summary>
     </key>
 
     <key name="resize-grow-width" type="as">
-      <default><![CDATA[['<Super><Control>l']]]></default>
+      <default><![CDATA[['<Super><Shift>l']]]></default>
       <summary>Grow window width</summary>
     </key>
 
     <key name="resize-shrink-height" type="as">
-      <default><![CDATA[['<Super><Control>j']]]></default>
+      <default><![CDATA[['<Super><Shift>j']]]></default>
       <summary>Shrink window height</summary>
     </key>
 
     <key name="resize-grow-height" type="as">
-      <default><![CDATA[['<Super><Control>k']]]></default>
+      <default><![CDATA[['<Super><Shift>k']]]></default>
       <summary>Grow window height</summary>
     </key>
 
@@ -402,7 +402,7 @@
 
     <!-- Drop-Down Terminal -->
     <key name="dropdown-terminal-command" type="s">
-      <default>'ghostty'</default>
+      <default>''</default>
       <summary>Drop-down terminal command</summary>
       <description>Command used to launch the drop-down terminal. The drop-down terminal keybind toggles this terminal on and off.</description>
     </key>

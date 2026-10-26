@@ -5,7 +5,7 @@ import Gdk from 'gi://Gdk?version=4.0';
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import { normalizeAccel } from './modules/helpers.js';
-import { collectOtherBindings, findConflicts, describeConflict } from './modules/keybind-conflicts.js';
+import { collectOtherBindings, findConflicts, describeConflict, clearConflictBinding } from './modules/keybind-conflicts.js';
 
 // Conflicts for one shortcut row — the same scan the extension runs, so the
 // warning badge and the shell dialog always agree. The "everything else" list
@@ -24,6 +24,15 @@ function shortcutConflicts(settings, key) {
     return findConflicts(otherBindingsCache, combos);
 }
 
+// Conflicts for a candidate combo the user typed but has not saved yet.
+function conflictsForCombo(settings, key, combo) {
+    if (!combo) return [];
+    if (!otherBindingsCache)
+        otherBindingsCache = collectOtherBindings(Gio, settings.schema_id);
+    const combos = new Map([[normalizeAccel(combo), { orig: combo, owners: [key] }]]);
+    return findConflicts(otherBindingsCache, combos);
+}
+
 // Which this.<prop> array holds the rendered rows for each strv-backed list.
 const STRV_LIST_ROWS_PROP = {
     'float-windows': '_floatClassRows',
@@ -34,6 +43,7 @@ const STRV_LIST_ROWS_PROP = {
 export default class TilingWMPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
+        this._watchKeybindingSchemas();
 
         const display = Gdk.Display.get_default();
         if (display) {
@@ -164,7 +174,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         }
 
         const dwindleRatioRow = this._addSpinRow(group, settings, 'dwindle-ratio', _('Dwindle Split Ratio'),
-            _('Ratio for dwindle splits. Default 0.618 (golden ratio)'), 0.0, 1.0, 0.05, 0.1, 4);
+            _('Ratio for dwindle splits. Default 0.5 (even split)'), 0.0, 1.0, 0.05, 0.1, 4);
         const masterRatioRow = this._addSpinRow(group, settings, 'master-ratio', _('Master Ratio'),
             _('Ratio of the screen allocated to the master window'), 0.15, 0.85, 0.05, 0.1, 4);
 
@@ -220,7 +230,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             };
 
             if (layout === 'dwindle') {
-                const r = 0.618;
+                const r = 0.5;
                 const aw = Math.floor(W * r);
                 const ah = Math.floor(H * r);
                 const lw1 = Math.floor(aw * r);
@@ -524,7 +534,14 @@ export default class TilingWMPreferences extends ExtensionPreferences {
     }
 
     _buildColorRow(settings, key, title) {
-        const currentColor = (settings.get_strv(key) || [])[0] || '#3584e4';
+        const fallbacks = {
+            'active-border-color': '#bd93f9',
+            'active-border-color-2': '#50fa7b',
+            'inactive-border-color': '#1e1f29',
+            'inactive-border-color-2': '#282a36',
+        };
+        const fallback = fallbacks[key] || '#bd93f9';
+        const currentColor = (settings.get_strv(key) || [])[0] || fallback;
         const row = new Adw.ActionRow({
             title: title,
             activatable: true,
@@ -538,7 +555,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         colorDot.set_draw_func((_area, cr) => {
             const color = new Gdk.RGBA();
-            color.parse((settings.get_strv(key) || [])[0] || '#3584e4');
+            color.parse((settings.get_strv(key) || [])[0] || fallback);
             cr.setSourceRGB(color.red, color.green, color.blue);
             cr.arc(16, 16, 14, 0, Math.PI * 2);
             cr.fill();
@@ -570,7 +587,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             });
 
             const initial = new Gdk.RGBA();
-            initial.parse((settings.get_strv(key) || [])[0] || '#3584e4');
+            initial.parse((settings.get_strv(key) || [])[0] || fallback);
 
             dialog.choose_rgba(row.get_root(), initial, null, (_source, result) => {
                 try {
@@ -674,6 +691,29 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         return row;
     }
 
+    _refreshShortcutWarnings() {
+        otherBindingsCache = null;
+        for (const fn of this._shortcutRefreshers || []) fn();
+        if (this._activeShortcutWarningRefresh) this._activeShortcutWarningRefresh();
+    }
+
+    _watchKeybindingSchemas() {
+        if (this._keybindWatchSettings) return;
+        this._keybindWatchSettings = [];
+        for (const schemaId of [
+            'org.gnome.desktop.wm.keybindings',
+            'org.gnome.mutter.keybindings',
+            'org.gnome.mutter.wayland.keybindings',
+            'org.gnome.shell.keybindings',
+        ]) {
+            try {
+                const s = new Gio.Settings({ schema_id: schemaId });
+                s.connect('changed', () => this._refreshShortcutWarnings());
+                this._keybindWatchSettings.push(s);
+            } catch (_e) {}
+        }
+    }
+
     _addShortcutRow(group, settings, key, title) {
         const row = new Adw.ActionRow({
             title: title,
@@ -690,7 +730,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             const conflicts = shortcutConflicts(settings, key);
             warn.visible = conflicts.length > 0;
             warn.tooltip_text = conflicts.length
-                ? _('In use by %s').replace('%s', () => conflicts.map(describeConflict).join(', '))
+                ? _('Conflicts with %s').replace('%s', () => conflicts.map(describeConflict).join(', '))
                 : null;
         };
         refreshWarn();
@@ -705,8 +745,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 const mk = new Gio.Settings({ schema_id: 'org.gnome.settings-daemon.plugins.media-keys' });
                 this._customShortcutsSettings = mk;
                 mk.connect('changed::custom-keybindings', () => {
-                    otherBindingsCache = null;
-                    for (const fn of this._shortcutRefreshers) fn();
+                    this._refreshShortcutWarnings();
                 });
             } catch (_e) {}
         }
@@ -750,43 +789,142 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
         box.append(new Gtk.Image({ icon_name: 'input-keyboard-symbolic', pixel_size: 48 }));
         box.append(new Gtk.Label({
-            label: _('Press a new shortcut'),
+            label: _('Type a new shortcut'),
             css_classes: ['title-3'],
         }));
         box.append(new Gtk.Label({
-            label: _('Backspace clears, Escape cancels.\nIf nothing happens, the combination is already taken by GNOME or another app — free it there first.'),
+            label: _('Type a shortcut, e.g. <Super><Alt>h. Clear removes it; Escape cancels.'),
             wrap: true,
             justify: Gtk.Justification.CENTER,
             css_classes: ['dim-label'],
         }));
-        dialog.set_content(box);
 
-        const controller = new Gtk.EventControllerKey();
-        controller.connect('key-pressed', (_c, keyval, _keycode, state) => {
-            const mask = state & Gtk.accelerator_get_default_mod_mask();
-
-            if (keyval === Gdk.KEY_Escape && mask === 0) {
-                dialog.close();
-                return true;
-            }
-            if (keyval === Gdk.KEY_BackSpace && mask === 0) {
-                settings.set_strv(key, []);
-                label.label = _('Disabled');
-                onChange?.();
-                dialog.close();
-                return true;
-            }
-            if (!Gtk.accelerator_valid(keyval, mask))
-                return false;
-
-            const accel = Gtk.accelerator_name(keyval, mask);
+        const applyAccel = (accel) => {
+            if (!accel) return;
             settings.set_strv(key, [accel]);
             label.label = accel;
             onChange?.();
             dialog.close();
-            return true;
+        };
+
+        const clearShortcut = () => {
+            settings.set_strv(key, []);
+            label.label = _('Disabled');
+            onChange?.();
+            dialog.close();
+        };
+
+        const warning = new Gtk.Label({
+            wrap: true,
+            justify: Gtk.Justification.CENTER,
+            css_classes: ['error'],
+            visible: false,
+        });
+        const entry = new Gtk.Entry({
+            placeholder_text: '<Super>Up',
+            hexpand: true,
+        });
+        const applyButton = new Gtk.Button({
+            label: _('Apply'),
+        });
+        const parseTyped = () => {
+            const text = entry.get_text().trim();
+            if (!text) return null;
+            const [ok, keyval, mask] = Gtk.accelerator_parse(text);
+            if (!ok || !Gtk.accelerator_valid(keyval, mask)) return null;
+            return Gtk.accelerator_name(keyval, mask) || null;
+        };
+        const applyTyped = () => {
+            const accel = parseTyped();
+            if (!accel) {
+                warning.label = _('Not a valid shortcut');
+                warning.visible = true;
+                return;
+            }
+            applyAccel(accel);
+        };
+        let typedAccel = null;
+        let typedConflicts = [];
+        const disableButton = new Gtk.Button({
+            label: _('Disable conflicting shortcut & use it'),
+            visible: false,
+        });
+        disableButton.connect('clicked', () => {
+            if (!typedAccel || typedConflicts.length === 0) return;
+            for (const c of typedConflicts)
+                clearConflictBinding(Gio, c);
+            applyAccel(typedAccel);
+        });
+        const refreshTypedWarning = () => {
+            warning.visible = false;
+            disableButton.visible = false;
+            typedAccel = null;
+            typedConflicts = [];
+            const text = entry.get_text().trim();
+            if (!text) return;
+            const accel = parseTyped();
+            if (!accel) {
+                warning.label = _('Not a valid shortcut');
+                warning.visible = true;
+                return;
+            }
+            typedAccel = accel;
+            const conflicts = conflictsForCombo(settings, key, accel);
+            if (conflicts.length) {
+                typedConflicts = conflicts;
+                const allGnome = conflicts.every(c =>
+                    String(c.schemaId || '').startsWith('org.gnome.'));
+                warning.label = (allGnome
+                    ? _('Conflicts with %s. Disable the GNOME shortcut and use it?')
+                    : _('Conflicts with %s. Disable conflicting shortcut and use it?'))
+                    .replace('%s', () => conflicts.map(describeConflict).join(', '));
+                disableButton.label = allGnome
+                    ? _('Disable GNOME shortcut and use it')
+                    : _('Disable conflicting shortcut and use it');
+                warning.visible = true;
+                disableButton.visible = true;
+            }
+        };
+        const clearButton = new Gtk.Button({
+            label: _('Clear'),
+        });
+        clearButton.connect('clicked', clearShortcut);
+        entry.connect('changed', refreshTypedWarning);
+        entry.connect('activate', applyTyped);
+        applyButton.connect('clicked', applyTyped);
+
+        this._activeShortcutWarningRefresh = refreshTypedWarning;
+
+        const entryRow = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 8,
+        });
+        entryRow.append(entry);
+        entryRow.append(clearButton);
+        entryRow.append(applyButton);
+        box.append(entryRow);
+        box.append(warning);
+        box.append(disableButton);
+        dialog.set_content(box);
+
+        // Escape only. No accelerator capture here: a window-level controller
+        // stole the entry's keystrokes (typing Shift+Up saved Shift+Up) and
+        // swallowed Backspace.
+        const controller = new Gtk.EventControllerKey();
+        controller.connect('key-pressed', (_c, keyval, _keycode, state) => {
+            const mask = state & Gtk.accelerator_get_default_mod_mask();
+            if (keyval === Gdk.KEY_Escape && mask === 0) {
+                dialog.close();
+                return true;
+            }
+            return false;
         });
         dialog.add_controller(controller);
+        dialog.connect('close-request', () => {
+            if (this._activeShortcutWarningRefresh === refreshTypedWarning)
+                this._activeShortcutWarningRefresh = null;
+            return false;
+        });
         dialog.present();
     }
 

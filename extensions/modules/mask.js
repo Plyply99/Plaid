@@ -550,8 +550,10 @@ export function _updateMaskBounds(win, actor, effect, radius) {
         const c = this._hexToRgb(hex);
         return [c.r, c.g, c.b, 1];
     };
-    const color1Hex = (this._settings.get_strv(color1Key) || [])[0] || '#3584e4';
-    const color2Hex = (this._settings.get_strv(color2Key) || [])[0] || color1Hex;
+    const color1Hex = (this._settings.get_strv(color1Key) || [])[0] ||
+        (isFocused ? '#bd93f9' : '#1e1f29');
+    const color2Hex = (this._settings.get_strv(color2Key) || [])[0] ||
+        (isFocused ? '#50fa7b' : '#282a36');
     const color1 = toRgba(color1Hex);
     const color2 = toRgba(color2Hex);
 

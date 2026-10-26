@@ -120,7 +120,18 @@ export function _reserveBackgroundAppWorkspace() {
                     if (!this._settings) return GLib.SOURCE_REMOVE;
                     try {
                         const next = global.workspace_manager.get_workspace_by_index(1);
-                        if (next) next.activate(this._currentTime());
+                        if (next) {
+                            next.activate(this._currentTime());
+                            // Keep the real workspace alive through the login
+                            // restore window. Parking the BGAPP empties this
+                            // workspace; without the keep-alive dynamic
+                            // workspaces can drop it and leave the active
+                            // workspace on the hidden parking slot, so the
+                            // session-restored user windows land on ws0.
+                            try {
+                                Main.wm.keepWorkspaceAlive(next, 5 * 60 * 1000);
+                            } catch (_e) {}
+                        }
                         this._debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
                     } catch (_e) {}
                     return GLib.SOURCE_REMOVE;
@@ -150,6 +161,16 @@ export function _reserveBackgroundAppWorkspace() {
             this._hideParkingCard();
             return GLib.SOURCE_REMOVE;
         });
+        // Login restore can map user windows several seconds after the
+        // reservation. A few delayed passes catch anything that lands on the
+        // parking before the per-window notify::workspace handler is armed.
+        for (const delay of [500, 1500, 3000, 6000, 10000]) {
+            this._addTimeout(delay, () => {
+                if (!this._settings) return GLib.SOURCE_REMOVE;
+                this._evacuateParkingWorkspace();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
     } catch (e) {
     this._backgroundAppParkingWs = null;
     this._backgroundAppReservationScheduled = false;
@@ -167,6 +188,18 @@ export function _hideParkingCard() {
     // leading blank) — the price of stability over surgical removal.
     const parkingWs = this._backgroundAppParkingWs;
     if (!parkingWs) return;
+    try {
+        // Never hide the card while it is the user's current workspace or
+        // still holds a user window. The evacuation should make both cases
+        // transient, but an invisible current workspace is worse than a
+        // visible parking card.
+        if (global.workspace_manager.get_active_workspace() === parkingWs) return;
+        if (parkingWs.list_windows().some(w =>
+            w !== this._backgroundAppWin && !this._matchesBackgroundApp(w)))
+            return;
+    } catch (_e) {
+        return;
+    }
     try {
         const controls = Main.overview._overview.controls;
         const display = controls && controls._workspacesDisplay;
@@ -951,6 +984,14 @@ export function _applyBackgroundAppHiding() {
         // passive hide survives. No destroy, no reorder — pure visibility.
         const parkingWs = self._backgroundAppParkingWs;
         if (!parkingWs || !this._workspaces) return;
+        try {
+            if (global.workspace_manager.get_active_workspace() === parkingWs) return;
+            if (parkingWs.list_windows().some(w =>
+                w !== self._backgroundAppWin && !self._matchesBackgroundApp(w)))
+                return;
+        } catch (_e) {
+            return;
+        }
         for (const card of this._workspaces) {
             if (card && card.metaWorkspace === parkingWs)
                 card.visible = false;
@@ -976,6 +1017,14 @@ export function _applyBackgroundAppHiding() {
         origAddThumbnails.call(this, start, count);
         const parkingWs = self._backgroundAppParkingWs;
         if (!parkingWs) return;
+        try {
+            if (global.workspace_manager.get_active_workspace() === parkingWs) return;
+            if (parkingWs.list_windows().some(w =>
+                w !== self._backgroundAppWin && !self._matchesBackgroundApp(w)))
+                return;
+        } catch (_e) {
+            return;
+        }
         for (const t of this._thumbnails) {
             if (t.metaWorkspace === parkingWs) {
                 t.visible = false;
@@ -1104,12 +1153,53 @@ export function _raiseBackgroundAppClone() {
     } catch (_e) {}
 }
 
+export function _evacuateParkingWorkspace() {
+    if (!this._settings) return;
+    const parking = this._backgroundAppParkingWs;
+    if (!parking) return;
+    const wm = global.workspace_manager;
+    let users = [];
+    try {
+        users = parking.list_windows().filter(w =>
+            w !== this._backgroundAppWin && !this._matchesBackgroundApp(w));
+    } catch (_e) {
+        return;
+    }
+    const active = wm.get_active_workspace();
+    if (users.length === 0 && active !== parking) return;
+    let target = null;
+    let n = 0;
+    try { n = wm.get_n_workspaces(); } catch (_e) { return; }
+    for (let i = 0; i < n; i++) {
+        const ws = wm.get_workspace_by_index(i);
+        if (ws && ws !== parking) { target = ws; break; }
+    }
+    if (!target) {
+        try { target = wm.append_new_workspace(false, this._currentTime()); } catch (_e) {}
+        if (!target) return;
+        this._debugLog('background app: evacuation appended a real workspace');
+    }
+    for (const win of users) {
+        try {
+            if (win.get_workspace() === parking)
+                win.change_workspace(target);
+        } catch (_e) {}
+    }
+    if (active === parking) {
+        try { target.activate(this._currentTime()); } catch (_e) {}
+    }
+    if (users.length > 0)
+        this._debugLog(`background app: evacuated ${users.length} window(s) from parking to ws=${this._wsIndex(target)}`);
+    this._scheduleWorkspacePillUpdate();
+}
+
 export function _scheduleBackgroundAppParkingFix() {
     if (!this._settings || !this._backgroundAppWin) return;
     if (this._backgroundAppParkingFixId) return;
     this._backgroundAppParkingFixId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
         this._backgroundAppParkingFixId = 0;
         if (!this._settings) return GLib.SOURCE_REMOVE;
+        this._evacuateParkingWorkspace();
         this._reassertBackgroundAppParking();
         return GLib.SOURCE_REMOVE;
     });
@@ -1490,6 +1580,7 @@ export const backgroundAppMethods = {
     _restoreBackgroundAppHiding,
     _raiseBackgroundAppClone,
     _scheduleBackgroundAppParkingFix,
+    _evacuateParkingWorkspace,
     _reassertBackgroundAppParking,
     _ensureBackgroundAppClone,
     _startBackgroundAppCloneWatch,

@@ -263,6 +263,13 @@ export function _addWindow(win, resume = false) {
     }
     this._debugLog(`ADD_WINDOW: ${this._winClassCandidates(win)[0] || '?'} title=${win.get_title() || '?'} ` +
         `skipTaskbar=${win.is_skip_taskbar()} ws=${this._wsIndex(win.get_workspace())} type=${win.get_window_type()}`);
+    // Session-restored windows can map onto the hidden BGAPP parking slot
+    // before the delayed evacuation catches them. Move them (and any earlier
+    // strays) to the real workspace BEFORE the new-window hide/place logic
+    // builds tree state for the parking slot.
+    if (this._backgroundAppParkingWs && win.get_workspace() === this._backgroundAppParkingWs) {
+        try { this._evacuateParkingWorkspace(); } catch (_e) {}
+    }
     // Lock-cycle resumes register windows that are already on screen and
     // tiled — the new-window fade-in (opacity 0 → landing check → fade
     // back) would make every window vanish and reappear at unlock and
@@ -436,6 +443,11 @@ export function _connectWindowSignals(win) {
     }) });
     sigIds.push({ emitter: win, id: win.connect('notify::title', () => {
         this._onWindowIdentityChanged(win);
+    }) });
+    sigIds.push({ emitter: win, id: win.connect('notify::workspace', () => {
+        if (!this._settings || !this._backgroundAppParkingWs) return;
+        if (win.get_workspace() === this._backgroundAppParkingWs)
+            this._evacuateParkingWorkspace();
     }) });
     sigIds.push({ emitter: win, id: win.connect('notify::window-type', () => {
         this._onWindowIdentityChanged(win);

@@ -227,13 +227,16 @@ export default class TilingWMExtension extends Extension {
         this._scratchpadVisible = false;
         this._dropPreview = null;
 
-        // Migration FIRST: it may pin a user-layer default (e.g. the old
-        // Super+H nav binds on an existing install), and _disableMutterDefaults
-        // reads the EFFECTIVE values to decide which GNOME defaults to yield —
-        // running it after a schema-default change would yield the new combo
-        // and leave the pinned old one fighting GNOME's grab.
+        // Migration FIRST: it may pin a user-layer default for an existing
+        // install. Plaid itself never writes GNOME keybindings or edge-tiling;
+        // those belong to the user. _mutterSettings is read-only (BGAPP's
+        // dynamic-workspaces check).
         this._migrateKeybindingDefaults();
-        this._disableMutterDefaults();
+        try {
+            this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
+        } catch (_e) {
+            this._mutterSettings = null;
+        }
         this._dropOverlay = new St.Widget({
             reactive: false,
             visible: true,
@@ -408,7 +411,6 @@ export default class TilingWMExtension extends Extension {
         // early-returns until a grab-op-end that never comes.
         this._grabOp = null;
         this._grabWindow = null;
-        this._restoreMutterDefaults();
         this._removeAllBorders();
         this._destroyDropPreview();
         if (this._dropOverlay) {
@@ -492,6 +494,7 @@ export default class TilingWMExtension extends Extension {
         this._scratchpadVisible = false;
         this._stopBorderAnimation();
         this._disconnectSignals();
+        this._mutterSettings = null;
         this._destroyFloatPickDialog();
         this._destroyConflictDialog();
         this._removeKeybindings();
@@ -657,6 +660,37 @@ export default class TilingWMExtension extends Extension {
         this._addSignal(global, global.connect('shutdown', () => {
             if (this._settings) this._onShellShutdown();
         }));
+        // Display close fires BEFORE meta_display_unmanage_windows(), i.e.
+        // before _removeWindow() can queue a retile. global::shutdown is too
+        // late: the 50ms retile timeout can win the race and start animating
+        // windows that are already being disposed (observed logout stall).
+        for (const signal of ['closing', 'x11-display-closing']) {
+            try {
+                this._addSignal(global.display, global.display.connect(signal, () => {
+                    if (this._settings) this._onShellShutdown();
+                }));
+            } catch (_e) {}
+        }
+        // Detect a system shortcut that already owns one of our combos. The
+        // other binding stays in control; we just tell the user why Plaid did
+        // not run (see _onAcceleratorActivated / _showKeybindConflict).
+        this._addSignal(global.display, global.display.connect('accelerator-activated', (_d, actionId) => {
+            this._onAcceleratorActivated(actionId);
+        }));
+        // A GNOME-side shortcut edit (Settings, gsettings, another extension)
+        // changes who owns a combo. Re-grab our keys so the old grab cannot
+        // shadow the new owner and the conflict maps stay current.
+        for (const schemaId of [
+            'org.gnome.desktop.wm.keybindings',
+            'org.gnome.mutter.keybindings',
+            'org.gnome.mutter.wayland.keybindings',
+            'org.gnome.shell.keybindings',
+        ]) {
+            try {
+                const s = new Gio.Settings({ schema_id: schemaId });
+                this._addSignal(s, s.connect('changed', () => this._scheduleConflictScan()));
+            } catch (_e) {}
+        }
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
             if (this._handleDropdownWindowCreated(win)) return;
             if (this._handleBackgroundAppWindowCreated(win)) return;
@@ -811,8 +845,13 @@ export default class TilingWMExtension extends Extension {
             if (!ws) return;
             if (ws === this._backgroundAppParkingWs) {
                 // Reaching the hidden slot means something switched onto the
-                // reservation — log it loudly and skip the per-workspace work.
+                // reservation. Move any user windows back to a real workspace
+                // and leave the parking before the session restore places new
+                // windows there.
                 this._debugLog('workspace: active workspace is the hidden parking slot');
+                try { this._evacuateParkingWorkspace(); } catch (e) {
+                    log(`[plaid] parking evacuation failed: ${e.message}`);
+                }
                 return;
             }
             try {
@@ -1037,6 +1076,9 @@ export default class TilingWMExtension extends Extension {
     }
 
     _onShellShutdown() {
+        // Called from Meta.Display::closing, x11-display-closing, and
+        // global::shutdown. Only the first one does work.
+        if (this._shuttingDown) return;
         // Do NOT run full disable() here: it writes settings and touches UI
         // that is already being destroyed. Just make every queued/active
         // tiling path inert before the compositor goes away.

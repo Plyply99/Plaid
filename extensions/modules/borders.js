@@ -38,11 +38,11 @@ export function _ensureWindowBorder(win, actor, frame, isFocused) {
         // childless → fall through: create the placeholder widget
     }
     const activeWidth = this._settings.get_int('active-border-width');
-    const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#3584e4';
-    const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#62a0ea';
+    const activeColor = (this._settings.get_strv('active-border-color') || [])[0] || '#bd93f9';
+    const activeColor2 = (this._settings.get_strv('active-border-color-2') || [])[0] || '#50fa7b';
     const inactiveWidth = this._settings.get_int('inactive-border-width');
-    const inactiveColor = (this._settings.get_strv('inactive-border-color') || [])[0] || '#555555';
-    const inactiveColor2 = (this._settings.get_strv('inactive-border-color-2') || [])[0] || '#777777';
+    const inactiveColor = (this._settings.get_strv('inactive-border-color') || [])[0] || '#1e1f29';
+    const inactiveColor2 = (this._settings.get_strv('inactive-border-color-2') || [])[0] || '#282a36';
     const borderRadius = this._settings.get_int('border-radius');
     const gradient = this._settings.get_boolean('gradient-borders');
     const gradientDir = this._settings.get_string('gradient-direction');

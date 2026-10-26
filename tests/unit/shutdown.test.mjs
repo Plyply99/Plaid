@@ -44,3 +44,19 @@ test('_doRetileWorkspace: no-op after shutdown', () => {
   self._doRetileWorkspace({});
   assert.equal(scanned, false);
 });
+
+
+test('_onShellShutdown: idempotent across closing/x11-closing/shutdown', () => {
+  let cancelled = 0;
+  const self = makeSelf({}, {
+    _shuttingDown: false,
+    _pendingRetileIds: new Map([[{}, 1]]),
+    _cancelAnimation() { cancelled++; },
+  });
+
+  self._onShellShutdown();
+  self._onShellShutdown();
+  self._onShellShutdown();
+
+  assert.equal(cancelled, 1);
+});

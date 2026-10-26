@@ -1,7 +1,6 @@
 // Plaid — identity / title helpers and the mask SDF rect.
 //
-// The free functions (normalizeAccel, schemaDefaultValue, maskSdfRect) are
-// imported directly. The instance methods (leading underscore) use `this` and
+// The free functions (normalizeAccel, maskSdfRect) are imported directly. The instance methods (leading underscore) use `this` and
 // are attached to TilingWMExtension.prototype in extension.js, so their bodies
 // and call sites are unchanged.
 
@@ -24,23 +23,6 @@ export function normalizeAccel(combo) {
         return mods.length ? `<${mods.join('><')}>${key}` : key;
     } catch (_e) {
         return combo;
-    }
-}
-
-// Schema default for a settings key — the recovery source when a live value
-// looks like the emptied tamper sentinel (see _disableMutterDefaults): if the
-// shell died while Plaid was enabled, the live keybinds are already [] and
-// capturing [] would restore [] on disable — a permanent loss. Known
-// ambiguity (documented): a user who DELIBERATELY emptied a key is restored
-// to the schema default instead of their empty on the next disable; the
-// fully-correct fix would persist the pre-tamper values to a scratch settings
-// key at first tamper (write-once).
-export function schemaDefaultValue(settings, key) {
-    try {
-        const dv = settings.get_default_value(key);
-        return dv ? dv.deep_unpack() : null;
-    } catch (_e) {
-        return null;
     }
 }
 

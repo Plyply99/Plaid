@@ -86,3 +86,31 @@ export function findConflicts(others, combos) {
 export function scanKeybindConflicts(Gio, ownSchemaId, combos) {
     return findConflicts(collectOtherBindings(Gio, ownSchemaId), combos);
 }
+
+// Resolve an accelerator-activated action back to one of our dead combos.
+// Built-in mutter actions match by action id; shell/extension bindings match
+// by the external binding name returned by mutter.
+export function resolveConflictFeedback(actionId, name, byActionId, byName) {
+    const hit = byActionId?.get(actionId);
+    if (hit) return hit;
+    if (name && byName) return byName.get(name) || null;
+    return null;
+}
+
+// Clear the OTHER side of a conflict. This is the only external write Plaid
+// performs, and callers invoke it only after an explicit user click.
+export function clearConflictBinding(Gio, conflict) {
+    if (!conflict || !conflict.schemaId || !conflict.keyName) return false;
+    try {
+        const target = conflict.path
+            ? new Gio.Settings({ schema_id: conflict.schemaId, path: conflict.path })
+            : new Gio.Settings({ schema_id: conflict.schemaId });
+        if (conflict.type === 's')
+            target.set_string(conflict.keyName, '');
+        else
+            target.set_strv(conflict.keyName, []);
+        return true;
+    } catch (_e) {
+        return false;
+    }
+}

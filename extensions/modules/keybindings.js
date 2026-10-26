@@ -1,6 +1,9 @@
-// Keybindings — registration, removal, conflict detection/fix, and the
-// mutter-default yield on enable/disable. PLAID_KEYBIND_KEYS below is the
-// single source of truth for the keys.
+// Keybindings — registration, removal, conflict detection/fix, and Input
+// feedback when a system shortcut already owns one of our combos.
+// PLAID_KEYBIND_KEYS below is the single source of truth for the keys.
+// Plaid NEVER writes GNOME keybindings or edge-tiling; those are the user's
+// call. The conflict dialog only unbinds another schema after an explicit
+// click on 'Let Plaid use it'.
 //
 // Methods are attached to TilingWMExtension.prototype in extension.js.
 
@@ -14,12 +17,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { ModalDialog } from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-import { normalizeAccel, schemaDefaultValue } from './helpers.js';
-import { scanKeybindConflicts, describeConflict } from './keybind-conflicts.js';
+import { normalizeAccel } from './helpers.js';
+import { scanKeybindConflicts, describeConflict, resolveConflictFeedback, clearConflictBinding } from './keybind-conflicts.js';
 
 // Every Plaid keybinding settings key — the single source of truth for
 // registration (_registerKeybindings), removal (_removeKeybindings), and the
-// "which GNOME shortcuts must yield" check in _disableMutterDefaults.
+// startup/conflict feedback paths.
 const PLAID_KEYBIND_KEYS = [
     'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
     'swap-left', 'swap-right', 'swap-up', 'swap-down',
@@ -28,113 +31,6 @@ const PLAID_KEYBIND_KEYS = [
     'pick-float-window', 'cycle-layout',
     'scratchpad-toggle', 'scratchpad-add', 'dropdown-terminal',
 ];
-export function _disableMutterDefaults() {
-    // While Plaid is active these mutter keys are modified so edge-tiling and
-    // maximize shortcuts don't fight our layouts: minimize / unmaximize /
-    // toggle-tiled are unbound ONLY when a Plaid keybind holds the same combo
-    // (modifier order ignored); otherwise they are untouched. All restored to
-    // their pre-Plaid state on disable().
-    try {
-        this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
-        this._savedEdgeTiling = this._mutterSettings.get_boolean('edge-tiling');
-        if (!this._savedEdgeTiling) {
-            const def = schemaDefaultValue(this._mutterSettings, 'edge-tiling');
-            if (typeof def === 'boolean') this._savedEdgeTiling = def;
-        }
-        this._mutterSettings.set_boolean('edge-tiling', false);
-        this._wmKeybindings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
-        this._savedMaximize = this._wmKeybindings.get_strv('maximize');
-        if (this._savedMaximize.length === 0)
-            this._savedMaximize = schemaDefaultValue(this._wmKeybindings, 'maximize') || [];
-        this._savedMaximizeHoriz = this._wmKeybindings.get_strv('maximize-horizontally');
-        if (this._savedMaximizeHoriz.length === 0)
-            this._savedMaximizeHoriz = schemaDefaultValue(this._wmKeybindings, 'maximize-horizontally') || [];
-        this._savedMaximizeVert = this._wmKeybindings.get_strv('maximize-vertically');
-        if (this._savedMaximizeVert.length === 0)
-            this._savedMaximizeVert = schemaDefaultValue(this._wmKeybindings, 'maximize-vertically') || [];
-        this._wmKeybindings.set_strv('maximize', []);
-        this._wmKeybindings.set_strv('maximize-horizontally', []);
-        this._wmKeybindings.set_strv('maximize-vertically', []);
-        try {
-            this._savedToggleMaximized = this._wmKeybindings.get_strv('toggle-maximized');
-            if (this._savedToggleMaximized.length === 0)
-                this._savedToggleMaximized = schemaDefaultValue(this._wmKeybindings, 'toggle-maximized') || [];
-            this._wmKeybindings.set_strv('toggle-maximized', []);
-        } catch (e) {
-            log(`[plaid] wm toggle-maximized key unavailable: ${e.message}`);
-        }
-    } catch (e) {
-        log(`[plaid] mutter defaults disable failed: ${e.message}`);
-    }
-    this._savedYieldKeys = [];
-    try {
-        const held = new Set();
-        for (const key of PLAID_KEYBIND_KEYS) {
-            try {
-                for (const combo of this._settings.get_strv(key)) {
-                    if (combo) held.add(normalizeAccel(combo));
-                }
-            } catch (_e) {}
-        }
-        try {
-            this._mutterKbSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter.keybindings' });
-        } catch (_e) {
-            this._mutterKbSettings = null;
-        }
-        const candidates = [
-            [this._wmKeybindings, 'minimize'],
-            [this._wmKeybindings, 'unmaximize'],
-            [this._mutterKbSettings, 'toggle-tiled-left'],
-            [this._mutterKbSettings, 'toggle-tiled-right'],
-        ];
-        for (const [settings, key] of candidates) {
-            if (!settings) continue;
-            try {
-                const current = settings.get_strv(key);
-                let saveValue = current;
-                if (saveValue.length === 0)
-                    saveValue = schemaDefaultValue(settings, key) || [];
-                if (current.some((combo) => held.has(normalizeAccel(combo)))) {
-                    this._savedYieldKeys.push({ settings, key, value: saveValue });
-                    settings.set_strv(key, []);
-                    log(`[plaid] yielded GNOME shortcut: ${key} (same combo as a Plaid keybind) — restored on disable`);
-                }
-            } catch (e) {
-                log(`[plaid] yield ${key} failed: ${e.message}`);
-            }
-        }
-    } catch (e) {
-        log(`[plaid] conditional keybind yield failed: ${e.message}`);
-    }
-}
-
-export function _restoreMutterDefaults() {
-    // Reverses the writes above; per-key null guards ensure each key is attempted
-    // even if an earlier restore fails.
-    if (this._mutterSettings) {
-        this._mutterSettings.set_boolean('edge-tiling', this._savedEdgeTiling);
-        this._mutterSettings = null;
-    }
-    if (this._wmKeybindings) {
-        this._wmKeybindings.set_strv('maximize', this._savedMaximize);
-        this._wmKeybindings.set_strv('maximize-horizontally', this._savedMaximizeHoriz);
-        this._wmKeybindings.set_strv('maximize-vertically', this._savedMaximizeVert);
-        try {
-            this._wmKeybindings.set_strv('toggle-maximized', this._savedToggleMaximized);
-        } catch (e) {
-            log(`[plaid] wm toggle-maximized restore unavailable: ${e.message}`);
-        }
-        this._wmKeybindings = null;
-    }
-    if (this._savedYieldKeys) {
-        for (const y of this._savedYieldKeys) {
-            try { y.settings.set_strv(y.key, y.value); } catch (_e) {}
-        }
-        this._savedYieldKeys = null;
-    }
-    this._mutterKbSettings = null;
-}
-
 export function _migrateKeybindingDefaults() {
     // One-time migrations for changed keybind defaults: existing installs keep
     // their binds. get_user_value() reads only the USER dconf layer, so any past
@@ -209,7 +105,7 @@ export function _hasUserSettings() {
     return false;
 }
 
-export function _registerKeybindings() {
+export function _registerKeybindings(dialogDelayMs = 2000) {
     const bindings = [
         { key: 'move-focus-left', fn: () => this._moveFocus('left') },
         { key: 'move-focus-right', fn: () => this._moveFocus('right') },
@@ -235,6 +131,8 @@ export function _registerKeybindings() {
     ];
 
     let failures = 0;
+    this._failedKeybindCombos = new Map();
+    this._keybindConflictTimes = new Map();
     for (const { key, fn } of bindings) {
         const ok = Main.wm.addKeybinding(
             key,
@@ -248,11 +146,17 @@ export function _registerKeybindings() {
         } else {
             log(`[plaid] keybind: ${key} grab FAILED (conflict or invalid binding)`);
             failures++;
+            let combos = [];
+            try { combos = this._settings.get_strv(key) || []; } catch (_e) {}
+            for (const combo of combos) {
+                const norm = normalizeAccel(combo);
+                if (norm) this._failedKeybindCombos.set(norm, { key, combo });
+            }
         }
     }
     if (failures > 0)
         log(`[plaid] keybindings registered: ${bindings.length - failures}/${bindings.length} ok (${failures} failed)`);
-    this._checkKeybindingConflicts(bindings);
+    this._checkKeybindingConflicts(bindings, dialogDelayMs);
     // Re-scan when a binding changes (prefs, gsettings, CLI) so a clash with
     // GNOME is surfaced right away instead of only at the next login. Tracked so
     // a re-registration (the conflict dialog re-grabs after freeing a combo)
@@ -269,7 +173,6 @@ export function _registerKeybindings() {
             this._scheduleConflictScan(bindings);
         });
         this._keybindChangeIds.push(id);
-        this._addSignal(this._settings, id);
     }
 }
 
@@ -307,23 +210,117 @@ export function _checkKeybindingConflicts(bindings, dialogDelayMs = 2000) {
             log(`[plaid] keybinding CONFLICT: ${c.owners.join(' + ')} '${c.orig}' also bound by ` +
                 `${describeConflict(c)} — grab race can kill the Plaid key for a session; ` +
                 `unbind one side (or use the dialog to hand it to Plaid)`);
-        if (conflicts.length)
-            this._showConflictDialog(conflicts, dialogDelayMs);
+        // Only combos whose Plaid grab actually failed need runtime feedback:
+        // a mode-gated other binding can leave our grab working. The dialog
+        // follows the same set so it does not nag about non-problems.
+        const failed = conflicts.filter(c => this._failedKeybindCombos?.has(normalizeAccel(c.orig)));
+        // Feedback maps use ALL cross-schema conflicts: if Plaid won the grab
+        // the other action never fires, so the map is inert; if the other side
+        // wins (including after a live prefs edit), the OSD is exactly right.
+        this._buildKeybindFeedbackMaps(conflicts);
+        if (failed.length)
+            this._showConflictDialog(failed, dialogDelayMs);
+        else
+            this._destroyConflictDialog();
     } catch (e) {
         log(`[plaid] keybinding conflict scan failed: ${e.message}`);
     }
 }
 
-export function _scheduleConflictScan(bindings) {
-    // Debounce: one edit in prefs can fire several changed:: signals.
+export function _buildKeybindFeedbackMaps(conflicts) {
+    this._keybindConflictById = new Map();
+    this._keybindConflictByName = new Map();
+    for (const c of conflicts) {
+        const entry = {
+            combo: c.orig,
+            owner: describeConflict(c),
+            key: c.owners?.[0] || null,
+        };
+        if (c.keyName)
+            this._keybindConflictByName.set(c.keyName, entry);
+        if (c.path) {
+            this._keybindConflictByName.set(c.path, entry);
+            const base = c.path.replace(/\/+$/, '').split('/').pop();
+            if (base) this._keybindConflictByName.set(base, entry);
+        }
+        try {
+            let id = 0;
+            if (typeof Meta.prefs_get_keybinding_action === 'function')
+                id = Meta.prefs_get_keybinding_action(c.keyName);
+            // Fallback for mutter's built-in actions: their schema names map
+            // directly onto the KeyBindingAction enum (maximize → MAXIMIZE,
+            // toggle-tiled-left → TOGGLE_TILED_LEFT, …).
+            if (!id && Meta.KeyBindingAction) {
+                const enumName = String(c.keyName || '').replace(/-/g, '_').toUpperCase();
+                id = Meta.KeyBindingAction[enumName] || 0;
+            }
+            if (id) this._keybindConflictById.set(id, entry);
+        } catch (_e) {}
+    }
+    this._debugLog(`keybind feedback: ${this._keybindConflictById.size} by action, ` +
+        `${this._keybindConflictByName.size} by name`);
+}
+
+export function _onAcceleratorActivated(actionId) {
+    if (!this._settings || this._shuttingDown) return;
+    if (!this._keybindConflictById?.size && !this._keybindConflictByName?.size) return;
+    let name = null;
+    try {
+        if (typeof Meta.external_binding_name_for_action === 'function')
+            name = Meta.external_binding_name_for_action(actionId);
+    } catch (_e) {}
+    const hit = resolveConflictFeedback(actionId, name,
+        this._keybindConflictById, this._keybindConflictByName);
+    if (!hit) return;
+    this._showKeybindConflict(hit.combo, hit.owner, hit.key);
+}
+
+export function _showKeybindConflict(combo, owner, keyName = null) {
+    const norm = normalizeAccel(combo);
+    const now = Date.now();
+    if (!this._keybindConflictTimes) this._keybindConflictTimes = new Map();
+    if (now - (this._keybindConflictTimes.get(norm) || 0) < 2500) return;
+    this._keybindConflictTimes.set(norm, now);
+    const action = keyName ? ` (${keyName.replace(/-/g, ' ')})` : '';
+    const msg = _('%s%s is already used by %s')
+        .replace('%s', () => combo)
+        .replace('%s', () => action)
+        .replace('%s', () => owner);
+    this._debugLog(`keybind conflict: ${msg}`);
+    try {
+        if (Main.osdWindowManager?.showOne) {
+            const icon = new Gio.ThemedIcon({ name: 'dialog-warning-symbolic' });
+            Main.osdWindowManager.showOne(
+                global.display.get_current_monitor(), icon, msg, null, -1);
+            return;
+        }
+    } catch (e) {
+        this._debugLog(`keybind conflict osd failed: ${e.message}`);
+    }
+    this._showPopup(_('Shortcut unavailable'), msg, 2200);
+}
+
+export function _scheduleConflictScan(_bindings, dialogDelayMs = 150) {
+    // Debounce: one edit in prefs can fire several changed:: signals, and a
+    // GNOME-side shortcut change arrives as a separate schema signal.
     if (this._conflictScanId) {
         GLib.source_remove(this._conflictScanId);
     }
     this._conflictScanId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
         this._conflictScanId = 0;
         if (!this._settings) return GLib.SOURCE_REMOVE;
-        this._debugLog('conflict scan: running');
-        this._checkKeybindingConflicts(bindings, 150);
+        // Re-GRAB, not just re-scan. A live edit (or a GNOME-side change)
+        // can leave the previous grab stale: the key may still be held by
+        // Plaid, so the system action never fires and the conflict map stays
+        // empty. Re-adding refreshes the grab, the failed set, and the OSD
+        // maps in one pass.
+        this._debugLog('conflict scan: re-registering keybindings');
+        try {
+            this._removeKeybindings();
+            this._registerKeybindings(dialogDelayMs);
+        } catch (e) {
+            log(`[plaid] keybind re-register failed: ${e.message}`);
+        }
         return GLib.SOURCE_REMOVE;
     });
 }
@@ -343,9 +340,14 @@ export function _showConflictDialog(conflicts, delayMs = 2000) {
             text: _('Shortcut conflict'),
             style: 'font-weight: bold; font-size: 14px;',
         }));
+        const allGnome = conflicts.every(c =>
+            String(c.schemaId || '').startsWith('org.gnome.'));
         for (const c of conflicts) {
+            const isGnome = String(c.schemaId || '').startsWith('org.gnome.');
             const line = new St.Label({
-                text: _('%s is already used by %s. Let Plaid take it over?')
+                text: (isGnome
+                    ? _('%s conflicts with %s. Disable the GNOME shortcut and use it?')
+                    : _('%s conflicts with %s. Disable the conflicting shortcut and use it?'))
                     .replace('%s', () => c.combo)
                     .replace('%s', () => describeConflict(c)),
             });
@@ -356,22 +358,16 @@ export function _showConflictDialog(conflicts, delayMs = 2000) {
 
         dialog.setButtons([
             {
-                label: _('Let Plaid use it'),
+                label: allGnome
+                    ? _('Disable GNOME shortcut and use it')
+                    : _('Disable conflicting shortcut and use it'),
                 key: Clutter.KEY_f,
                 action: () => {
                     for (const c of conflicts) {
-                        try {
-                            const target = c.path
-                                ? new Gio.Settings({ schema_id: c.schemaId, path: c.path })
-                                : new Gio.Settings({ schema_id: c.schemaId });
-                            // Custom shortcuts hold a single string; every other
-                            // binding here is a strv.
-                            if (c.type === 's') target.set_string(c.keyName, '');
-                            else target.set_strv(c.keyName, []);
-                            log(`[plaid] keybinding conflict fixed: unbound ${c.schemaId}${c.path || ''} ${c.keyName} (was '${c.combo}')`);
-                        } catch (e) {
-                            log(`[plaid] keybinding conflict fix failed: ${e.message}`);
-                        }
+                        if (clearConflictBinding(Gio, c))
+                            log(`[plaid] keybinding conflict freed: ${c.schemaId}${c.path || ''} ${c.keyName} (was '${c.combo}')`);
+                        else
+                            log(`[plaid] keybinding conflict fix failed: ${c.schemaId}${c.path || ''} ${c.keyName}`);
                     }
                     // The other side owned the grab, so Plaid's binding was
                     // never registered — drop and re-add ours now that the combo
@@ -428,17 +424,31 @@ export function _removeKeybindings() {
     for (const key of PLAID_KEYBIND_KEYS) {
         Main.wm.removeKeybinding(key);
     }
+    // Per-key changed handlers are managed here rather than through
+    // _signals: re-registration replaces them, and tracking them twice would
+    // leave stale ids for _disconnectSignals to trip over.
+    if (this._keybindChangeIds) {
+        for (const id of this._keybindChangeIds) {
+            try { this._settings.disconnect(id); } catch (_e) {}
+        }
+        this._keybindChangeIds = [];
+    }
+    this._failedKeybindCombos = null;
+    this._keybindConflictById = null;
+    this._keybindConflictByName = null;
+    this._keybindConflictTimes = null;
 }
 
 
 export const keybindMethods = {
-    _disableMutterDefaults,
-    _restoreMutterDefaults,
     _migrateKeybindingDefaults,
     _pinOldKeybinds,
     _hasUserSettings,
     _registerKeybindings,
     _checkKeybindingConflicts,
+    _buildKeybindFeedbackMaps,
+    _onAcceleratorActivated,
+    _showKeybindConflict,
     _scheduleConflictScan,
     _showConflictDialog,
     _destroyConflictDialog,

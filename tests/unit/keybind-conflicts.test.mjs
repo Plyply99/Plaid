@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeAccel } from '../../extensions/modules/helpers.js';
-import { scanKeybindConflicts, describeConflict } from '../../extensions/modules/keybind-conflicts.js';
+import { scanKeybindConflicts, describeConflict, resolveConflictFeedback, clearConflictBinding } from '../../extensions/modules/keybind-conflicts.js';
 
 // A fake Gio with exactly what the scanner touches: Settings (constructed with
 // a schema id, optionally a path), list_schemas, and the value accessors.
@@ -89,4 +89,56 @@ test('describeConflict: labels each source', () => {
     assert.equal(describeConflict({ path: null, schemaId: 'org.gnome.desktop.wm.keybindings', keyName: 'switch-input-source-backward' }), 'GNOME (switch input source backward)');
     assert.equal(describeConflict({ path: '/x/0/', schemaId: 'c', keyName: 'binding', label: '' }), 'GNOME — a custom shortcut');
     assert.equal(describeConflict({ path: null, schemaId: 'org.example.ext', keyName: 'do-thing' }), 'org.example.ext (do-thing)');
+});
+
+
+test('resolveConflictFeedback: action id match wins', () => {
+  const byId = new Map([[42, { combo: '<Super>Up', owner: 'GNOME (maximize)' }]]);
+  assert.deepEqual(
+    resolveConflictFeedback(42, 'maximize', byId, new Map()),
+    { combo: '<Super>Up', owner: 'GNOME (maximize)' });
+});
+
+test('resolveConflictFeedback: external binding name fallback', () => {
+  const byName = new Map([['toggle-overview', { combo: '<Super>a', owner: 'GNOME (toggle overview)' }]]);
+  assert.deepEqual(
+    resolveConflictFeedback(999, 'toggle-overview', new Map(), byName),
+    { combo: '<Super>a', owner: 'GNOME (toggle overview)' });
+});
+
+test('resolveConflictFeedback: unknown action/name is a miss', () => {
+  assert.equal(resolveConflictFeedback(7, 'nope', new Map(), new Map()), null);
+  assert.equal(resolveConflictFeedback(7, null, undefined, undefined), null);
+});
+
+
+test('clearConflictBinding: clears strv and custom string bindings', () => {
+  const writes = [];
+  class FakeSettings {
+    constructor({ schema_id, path = null }) { this.schema_id = schema_id; this.path = path; }
+    set_strv(k, v) { writes.push({ schema_id: this.schema_id, path: this.path, key: k, value: v }); }
+    set_string(k, v) { writes.push({ schema_id: this.schema_id, path: this.path, key: k, value: v }); }
+  }
+  const Gio = { Settings: FakeSettings };
+
+  assert.equal(clearConflictBinding(Gio, {
+    schemaId: 'org.gnome.desktop.wm.keybindings', keyName: 'maximize', type: 'as', path: null,
+  }), true);
+  assert.equal(clearConflictBinding(Gio, {
+    schemaId: 'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding',
+    keyName: 'binding', type: 's', path: '/custom0/',
+  }), true);
+
+  assert.deepEqual(writes[0], {
+    schema_id: 'org.gnome.desktop.wm.keybindings', path: null, key: 'maximize', value: [],
+  });
+  assert.deepEqual(writes[1], {
+    schema_id: 'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding',
+    path: '/custom0/', key: 'binding', value: '',
+  });
+});
+
+test('clearConflictBinding: malformed conflict returns false', () => {
+  assert.equal(clearConflictBinding({ Settings: class {} }, {}), false);
+  assert.equal(clearConflictBinding({ Settings: class {} }, null), false);
 });
