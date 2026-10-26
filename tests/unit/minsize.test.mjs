@@ -169,3 +169,52 @@ test('_clampTreeToMinSizes: reserves nested gaps when clamping (regression)', ()
   // split by one gap).
   assert.ok(Math.abs(tree.ratio - 210 / 410) < 1e-9);
 });
+
+test('_getWindowMinSize: ignores transient client hints while a window is settling', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map(),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'emacs', minSize: [1936, 1185] });
+  w._plaidSettleUntil = Date.now() + 6000;
+  assert.deepEqual(self._getWindowMinSize(w), { w: 0, h: 0 });
+
+  // An observed/refused size is equally transient during settle.
+  self._observedMinSizes.set(w, { w: 1900, h: 1208 });
+  assert.deepEqual(self._getWindowMinSize(w), { w: 0, h: 0 });
+
+  // Once the settle window closes the real hints are used again (the
+  // learned floor still raises them, as designed).
+  w._plaidSettleUntil = 0;
+  assert.deepEqual(self._getWindowMinSize(w), { w: 1936, h: 1208 });
+});
+
+test('_getWindowMinSize: an explicit min-size override still wins while settling', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map([['emacs', { w: 800, h: 600 }]]),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'emacs', minSize: [1936, 1185] });
+  w._plaidSettleUntil = Date.now() + 6000;
+  assert.deepEqual(self._getWindowMinSize(w), { w: 800, h: 600 });
+});
+
+test('_clampTreeToMinSizes: a settling client cannot walk the split ratio (regression)', () => {
+  // Reproduces the first Emacs/XWayland open: the client restores 1936x1185
+  // and reports a matching minimum; each retile used to move the v-split by
+  // one title bar (1048 -> 1008 -> 969 -> 929 -> 889). The split must stay
+  // at 0.5 for the whole settle window.
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map(),
+    _observedMinSizes: new Map(),
+  });
+  const top = fakeWin({ minSize: [0, 0] });
+  const bottom = fakeWin({ instance: 'emacs', minSize: [1936, 1185] });
+  bottom._plaidSettleUntil = Date.now() + 6000;
+  const tree = split('v', 0.5, leaf(top), leaf(bottom));
+  for (let i = 0; i < 5; i++) {
+    self._treeMinSizes(tree, 8);
+    self._clampTreeToMinSizes(tree, 3830, 2105, 8);
+  }
+  assert.equal(tree.ratio, 0.5);
+});

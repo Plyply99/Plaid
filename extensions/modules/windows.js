@@ -376,6 +376,7 @@ export function _removeWindow(win) {
     }
     win._plaidSettleUntil = 0;
     win._plaidSurfaceStrikes = 0;
+    win._plaidHoldReveal = false;
     if (this._maximizeToggleRects) this._maximizeToggleRects.delete(win);
     this._savedRects.delete(win);
     this._scratchpadWindows.delete(win);

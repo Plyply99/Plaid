@@ -258,6 +258,17 @@ export function _getWindowMinSize(win) {
         w = entry.w;
         h = entry.h;
     } else {
+        // A freshly placed client is still restoring its own geometry, and
+        // the hints it reports during that window are transient: XWayland
+        // Emacs re-applies its remembered frame (1936x1185) right after
+        // placement and reports a matching minimum for a few seconds. Using
+        // that as a partition floor walked the dwindle split by one title
+        // bar per retile (1048 -> 1008 -> 969 -> 929 -> 889) and persisted
+        // the bent ratio. Ignore transient floors until the settle window
+        // closes; the first retile after settle re-clamps with the stable
+        // hints. An explicit min-size override still wins (checked above).
+        if (win._plaidSettleUntil && win._plaidSettleUntil > Date.now())
+            return { w: 0, h: 0 };
         try {
             const [mw, mh] = win.get_min_size();
             w = Number.isFinite(mw) ? mw : 0;
@@ -300,6 +311,7 @@ export function _treeMinSizes(node, gap = 0) {
 
 export function _clampTreeToMinSizes(node, areaW, areaH, gap) {
     if (!node || node.type !== 'split') return;
+    const before = node.ratio;
     // Clamp THIS split against its own span, then descend with each child's
     // real slot. (Clamping bottom-up against the FULL area under-enforced
     // nested mins — deep splits were handed slots smaller than their
@@ -333,6 +345,9 @@ export function _clampTreeToMinSizes(node, areaW, areaH, gap) {
             }
         }
     }
+    if (node.ratio !== before)
+        this._debugLog?.(`clamp: ${node.direction}-split ratio ${before.toFixed(4)} -> ${node.ratio.toFixed(4)} ` +
+            `mins=${node.first?._minW || 0}x${node.first?._minH || 0}/${node.second?._minW || 0}x${node.second?._minH || 0}`);
     const isH = node.direction === 'h';
     const axis = isH ? areaW : areaH;
     const split = Math.floor((axis - gap) * node.ratio);

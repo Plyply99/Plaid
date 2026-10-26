@@ -554,10 +554,16 @@ export function _disconnectGrabBoundaryHooks() {
 }
 
 export function _maybeReassertSlot(win, tol = 16, mode = 'retile') {
-    if (!this._settings) return;
+    if (!this._settings || this._shuttingDown) return;
     if (!this._settings.get_boolean('enabled')) return;
     if (this._grabOp) return;
     if (!win || win.is_fullscreen() || win.minimized) return;
+    // Never fight an in-flight Plaid animation with a direct re-place:
+    // size-changed fires on every animated tick, and re-placing mid-flight
+    // made the first Emacs/XWayland open bounce by 24-40px per tick. The
+    // animation's landing verify settles the final frame, and the settle
+    // poll retries 400ms later if the client still disagrees.
+    if (this._animWindows && this._animWindows.has(win)) return;
     if (this._isFloating(win)) return;
     if (!this._windowWorkspaces.has(win)) return;
     // Timestamp gate: size-changed fires per move/resize step and the

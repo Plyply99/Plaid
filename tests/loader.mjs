@@ -9,7 +9,7 @@
 // Register it with: node --import ./tests/register.mjs --test tests/
 
 const GI_SOURCES = {
-  Clutter: 'export default { Orientation: { HORIZONTAL: 0, VERTICAL: 1 }, get_default_backend: undefined };',
+  Clutter: 'export default { Orientation: { HORIZONTAL: 0, VERTICAL: 1 }, AnimationMode: { EASE_OUT_CUBIC: 0 }, get_default_backend: undefined };',
   Cogl: 'export default { SnippetHook: { FRAGMENT: 1, VERTEX: 2, TEXTURE_LOOKUP: 3 } };',
   GObject: 'export default { registerClass: () => { throw new Error("GObject.registerClass invoked at import time"); } };',
   Gio: 'export default {};',

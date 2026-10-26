@@ -239,9 +239,11 @@ export default class TilingWMExtension extends Extension {
             visible: true,
         });
         Main.layoutManager.uiGroup.add_child(this._dropOverlay);
+        this._shuttingDown = false;
         this._animating = false;
         this._animTargets = null;
         this._animStates = null;
+        this._animWindows = null;
         this._animStartTime = 0;
         this._animTickId = 0;
         this._newWindowSet = new Set();
@@ -526,6 +528,7 @@ export default class TilingWMExtension extends Extension {
         this._grabInitialMasterRatio = 0;
         this._grabInitialStackRatios = null;
         this._animTargets = null;
+        this._animWindows = null;
         if (this._floatHooks) {
             for (const win of [...this._floatHooks.keys()])
                 this._disconnectFloatHooks(win);
@@ -646,6 +649,14 @@ export default class TilingWMExtension extends Extension {
     }
 
     _connectSignals() {
+        // The shell emits this at the very start of shutdown. A retile that
+        // was queued by an unmanaged window can otherwise fire after this
+        // point and start a 16ms animation against windows/actors that are
+        // already being torn down — the main loop then stalls until systemd
+        // SIGKILLs the shell (observed: 5s stop-sigterm timeout on logout).
+        this._addSignal(global, global.connect('shutdown', () => {
+            if (this._settings) this._onShellShutdown();
+        }));
         this._addSignal(global.display, global.display.connect('window-created', (_d, win) => {
             if (this._handleDropdownWindowCreated(win)) return;
             if (this._handleBackgroundAppWindowCreated(win)) return;
@@ -1025,8 +1036,23 @@ export default class TilingWMExtension extends Extension {
         }
     }
 
+    _onShellShutdown() {
+        // Do NOT run full disable() here: it writes settings and touches UI
+        // that is already being destroyed. Just make every queued/active
+        // tiling path inert before the compositor goes away.
+        this._shuttingDown = true;
+        if (this._pendingRetileIds) {
+            for (const id of this._pendingRetileIds.values()) {
+                try { GLib.source_remove(id); } catch (_e) {}
+            }
+            this._pendingRetileIds.clear();
+        }
+        try { this._cancelAnimation(); } catch (_e) {}
+        this._debugLog('shell shutdown: retiles/animations stopped');
+    }
+
     _scheduleRetile(workspace) {
-        if (!this._settings || !workspace) return;
+        if (!this._settings || !workspace || this._shuttingDown) return;
         if (this._pendingRetileIds.has(workspace))
             GLib.source_remove(this._pendingRetileIds.get(workspace));
         const now = Date.now();
@@ -1034,7 +1060,7 @@ export default class TilingWMExtension extends Extension {
         const delay = Math.max(0, 50 - (now - last));
         const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             this._pendingRetileIds.delete(workspace);
-            if (!this._settings) return false;
+            if (!this._settings || this._shuttingDown) return false;
             this._doRetileWorkspace(workspace);
             return false;
         });

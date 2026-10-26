@@ -34,6 +34,25 @@ export function _cancelAnimation() {
             } catch (_e) {}
         }
     }
+    // New X11 windows can be held hidden while the settle poll fixes their
+    // restored geometry. Disabling mid-hold must not leave them invisible.
+    if (this._windowWorkspaces) {
+        for (const win of this._windowWorkspaces.keys()) {
+            if (!win._plaidHoldReveal) continue;
+            win._plaidHoldReveal = false;
+            try {
+                const a = win.get_compositor_private();
+                if (a) {
+                    a.visible = true;
+                    a.set_opacity(255);
+                    a.remove_all_transitions();
+                }
+                const effect = this._windowMasks && this._windowMasks.get(win);
+                if (effect && effect.setOpacityUniform)
+                    effect.setOpacityUniform(1);
+            } catch (_e) {}
+        }
+    }
     this._animating = false;
     this._animTargets = null;
     this._animStates = null;
@@ -45,18 +64,56 @@ export function _cancelAnimation() {
     }
 }
 
+export function _revealHeldNewWindow(win, fadeDuration = 80) {
+    // X11 clients can re-apply their remembered frame right after mapping
+    // (Emacs restores a 2320x1467 frame). The new window is held invisible
+    // until the settle poll has corrected that, so the oversized frame is
+    // never shown; this reveals it at the real slot.
+    if (!this._settings || !win || !win._plaidHoldReveal) return;
+    win._plaidHoldReveal = false;
+    try {
+        if (win._plaidInvisibleTimer) {
+            GLib.source_remove(win._plaidInvisibleTimer);
+            win._plaidInvisibleTimer = 0;
+        }
+        if (this._pendingWarp) this._pendingWarp.delete(win);
+        const actor = win.get_compositor_private();
+        if (actor) {
+            actor.visible = true;
+            actor.remove_all_transitions();
+            actor.set_opacity(0);
+            actor.ease({
+                opacity: 255,
+                duration: fadeDuration,
+                mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+                onComplete: () => {
+                    try { if (actor.opacity < 255) actor.set_opacity(255); } catch (_e) {}
+                },
+            });
+        }
+        const effect = this._windowMasks && this._windowMasks.get(win);
+        if (effect && effect.setOpacityUniform)
+            effect.setOpacityUniform(1);
+    } catch (_e) {}
+    this._scheduleBorders();
+    this._debugLog(`place: held reveal at slot for ${win.get_wm_class_instance() || '?'}`);
+}
+
 export function _deferNewWindowPlacement(s, duration, done) {
     const fadeDuration = Math.min(duration, 80);
-    const fadeIn = () => {
+    const fadeIn = (holdForSettle = false) => {
         if (!this._settings) return;
         try {
             const f = s.win.get_frame_rect();
             this._debugLog(`place: fading frame=(${Math.round(f.x)},${Math.round(f.y)},${Math.round(f.width)},${Math.round(f.height)}) ` +
                 `target=(${Math.round(s.targetX)},${Math.round(s.targetY)},${Math.round(s.targetW)},${Math.round(s.targetH)})`);
         } catch (_e) {}
+        let isX11 = false;
+        try { isX11 = s.win.get_client_type() === Meta.WindowClientType.X11; } catch (_e) {}
+        const hold = holdForSettle && isX11;
         try {
             const actor = s.win.get_compositor_private();
-            if (actor) {
+            if (actor && !hold) {
                 actor.visible = true;
                 // actor opacity is still 0 from the spawn hide — the
                 // ease below animates 0→255.
@@ -94,6 +151,28 @@ export function _deferNewWindowPlacement(s, duration, done) {
         // per newly opened window, settle-window-only. The poll is NOT
         // stopped on the first in-slot tick — a restore landing between
         // ticks would be missed.
+        const heldSlotOk = () => {
+            try {
+                const ws = s.win.get_workspace();
+                if (!ws) return false;
+                const layout = this._getWorkspaceLayout(ws);
+                if (layout === 'floating') return true;
+                const gap = this._settings.get_int('inside-gap');
+                const workArea = ws.get_work_area_for_monitor(global.display.get_primary_monitor());
+                if (!workArea || !workArea.width) return false;
+                const slot = this._windowSlotRect(s.win, ws, layout, workArea, gap);
+                if (!slot) return false;
+                const f = s.win.get_frame_rect();
+                return Math.abs(f.x - slot.x) <= 4 && Math.abs(f.y - slot.y) <= 4 &&
+                    Math.abs(f.width - slot.w) <= 4 && Math.abs(f.height - slot.h) <= 4;
+            } catch (_e) {
+                return false;
+            }
+        };
+        const revealHeld = () => {
+            if (!this._settings || !s.win || !s.win._plaidHoldReveal) return;
+            this._revealHeldNewWindow(s.win, fadeDuration);
+        };
         s.win._plaidSettleUntil = Date.now() + 6000;
         if (s.win._plaidSettlePollId) {
             GLib.source_remove(s.win._plaidSettlePollId);
@@ -111,6 +190,7 @@ export function _deferNewWindowPlacement(s, duration, done) {
                 return GLib.SOURCE_REMOVE;
             }
             try { this._maybeReassertSlot(w, 4, 'direct'); } catch (_e) {}
+            if (w._plaidHoldReveal && heldSlotOk()) revealHeld();
             return GLib.SOURCE_CONTINUE;
         });
         this._scheduleBorders();
@@ -139,6 +219,21 @@ export function _deferNewWindowPlacement(s, duration, done) {
                 done();
             }
         };
+        if (hold) {
+            s.win._plaidHoldReveal = true;
+            this._debugLog(`place: holding reveal until settle (${s.win.get_wm_class_instance() || '?'})`);
+            // Hard backstop: if the client keeps fighting the slot (or the
+            // poll cannot read a settled frame), never leave it invisible.
+            this._addTimeout(1200, () => {
+                if (!this._settings) return GLib.SOURCE_REMOVE;
+                this._revealHeldNewWindow(s.win, fadeDuration);
+                return GLib.SOURCE_REMOVE;
+            });
+            // The window stays hidden, but the animation pipeline must not
+            // stay blocked while the settle poll corrects the client.
+            done();
+            return;
+        }
         try {
             const actor = s.win.get_compositor_private();
             if (actor) {
@@ -170,7 +265,7 @@ export function _deferNewWindowPlacement(s, duration, done) {
         } catch (_e) {}
         if (this._verifyAnimationLanding(s, 'new', true)) {
             this._debugLog(`place: attempt ${tries} verified — fading at target`);
-            fadeIn();
+            fadeIn(true);
         } else if (this._landingGivenUp && this._landingGivenUp.has(s.win)) {
             this._debugLog('place: given-up set — fading');
             fadeIn();
@@ -237,7 +332,7 @@ export function _deferNewWindowPlacement(s, duration, done) {
 }
 
 export function _checkWorkspaceLandings(ws) {
-    if (!this._settings || !this._settings.get_boolean('enabled')) return;
+    if (!this._settings || this._shuttingDown || !this._settings.get_boolean('enabled')) return;
     if (this._grabOp) return;
     const layout = this._getWorkspaceLayout(ws);
     if (layout === 'floating') return;
@@ -387,7 +482,14 @@ export function _verifyAnimationLanding(s, kind, pure = false) {
                 const prev = this._mismatchFrames?.get(win);
                 this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
                 const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
-                if (prev && refusesShrink &&
+                // A settling client can re-apply its remembered geometry
+                // after placement (XWayland Emacs: 1936x1185). That is not a
+                // minimum-size refusal — learning it as one bent the dwindle
+                // ratio to the client's own frame and persisted the result.
+                // Wait out the settle window; stable clients still bend and
+                // float through the normal retry path afterwards.
+                const settling = !!(win._plaidSettleUntil && win._plaidSettleUntil > Date.now());
+                if (!settling && prev && refusesShrink &&
                     Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
                     Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1) {
                     this._recordObservedMin(win, f, { w: s.targetW, h: s.targetH });
@@ -537,6 +639,10 @@ export function _retryLanding(win) {
 }
 
 export function _animRetile(workspace, tiledWindows) {
+    if (!this._settings || this._shuttingDown) {
+        this._animating = false;
+        return;
+    }
     if (this._animating) {
         // Stall watchdog: the in-flight animation's completion signal
         // can be missed (interrupted transitions, destroyed windows).
@@ -558,6 +664,7 @@ export function _animRetile(workspace, tiledWindows) {
             }
             this._animStates = null;
             this._animTargets = null;
+            this._animWindows = null;
             this._animating = false;
             const pending = [...this._queuedAnimWorkspaces];
             this._queuedAnimWorkspaces.clear();
@@ -595,6 +702,7 @@ export function _animRetile(workspace, tiledWindows) {
     if (this._animTargets.size === 0) {
         this._debugLog('anim: no targets (bail)');
         this._animTargets = null;
+        this._animWindows = null;
         for (const win of tiledWindows) this._newWindowSet.delete(win);
         this._scheduleBorders();
         return;
@@ -615,15 +723,17 @@ export function _animRetile(workspace, tiledWindows) {
         states.push({ win, actor, isNew, startX: frame.x, startY: frame.y, startW: frame.width, startH: frame.height, targetX: target.x, targetY: target.y, targetW: target.w, targetH: target.h });
     }
     this._animTargets = null;
+    this._animWindows = new Set(states.map(s => s.win));
 
     let remaining = states.length;
-    if (remaining === 0) { this._animating = false; return; }
+    if (remaining === 0) { this._animating = false; this._animWindows = null; return; }
 
     const dec = () => {
         if (!this._newWindowSet) return;
         remaining--;
         if (remaining <= 0) {
             this._animating = false;
+            this._animWindows = null;
             this._debugLog(`anim: done ws=${this._wsIndex(workspace)} queued=${this._queuedAnimWorkspaces.size}`);
             for (const w of tiledWindows) this._newWindowSet.delete(w);
             this._animStates = null;
@@ -743,6 +853,7 @@ export const placementMethods = {
     _getAnimationTime,
     _cancelAnimation,
     _deferNewWindowPlacement,
+    _revealHeldNewWindow,
     _checkWorkspaceLandings,
     _adjustPinnedTree,
     _verifyAnimationLanding,

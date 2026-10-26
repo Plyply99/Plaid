@@ -17,7 +17,7 @@ export function _retileWorkspace(workspace) {
 }
 
 export function _doRetileWorkspace(workspace) {
-    if (!this._settings) return;
+    if (!this._settings || this._shuttingDown) return;
     if (!this._settings.get_boolean('enabled')) {
         return;
     }
