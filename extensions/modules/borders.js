@@ -155,6 +155,10 @@ export function _ensureWindowBorder(win, actor, frame, isFocused) {
 
 export function _applyDropdownEffects(win) {
     if (!this._settings || !win) return;
+    // The DDT is held hidden until it has been moved to the drop rect.
+    // Attaching blur/border at the centered spawn geometry paints a visible
+    // clone there even though the terminal actor itself is hidden.
+    if (win === this._dropdownWin && !win._plaidDdtRevealed) return;
     const actor = win.get_compositor_private();
     if (!actor) return;
     const frame = win.get_frame_rect();

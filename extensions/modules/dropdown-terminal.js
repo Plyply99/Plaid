@@ -122,10 +122,13 @@ export function _tryClaimDropdown(win) {
     }
     this._removeBlur(win);
     this._removeBorder(win);
-    // Reveal the window: the spawn choreography may have hidden it
-    // (actor.visible=false + pending-warp mask opacity), and the 2.5s
-    // backstop timer must not force-reveal it later on a wrong
-    // workspace. Clear both here.
+    win._plaidDdtRevealed = false;
+    // Keep the spawn-map geometry off-screen until the terminal has been
+    // moved. GNOME maps the new window centered at its default 800x600;
+    // revealing it here showed that centered frame until the asynchronous
+    // Wayland move landed. The position loop (or the backstop below)
+    // reveals it once it is at the drop rect. Clear the spawn-choreography
+    // timers/state here so they cannot fight that later reveal.
     if (win._plaidInvisibleTimer) {
         GLib.source_remove(win._plaidInvisibleTimer);
         win._plaidInvisibleTimer = 0;
@@ -135,8 +138,8 @@ export function _tryClaimDropdown(win) {
     try {
         const a = win.get_compositor_private();
         if (a) {
-            a.visible = true;
-            a.set_opacity(255);
+            a.visible = false;
+            a.set_opacity(0);
         }
     } catch (_e) {}
     this._dropdownWin = win;
@@ -154,6 +157,14 @@ export function _tryClaimDropdown(win) {
     });
     this._configureDropdownTerminal(win);
     this._showDropdownTerminal(win);
+    // Reveal backstop: `move_resize_frame` is asynchronous, and a client
+    // that never reports the exact target must not leave the terminal
+    // invisible after the 20-try position loop gives up.
+    this._addTimeout(400, () => {
+        if (!this._settings || this._dropdownWin !== win) return GLib.SOURCE_REMOVE;
+        this._revealDropdownWindow(win);
+        return GLib.SOURCE_REMOVE;
+    });
     this._debugLog(`dropdown: claimed ${win.get_wm_class_instance() || win.get_wm_class() || ''}`);
     return true;
 }
@@ -186,6 +197,30 @@ export function _configureDropdownTerminal(win) {
     try { win.stick(); } catch (_e) {}
 }
 
+export function _revealDropdownWindow(win) {
+    if (!this._settings || !win) return;
+    win._plaidDdtRevealed = true;
+    // The spawn choreography may have left the actor hidden and/or the
+    // corner mask's opacity uniform at 0. Restore both together: the mask
+    // multiplies the whole output in the shader, so actor opacity alone
+    // still paints nothing.
+    try {
+        const a = win.get_compositor_private();
+        if (a) {
+            a.visible = true;
+            a.set_opacity(255);
+        }
+    } catch (_e) {}
+    try {
+        const effect = this._windowMasks && this._windowMasks.get(win);
+        if (effect && effect.setOpacityUniform)
+            effect.setOpacityUniform(1);
+    } catch (_e) {}
+    // Now that the window is at the drop rect, attaching Flair (blur
+    // sibling, border, mask) paints it at the correct geometry.
+    this._applyDropdownEffects(win);
+}
+
 export function _showDropdownTerminal(win) {
     try { win.unminimize(); } catch (_e) {}
     try { win.make_above(); } catch (_e) {}
@@ -194,7 +229,6 @@ export function _showDropdownTerminal(win) {
     try { if (!win.is_on_all_workspaces()) win.stick(); } catch (_e) {}
     this._positionDropdownTerminal(win);
     try { win.activate(this._currentTime()); } catch (_e) {}
-    this._applyDropdownEffects(win);
 }
 
 export function _syncDropdownWorkspace() {
@@ -262,7 +296,7 @@ export function _positionDropdownTerminal(win) {
             before.width === rect.width && before.height === rect.height) {
             // Already at the target — skip the redundant move_resize (this
             // used to fire on every workspace switch).
-            this._applyDropdownEffects(win);
+            this._revealDropdownWindow(win);
             return false;
         }
         this._debugLog(`dropdown: position target=(${rect.x},${rect.y},${rect.width},${rect.height}) before=(${before.x},${before.y},${before.width},${before.height}) try=${retries}`);
@@ -274,13 +308,13 @@ export function _positionDropdownTerminal(win) {
             frame.width === rect.width && frame.height === rect.height;
         if (done) {
             this._debugLog(`dropdown: position settled at (${frame.x},${frame.y},${frame.width},${frame.height})`);
-            this._applyDropdownEffects(win);
+            this._revealDropdownWindow(win);
             return false;
         }
         retries++;
         if (retries >= 20) {
             this._debugLog(`dropdown: position gave up after ${retries} tries, frame=(${frame.x},${frame.y},${frame.width},${frame.height})`);
-            this._applyDropdownEffects(win);
+            this._revealDropdownWindow(win);
             return false;
         }
         return true;
@@ -322,6 +356,20 @@ export function _clearDropdownWindow() {
     try { win.skip_taskbar = false; } catch (_e) {}
     try { win.unmake_above(); } catch (_e) {}
     try { win.unstick(); } catch (_e) {}
+    // If the terminal was still held hidden (disabled before the position
+    // loop revealed it), never leave it invisible after teardown.
+    try {
+        const a = win.get_compositor_private();
+        if (a) {
+            a.visible = true;
+            a.set_opacity(255);
+            a.remove_all_transitions();
+        }
+        const effect = this._windowMasks && this._windowMasks.get(win);
+        if (effect && effect.setOpacityUniform)
+            effect.setOpacityUniform(1);
+    } catch (_e) {}
+    win._plaidDdtRevealed = false;
     this._dropdownWin = null;
 }
 
@@ -333,6 +381,7 @@ export const dropdownMethods = {
     _recheckDropdownWaiters,
     _clearDropdownWaiters,
     _configureDropdownTerminal,
+    _revealDropdownWindow,
     _showDropdownTerminal,
     _syncDropdownWorkspace,
     _scheduleDropdownWorkspaceSync,
