@@ -274,7 +274,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
         });
 
         drawing.tooltip_text = caption;
-        try { drawing.set_cursor_from_name('pointer'); } catch (_e) {}
+        drawing.set_cursor_from_name('pointer');
         const gesture = new Gtk.GestureClick();
         gesture.connect('pressed', () => onSelect());
         drawing.add_controller(gesture);
@@ -803,14 +803,14 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             if (!accel) return;
             settings.set_strv(key, [accel]);
             label.label = accel;
-            onChange?.();
+            if (onChange) onChange();
             dialog.close();
         };
 
         const clearShortcut = () => {
             settings.set_strv(key, []);
             label.label = _('Disabled');
-            onChange?.();
+            if (onChange) onChange();
             dialog.close();
         };
 

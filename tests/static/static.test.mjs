@@ -78,12 +78,12 @@ test('prefs.js is present and non-empty', () => {
 
 test('every relative ./modules/*.js import resolves on disk', () => {
   const importRe = /from\s+['"](\.[^'"]+\.js)['"]/g;
-  const specs = new Set();
-  for (const src of [extensionJs, prefsJs])
-    for (const m of src.matchAll(importRe)) specs.add(m[1]);
-  for (const spec of specs) {
-    const p = join(ext, spec.replace(/^\.\//, ''));
-    assert.ok(existsSync(p), `import "${spec}" does not resolve to ${p}`);
+  for (const file of [join(ext, 'extension.js'), join(ext, 'prefs.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8');
+    for (const m of src.matchAll(importRe)) {
+      const p = join(dirname(file), m[1]);
+      assert.ok(existsSync(p), `import "${m[1]}" in ${file} does not resolve to ${p}`);
+    }
   }
 });
 
@@ -96,4 +96,46 @@ test('build.sh packs the modules directory', () => {
 test('sync.sh syncs the modules directory', () => {
   const sync = readFileSync(join(root, 'sync.sh'), 'utf8');
   assert.ok(sync.includes('$SOURCE/modules'), 'sync.sh must copy extensions/modules');
+});
+
+test('entry point stays small and free of lifecycle wrappers', () => {
+  const lines = extensionJs.split('\n');
+  assert.ok(lines.length <= 100, `extension.js is ${lines.length} lines; keep the default entry point small`);
+
+  const code = extensionJs
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+
+  assert.ok(!code.includes('_disable'), 'the entry point must not keep a _disable() alias');
+  assert.ok(!/\btry\s*\{/.test(code), 'the entry point must not wrap enable()/disable() in try/catch');
+  assert.ok(!/\bcatch\s*\(/.test(code), 'the entry point must not catch errors');
+  assert.ok(!code.includes('Object.assign'), 'prototype augmentation belongs in bootstrap.js');
+
+  const enable = code.indexOf('enable()');
+  const disable = code.indexOf('disable()');
+  assert.ok(enable >= 0 && disable > enable, 'enable() and disable() must both be present');
+
+  const between = code.slice(enable, disable);
+  assert.ok(between.includes('enablePlaid.call(this)'), 'enable() must delegate to lifecycle.js');
+  assert.ok(code.slice(disable).includes('disablePlaid.call(this)'), 'disable() must delegate to lifecycle.js');
+});
+
+test('every GLib source is tracked or owned by a cleaned-up field', () => {
+  const files = [join(ext, 'extension.js'), ...moduleFiles];
+  const missed = [];
+
+  for (const file of files) {
+    const src = readFileSync(file, 'utf8');
+    for (const [index, line] of src.split('\n').entries()) {
+      if (!/GLib\.(timeout_add|idle_add|timeout_add_seconds)\s*\(/.test(line)) continue;
+      if (file.endsWith(join('modules', 'signals.js'))) continue; // the tracker helpers
+
+      const wrapped = /this\._add(?:Timeout|Idle)\s*\(/.test(line);
+      const assigned = /(?:^|\s)(?:const\s+)?[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*=\s*GLib\.(?:timeout_add|idle_add|timeout_add_seconds)\s*\(/.test(line);
+      if (!wrapped && !assigned)
+        missed.push(`${file}:${index + 1}: ${line.trim()}`);
+    }
+  }
+
+  assert.deepEqual(missed, [], `untracked GLib sources:\n${missed.join('\n')}`);
 });

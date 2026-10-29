@@ -18,7 +18,7 @@ export function _initPointerFocus() {
 }
 
 export function _syncPointerFocus() {
-    const enabled = this._settings?.get_boolean('pointer-focus') ?? false;
+    const enabled = this._settings.get_boolean('pointer-focus');
     if (!enabled) {
         this._teardownPointerFocus();
         return;

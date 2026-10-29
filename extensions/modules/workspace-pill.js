@@ -56,6 +56,9 @@ export function _initWorkspacePill() {
     } catch (e) {
         log(`[plaid] workspace pill init failed: ${e.message}`);
         this._workspacePill = null;
+        this._workspacePillNumbers = null;
+        this._workspacePillIcon = null;
+        this._workspacePillTitle = null;
     }
 }
 
@@ -63,10 +66,10 @@ export function _scheduleWorkspacePillUpdate() {
     // Never churn actors synchronously inside a signal — the compositor is
     // mid-cycle (stacking/redraw) and a destroy/create there can segfault.
     // Coalesce the update onto the idle loop instead.
-    if (!this._settings || this._workspacePillUpdateId) return;
+    if (!this._settings || this._shuttingDown || this._workspacePillUpdateId) return;
     this._workspacePillUpdateId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
         this._workspacePillUpdateId = 0;
-        if (!this._settings) return GLib.SOURCE_REMOVE;
+        if (!this._settings || this._shuttingDown) return GLib.SOURCE_REMOVE;
         this._updateWorkspacePill();
         return GLib.SOURCE_REMOVE;
     });
@@ -74,7 +77,10 @@ export function _scheduleWorkspacePillUpdate() {
 
 export function _updateWorkspacePill() {
     const pill = this._workspacePill;
-    if (!pill) return;
+    const numbers = this._workspacePillNumbers;
+    const icon = this._workspacePillIcon;
+    const titleActor = this._workspacePillTitle;
+    if (!pill || !numbers || !icon || !titleActor || this._shuttingDown) return;
     try {
         if (Main.sessionMode.isLocked) return;
         const wm = global.workspace_manager;
@@ -97,19 +103,19 @@ export function _updateWorkspacePill() {
         // The icon lives in the numbers row at the active slot. Remove it
         // first so the rebuild can place it at the correct position —
         // add_child on an already-parented actor is a no-op (no reorder).
-        if (this._workspacePillIcon.get_parent() === this._workspacePillNumbers)
-            this._workspacePillNumbers.remove_child(this._workspacePillIcon);
+        if (icon.get_parent() === numbers)
+            numbers.remove_child(icon);
         // Never destroy the shared icon: destroying it would leave a
         // dangling reference that the next add_child would crash on.
         // Destroy only the label children.
-        for (const child of this._workspacePillNumbers.get_children()) {
-            if (child !== this._workspacePillIcon)
+        for (const child of numbers.get_children()) {
+            if (child !== icon)
                 child.destroy();
         }
         for (let i = 0; i < n; i++) {
             if (i === parkingIdx) continue;
             if (i === active && showFocus) {
-                this._workspacePillNumbers.add_child(this._workspacePillIcon);
+                numbers.add_child(icon);
             } else {
                 const label = new St.Label({
                     text: String(this._bgAppRealToDisplay(i) + 1),
@@ -118,20 +124,19 @@ export function _updateWorkspacePill() {
                 });
                 if (i === active)
                     label.add_style_pseudo_class('active');
-                this._workspacePillNumbers.add_child(label);
+                numbers.add_child(label);
             }
         }
 
         if (showFocus) {
             const app = Shell.WindowTracker.get_default().get_window_app(focused);
-            if (app) {
-                try { this._workspacePillIcon.set_gicon(app.get_icon()); } catch (_e) {}
-            }
+            if (app)
+                icon.set_gicon(app.get_icon());
             let title = focused.get_title() || '';
             if (title.length > 60)
                 title = title.slice(0, 60) + '…';
-            this._workspacePillTitle.set_text(title);
-            this._workspacePillTitle.visible = true;
+            titleActor.set_text(title);
+            titleActor.visible = true;
             this._workspacePillFocusedWin = focused;
             this._workspacePillTitleId =
                 focused.connect('notify::title', () => this._scheduleWorkspacePillUpdate());
@@ -143,8 +148,8 @@ export function _updateWorkspacePill() {
                 this._workspacePillUnmanagedId = 0;
             });
         } else {
-            this._workspacePillTitle.set_text('');
-            this._workspacePillTitle.visible = false;
+            titleActor.set_text('');
+            titleActor.visible = false;
         }
     } catch (e) {
         log(`[plaid] workspace pill update failed: ${e.message}`);
@@ -160,6 +165,9 @@ export function _restoreWorkspacePill() {
         this._workspacePill.destroy();
         this._workspacePill = null;
     }
+    this._workspacePillNumbers = null;
+    this._workspacePillIcon = null;
+    this._workspacePillTitle = null;
     if (this._workspacePillFocusedWin) {
         const win = this._workspacePillFocusedWin;
         const titleId = this._workspacePillTitleId;
@@ -171,10 +179,8 @@ export function _restoreWorkspacePill() {
         win.disconnect(unmanagedId);
     }
     if (this._workspacePillIndicators) {
-        try {
-            const activities = Main.panel.statusArea.activities;
-            if (activities) activities.add_child(this._workspacePillIndicators);
-        } catch (_e) {}
+        const activities = Main.panel.statusArea.activities;
+        if (activities) activities.add_child(this._workspacePillIndicators);
         this._workspacePillIndicators = null;
     }
 }

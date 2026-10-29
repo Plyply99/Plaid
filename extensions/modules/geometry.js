@@ -55,7 +55,21 @@ export function _bgAppRealToDisplay(realIdx) {
     return parkingIdx >= 0 && realIdx > parkingIdx ? realIdx - 1 : realIdx;
 }
 
+export function _wsIndex(ws) {
+    if (!ws) return -1;
+    // Scan for identity instead of calling ws.index(): during shell teardown
+    // the workspace object can already be disposed, and Mutter asserts on
+    // meta_workspace_index() for it.
+    const wm = global.workspace_manager;
+    for (let i = 0; i < wm.get_n_workspaces(); i++) {
+        if (wm.get_workspace_by_index(i) === ws) return i;
+    }
+    return -1;
+}
+
 export const geometryMethods = {
+    _wsIndex,
+
     _isValidWorkArea,
     _outsideArea,
     _singleWindowRect,

@@ -479,8 +479,8 @@ export function _verifyAnimationLanding(s, kind, pure = false) {
                             this._debugLog(`diag: tree=${JSON.stringify(tree)} min=${min.w}x${min.h}`);
                     }
                 } catch (_e) {}
-                const prev = this._mismatchFrames?.get(win);
-                this._mismatchFrames?.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+                const prev = this._mismatchFrames.get(win);
+                this._mismatchFrames.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
                 const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
                 // A settling client can re-apply its remembered geometry
                 // after placement (XWayland Emacs: 1936x1185). That is not a
@@ -559,9 +559,9 @@ export function _recordObservedMin(win, frame, target) {
 export function _releaseMinLimitedWindow(win) {
     if (!this._minLimitedWindows || !win) return;
     this._minLimitedWindows.delete(win);
-    this._landingGivenUp?.delete(win);
-    this._landingRetries?.delete(win);
-    this._mismatchFrames?.delete(win);
+    this._landingGivenUp.delete(win);
+    this._landingRetries.delete(win);
+    this._mismatchFrames.delete(win);
 }
 
 export function _releaseMinLimitedWindows() {
@@ -588,7 +588,7 @@ export function _retryLanding(win) {
         // Auto-float (tracked apart from the user's float toggle) so the
         // tiler stops fighting its minimum; released on the next layout
         // change (or float toggle) so it can rejoin once a slot fits.
-        this._minLimitedWindows?.add(win);
+        this._minLimitedWindows.add(win);
         // The window is floating now — clear the pending-warp state so a
         // masked window is never left invisible: _landingGivenUp makes
         // every future _verifyAnimationLanding return false, so the

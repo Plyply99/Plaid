@@ -262,9 +262,8 @@ export function _startBorderAnimation() {
         // Rotation follows border-animation-speed alone (see _repaintBorder).
         const period = this._borderRotationMs(this._settings.get_int('border-animation-speed'));
         const theta = period > 0 ? ((Date.now() / period) % 1) * Math.PI * 2 : 0;
-        for (const effect of this._windowMasks.values()) {
-            try { effect.setTheta(theta); } catch (_e) {}
-        }
+        for (const effect of this._windowMasks.values())
+            effect.setTheta(theta);
         for (const border of this._windowBorders.values()) {
             // St.DrawingArea only runs the cairo handler on ITS queue_repaint
             // (Clutter's queue_redraw repaints the cached texture), so the gradient
@@ -385,7 +384,148 @@ export function _removeBorder(win) {
 }
 
 
+export function _updateBorders() {
+    if (!this._settings) return;
+    this._scheduleBorders();
+}
+
+export function _doUpdateBorders() {
+    if (!this._settings) return;
+
+    // Flair (borders, rounded corners, blur) renders from its own
+    // settings and stays even when tiling is toggled off.
+
+    const focusWindow = global.display.focus_window;
+
+    const borderRadius = this._settings.get_int('border-radius');
+    const roundedCorners = this._settings.get_boolean('rounded-corners');
+    const bordersEnabled = this._settings.get_boolean('borders-enabled');
+    const blurEnabled = this._settings.get_boolean('window-blur');
+
+    // Only sweep ALL borders when the feature turned off — otherwise
+    // _ensureWindowBorder's per-window signature gate skips unchanged
+    // windows (destroy/recreate churn on every focus change is the
+    // biggest steady-state cost under hover-focus).
+    if (!bordersEnabled)
+        this._removeAllBorders();
+
+    const ws = global.workspace_manager.get_active_workspace();
+    if (!ws) return;
+
+    const windows = this._getWindowsForWorkspace(ws);
+    for (const win of windows) {
+        if (win.is_fullscreen()) {
+            this._removeMask(win);
+            this._removeBlur(win);
+            this._removeBorder(win);
+            continue;
+        }
+        // The grab skip must compare against the GRABBED window — the focus
+        // window can differ mid-grab (hover-focus during a drag), and
+        // the grabbed-but-unfocused window then got stale mask uniforms
+        // for the whole grab.
+        if (this._grabOp && this._grabWindow && win === this._grabWindow) continue;
+        const actor = win.get_compositor_private();
+        if (!actor) continue;
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) continue;
+
+        if (blurEnabled && !(this._pendingWarp && this._pendingWarp.has(win)))
+            this._ensureWindowBlur(win, actor);
+
+        const isFocused = win === focusWindow;
+        const scratch = !!(this._scratchpadWindows && this._scratchpadWindows.has(win));
+
+        if (roundedCorners && borderRadius > 0) {
+            // Stale-widget purge FIRST (was after the mask): updateMask
+            // zeroes the SDF border while a widget still exists, so the
+            // old order left a borderless gap between the mask pass and
+            // the purge — now the widget is gone before the mask draws.
+            // Mask-only WINDOWS (not floats) must not keep a widget
+            // border from an earlier floating state — this path never
+            // re-creates or updates it, so it freezes stale (double
+            // border at the old geometry) until a full rebuild.
+            // FLOATS are excluded: their widget border is LIVE (made
+            // by the floating flair loop) — purging it every pass
+            // churned widgets + logged unconditionally, and
+            // _removeBorder → _removeMask cleared the mask quarantine
+            // — re-opening the empty-capture hole the self-heal
+            // exists to prevent for registered-then-floated X11
+            // windows. Border-only teardown: keep the mask alive.
+            if (!scratch && !this._isFloating(win) && this._windowBorders.has(win)) {
+                this._debugLog(`border: removed stale widget border on mask-only window ${win.get_wm_class_instance() || '?'}`);
+                this._windowBorders.get(win).destroy();
+                this._windowBorders.delete(win);
+                if (this._scratchpadRings) {
+                    const ring = this._scratchpadRings.get(win);
+                    if (ring) {
+                        ring.destroy();
+                        this._scratchpadRings.delete(win);
+                    }
+                }
+            }
+            // Widget before mask (same ordering rule as the floating
+            // loop) for the scratch fall-through.
+            if (scratch && bordersEnabled)
+                this._ensureWindowBorder(win, actor, frame, isFocused);
+            this._ensureWindowMask(win, actor, borderRadius + 1);
+            // Scratch windows fall through to their special border even
+            // with rounded corners (normal windows stay mask-only).
+            if (!scratch)
+                continue;
+        }
+
+        if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
+    }
+
+    // Floating windows are not in _windowWSIndices (they skip _addWindow),
+    // so the tiled loop above misses them. Apply Flair directly.
+    for (const win of ws.list_windows()) {
+        if (win.get_window_type() !== Meta.WindowType.NORMAL) continue;
+        if (!this._isFloating(win)) continue;
+        // The tiled fullscreen branch drops border+mask+blur; the float branch
+        // missed the WIDGET border (and scratch ring) — a floating
+        // window entering fullscreen kept its colored frame + ring
+        // rendered on top of the fullscreen content (X11 floats; the
+        // mask is gone there so the widget is unclipped).
+        if (win.is_fullscreen()) { this._removeMask(win); this._removeBlur(win); this._removeBorder(win); continue; }
+        const actor = win.get_compositor_private();
+        if (!actor) continue;
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) continue;
+        if (blurEnabled) this._ensureWindowBlur(win, actor);
+        const isFocused = win === focusWindow;
+        // Order matters: create the WIDGET border before the mask —
+        // _updateMaskBounds zeroes the SDF border when a renderable
+        // widget exists, so creating the widget first avoids a
+        // first-pass (or transition-pass) transient double border.
+        if (bordersEnabled) this._ensureWindowBorder(win, actor, frame, isFocused);
+        if (roundedCorners && borderRadius > 0)
+            this._ensureWindowMask(win, actor, borderRadius + 1);
+    }
+
+    // The border animation is armed by _syncBorderAnimation() below with the
+    // full condition (gradient + speed + live borders/masks). A standalone
+    // start here (without the maps check) armed the tick on every pass
+    // even with empty maps — start log → sync stops it → next pass:
+    // a per-pass `border animation: start` log pair.
+
+    if (!roundedCorners || borderRadius <= 0)
+        this._removeAllMasks();
+
+    if (!blurEnabled)
+        this._removeAllBlurs();
+
+    if (this._dropdownWin)
+        this._applyDropdownEffects(this._dropdownWin);
+
+    this._syncBorderAnimation();
+}
+
 export const borderWidgetMethods = {
+    _updateBorders,
+    _doUpdateBorders,
+
     _ensureWindowBorder,
     _applyDropdownEffects,
     _repaintBorder,

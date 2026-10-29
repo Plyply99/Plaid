@@ -59,8 +59,8 @@ Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki).
 - **Float rules**: Per-app and per-title floating.
 
 
-- **DDT Plaid Drop Down Terminal**: Toggle a terminal (configurable command, default
-  ghostty) that drops from the top of the work area at a configurable height,
+- **DDT Plaid Drop Down Terminal**: Toggle a terminal (configurable command; empty on
+  a fresh install) that drops from the top of the work area at a configurable height,
   with full Flair and live height updates.
 
 
@@ -118,11 +118,16 @@ Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki).
 
 ## Install
 
+Install from [extensions.gnome.org](https://extensions.gnome.org/), or download the
+latest `plaid@plyply99.zip` from the [Releases page](https://github.com/Plyply99/Plaid/releases)
+and run:
+
 ```bash
 gnome-extensions install plaid@plyply99.zip
 ```
 
-While running, Plaid disables Gnome edge-tiling and maximize keybindings (restored when disabled).
+Log out and back in after installing. Plaid requires a Wayland session on GNOME Shell 50 or 51.
+Plaid never changes GNOME's keybindings or edge-tiling settings.
 
 ## Window blur
 

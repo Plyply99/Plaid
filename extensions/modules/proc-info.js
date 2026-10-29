@@ -10,13 +10,7 @@ import Gio from 'gi://Gio';
 const CACHE_LIMIT = 256;
 
 export function readProcFile(path, callback) {
-    let file = null;
-    try {
-        file = Gio.File.new_for_path(path);
-    } catch (_e) {
-        callback(null);
-        return;
-    }
+    const file = Gio.File.new_for_path(path);
     file.load_contents_async(null, (f, res) => {
         let data = null;
         try {

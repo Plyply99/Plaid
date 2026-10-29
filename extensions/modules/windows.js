@@ -15,10 +15,8 @@ export function _shouldManage(win) {
     // reliably survive a lock cycle). The PLAID_BGAPP env marker on the
     // process identifies it precisely — never the class/token, so user
     // windows of the same app (ghostty) are never excluded.
-    try {
-        if (this._isBgAppProcessWindow(win))
-            return false;
-    } catch (_e) {}
+    if (this._isBgAppProcessWindow(win))
+        return false;
     const title = win.get_title();
     if (win.get_window_type() !== Meta.WindowType.NORMAL) return false;
     if (win.is_skip_taskbar()) return false;
@@ -268,7 +266,7 @@ export function _addWindow(win, resume = false) {
     // strays) to the real workspace BEFORE the new-window hide/place logic
     // builds tree state for the parking slot.
     if (this._backgroundAppParkingWs && win.get_workspace() === this._backgroundAppParkingWs) {
-        try { this._evacuateParkingWorkspace(); } catch (_e) {}
+        this._evacuateParkingWorkspace();
     }
     // Lock-cycle resumes register windows that are already on screen and
     // tiled — the new-window fade-in (opacity 0 → landing check → fade
@@ -283,7 +281,7 @@ export function _addWindow(win, resume = false) {
     const tilingEnabled = this._settings.get_boolean('enabled');
     if (!resume && tilingEnabled) {
         this._newWindowSet.add(win);
-        try { this._markPendingWindowInvisible(win, win.get_compositor_private()); } catch (_e) {}
+        this._markPendingWindowInvisible(win, win.get_compositor_private());
     }
     const ws = win.get_workspace();
     this._windowWorkspaces.set(win, ws);
@@ -360,8 +358,8 @@ export function _removeWindow(win) {
     this._windowWorkspaces.delete(win);
     this._windowWSIndices.delete(win);
     this._toggleFloatWindows.delete(win);
-    this._observedMinSizes?.delete(win);
-    this._minLimitedWindows?.delete(win);
+    this._observedMinSizes.delete(win);
+    this._minLimitedWindows.delete(win);
     win._plaidFloatAnim = false;
     // Prune the landing/choreography maps so dead windows (and the
     // actors they hold) don't linger until disable.
@@ -525,13 +523,13 @@ export function _connectFloatHooks(win) {
         // widget, an effect, and map entries for the session (and the
         // stale border map keeps the gradient animation tick alive with
         // no live windows).
-        try { this._removeBorder(win); } catch (_e) {} // border + ring + mask + quarantine
-        this._floatMaxRects?.delete(win);
-        this._gappedMaxSet?.delete(win);
-        this._maximizeToggleRects?.delete(win);
-        this._scratchpadWindows?.delete(win);
-        this._toggleFloatWindows?.delete(win);
-        this._savedRects?.delete(win);
+        this._removeBorder(win); // border + ring + mask + quarantine
+        this._floatMaxRects.delete(win);
+        this._gappedMaxSet.delete(win);
+        this._maximizeToggleRects.delete(win);
+        this._scratchpadWindows.delete(win);
+        this._toggleFloatWindows.delete(win);
+        this._savedRects.delete(win);
     }));
     this._floatHooks.set(win, ids);
 }
@@ -558,125 +556,456 @@ export function _getWindowsForWorkspace(workspace) {
 }
 
 export function _reassertFloatingTransients() {
-    try {
-        if (!this._settings || !this._settings.get_boolean('enabled'))
-            return false;
-        let moved = false;
-        const index = (w) => {
-            const a = w.get_compositor_private();
-            // get_child_index() does not exist on Clutter.Actor in
-            // GNOME 50/51 — the helper threw on every call (swallowed
-            // by the outer catch) and this whole routine was dead.
-            // get_children() returns a fresh array, so indexOf tracks
-            // live order — required because raises inside this routine
-            // mutate the child order (a prebuilt map would go stale).
-            return a && a.get_parent() === global.window_group
-                ? global.window_group.get_children().indexOf(a) : -1;
-        };
-        // ACTIVE WORKSPACE ONLY: raising/reordering windows on inactive
-        // (hidden) workspaces mutates window_group child order →
-        // ::children-changed → a full stage queue_redraw → every
-        // offscreen mask/blur re-renders — a visible flash on the
-        // workspace being switched TO, even though the reordered actors
-        // are on the leaving workspace (the "unfocused float → redraw
-        // jank" case: an unfocused float sits below the top tile, so
-        // every switch re-raised it and repainted the whole stage).
-        // Inactive-workspace floats are re-asserted when their
-        // workspace activates (ws-changed + restacked + the 50ms
-        // settle poll), so scoping to the active workspace loses
-        // nothing.
-        const activeWs = global.workspace_manager.get_active_workspace();
-        if (activeWs) {
-            const order = activeWs.list_windows();
-            // The tiled stack = windows Plaid actually manages AND that
-            // are not floating. Everything else — float-listed windows,
-            // transients, and UNMANAGED windows (non-NORMAL types like
-            // Steam's "Update News" child that the tiler never claims)
-            // — is naturally floating and must be re-raised above the
-            // tiles on restacks/workspace changes. The old "not
-            // _isFloating" bucket lumped the unmanaged windows into the
-            // tiles, so they sank below them.
-            const tiled = order.filter(w => this._windowWorkspaces.has(w) && !this._isFloating(w));
-            // Floats: reposition each float's actor above the topmost
-            // tiled actor — pure compositor layering, no meta above state.
-            // Transients are included: a floating transient of a TILED
-            // parent (e.g. a floating Steam child window) would otherwise
-            // sink below the tiles on restacks/workspace changes (loop 2
-            // only covers transients of floating parents).
-            for (const win of order) {
-                if (tiled.includes(win) || win === this._backgroundAppWin) continue;
-                const a = win.get_compositor_private();
-                if (!a || a.get_parent() !== global.window_group) continue;
-                // Pre-stage raises even for HIDDEN floats (minimized DDT/scratch,
-                // a not-yet-committed XWayland window): reordering a
-                // hidden actor changes no pixels, and at ws-switch time
-                // we're inside mutter's switch animation (repaints are
-                // masked there) — so raising BEFORE the show is free,
-                // while raising AFTER it (the old `!a.visible` skip
-                // forced a post-show raise) caused a visible stage
-                // repaint — the "X11 float arrival flash". The float
-                // then shows already above the tiles: no pop, no
-                // correction repaint. The sibling-overlap risk this
-                // skip used to guard is owned by the visibility sync in
-                // _syncBlurStackingNow (a hidden source keeps its
-                // sibling hidden). The active-workspace-only scope above
-                // already excludes hidden floats on other workspaces.
-                let topTiledIdx = -1;
-                let topTiledActor = null;
-                for (const t of tiled) {
-                    const ti = index(t);
-                    if (ti > topTiledIdx) {
-                        topTiledIdx = ti;
-                        topTiledActor = t.get_compositor_private();
-                    }
-                }
-                if (topTiledActor && index(win) < topTiledIdx) {
-                    // win.raise() (mutter-native) instead of a Clutter
-                    // set_child_above_sibling: a Clutter reorder emits
-                    // ::children-changed → full-stage queue_redraw —
-                    // the whole screen re-renders (every blur/mask
-                    // offscreen re-captures) as an extra frame at a
-                    // quiet moment = the "switch arrival flash". A
-                    // mutter raise carries REGIONAL damage (smooth, like
-                    // a focus click) and — crucially — updates MUTTER'S
-                    // OWN internal z, so the reveal choreography can't
-                    // undo it (the Clutter-only reorder fought mutter's
-                    // z on every restack — the root of the float-sink
-                    // tug-of-war). raise() is one-shot, unlike
-                    // make_above (the persistent above-state that broke
-                    // Qt popups historically).
-                    win.raise();
-                    moved = true;
+
+    if (!this._settings || !this._settings.get_boolean('enabled'))
+        return false;
+    let moved = false;
+    const index = (w) => {
+        const a = w.get_compositor_private();
+        // get_child_index() does not exist on Clutter.Actor in
+        // GNOME 50/51 — the helper threw on every call (swallowed
+        // by the outer catch) and this whole routine was dead.
+        // get_children() returns a fresh array, so indexOf tracks
+        // live order — required because raises inside this routine
+        // mutate the child order (a prebuilt map would go stale).
+        return a && a.get_parent() === global.window_group
+            ? global.window_group.get_children().indexOf(a) : -1;
+    };
+    // ACTIVE WORKSPACE ONLY: raising/reordering windows on inactive
+    // (hidden) workspaces mutates window_group child order →
+    // ::children-changed → a full stage queue_redraw → every
+    // offscreen mask/blur re-renders — a visible flash on the
+    // workspace being switched TO, even though the reordered actors
+    // are on the leaving workspace (the "unfocused float → redraw
+    // jank" case: an unfocused float sits below the top tile, so
+    // every switch re-raised it and repainted the whole stage).
+    // Inactive-workspace floats are re-asserted when their
+    // workspace activates (ws-changed + restacked + the 50ms
+    // settle poll), so scoping to the active workspace loses
+    // nothing.
+    const activeWs = global.workspace_manager.get_active_workspace();
+    if (activeWs) {
+        const order = activeWs.list_windows();
+        // The tiled stack = windows Plaid actually manages AND that
+        // are not floating. Everything else — float-listed windows,
+        // transients, and UNMANAGED windows (non-NORMAL types like
+        // Steam's "Update News" child that the tiler never claims)
+        // — is naturally floating and must be re-raised above the
+        // tiles on restacks/workspace changes. The old "not
+        // _isFloating" bucket lumped the unmanaged windows into the
+        // tiles, so they sank below them.
+        const tiled = order.filter(w => this._windowWorkspaces.has(w) && !this._isFloating(w));
+        // Floats: reposition each float's actor above the topmost
+        // tiled actor — pure compositor layering, no meta above state.
+        // Transients are included: a floating transient of a TILED
+        // parent (e.g. a floating Steam child window) would otherwise
+        // sink below the tiles on restacks/workspace changes (loop 2
+        // only covers transients of floating parents).
+        for (const win of order) {
+            if (tiled.includes(win) || win === this._backgroundAppWin) continue;
+            const a = win.get_compositor_private();
+            if (!a || a.get_parent() !== global.window_group) continue;
+            // Pre-stage raises even for HIDDEN floats (minimized DDT/scratch,
+            // a not-yet-committed XWayland window): reordering a
+            // hidden actor changes no pixels, and at ws-switch time
+            // we're inside mutter's switch animation (repaints are
+            // masked there) — so raising BEFORE the show is free,
+            // while raising AFTER it (the old `!a.visible` skip
+            // forced a post-show raise) caused a visible stage
+            // repaint — the "X11 float arrival flash". The float
+            // then shows already above the tiles: no pop, no
+            // correction repaint. The sibling-overlap risk this
+            // skip used to guard is owned by the visibility sync in
+            // _syncBlurStackingNow (a hidden source keeps its
+            // sibling hidden). The active-workspace-only scope above
+            // already excludes hidden floats on other workspaces.
+            let topTiledIdx = -1;
+            let topTiledActor = null;
+            for (const t of tiled) {
+                const ti = index(t);
+                if (ti > topTiledIdx) {
+                    topTiledIdx = ti;
+                    topTiledActor = t.get_compositor_private();
                 }
             }
-            // Transients above their floating parents.
-            for (const win of order) {
-                const parent = win.get_transient_for();
-                if (!parent || !this._isFloating(parent)) continue;
-                const a = win.get_compositor_private();
-                const pa = parent.get_compositor_private();
-                if (!a || !pa || a.get_parent() !== global.window_group) continue;
-                // Same pre-stage + mutter-native rationale as loop 1: raise() puts
-                // the transient at the top of the stack (above its
-                // parent too) with regional damage and a persistent
-                // mutter z.
-                if (index(win) >= 0 && index(win) < index(parent)) {
-                    try {
-                        if (this._stackDiagnostics && !this._stackDiagnostics.has(win.get_id())) {
-                            this._stackDiagnostics.add(win.get_id());
-                            this._debugLog(`stack reassert: transient ${win.get_id()} re-positioned above ${parent.get_wm_class_instance() || '?'}`);
-                        }
-                    } catch (_e) {}
-                    win.raise();
-                    moved = true;
-                }
+            if (topTiledActor && index(win) < topTiledIdx) {
+                // win.raise() (mutter-native) instead of a Clutter
+                // set_child_above_sibling: a Clutter reorder emits
+                // ::children-changed → full-stage queue_redraw —
+                // the whole screen re-renders (every blur/mask
+                // offscreen re-captures) as an extra frame at a
+                // quiet moment = the "switch arrival flash". A
+                // mutter raise carries REGIONAL damage (smooth, like
+                // a focus click) and — crucially — updates MUTTER'S
+                // OWN internal z, so the reveal choreography can't
+                // undo it (the Clutter-only reorder fought mutter's
+                // z on every restack — the root of the float-sink
+                // tug-of-war). raise() is one-shot, unlike
+                // make_above (the persistent above-state that broke
+                // Qt popups historically).
+                win.raise();
+                moved = true;
             }
         }
-        return moved;
-    } catch (_e) {}
-    return false;
+        // Transients above their floating parents.
+        for (const win of order) {
+            const parent = win.get_transient_for();
+            if (!parent || !this._isFloating(parent)) continue;
+            const a = win.get_compositor_private();
+            const pa = parent.get_compositor_private();
+            if (!a || !pa || a.get_parent() !== global.window_group) continue;
+            // Same pre-stage + mutter-native rationale as loop 1: raise() puts
+            // the transient at the top of the stack (above its
+            // parent too) with regional damage and a persistent
+            // mutter z.
+            if (index(win) >= 0 && index(win) < index(parent)) {
+                if (this._stackDiagnostics && !this._stackDiagnostics.has(win.get_id())) {
+                    this._stackDiagnostics.add(win.get_id());
+                    this._debugLog(`stack reassert: transient ${win.get_id()} re-positioned above ${parent.get_wm_class_instance() || '?'}`);
+                }
+                win.raise();
+                moved = true;
+            }
+        }
+    }
+    return moved;
 }
+export function _moveWindow(win, x, y, w, h) {
+    if (!win || win.is_fullscreen()) return;
+    if (!win.get_workspace()) return;
+    const rect = win.get_frame_rect();
+    if (rect.width === 0 || rect.height === 0) return;
+    if (win.is_maximized()) {
+        try { win.unmaximize(); } catch (_e) {}
+    }
+    if (this._animTargets) {
+        this._animTargets.set(win, { x, y, w, h });
+        return;
+    }
+    try {
+        const actor = win.get_compositor_private();
+        if (actor) actor.remove_all_transitions();
+        win.move_resize_frame(true, x, y, w, h);
+    } catch (e) {
+        log(`[plaid] _moveWindow failed: ${e.message}`);
+    }
+}
+
+export function _convertMaximizedToGaps(win) {
+    if (!this._settings || !win) return;
+    if (!this._settings || !this._settings.get_boolean('enabled')) return;
+    if (this._dropdownWin === win) return;
+    if (win.is_fullscreen() || !win.is_maximized()) return;
+    if (this._isFloating(win)) {
+        this._handleFloatMaximize(win);
+        return;
+    }
+    const ws = win.get_workspace();
+    if (!ws) return;
+    let workArea = null;
+    try {
+        workArea = ws.get_work_area_for_monitor(win.get_monitor());
+    } catch (_e) {}
+    if (!workArea) return;
+    const rect = this._singleWindowRect(workArea);
+    if (!rect) return;
+    this._debugLog(`maximize: converting to gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
+    try { win.unmaximize(); } catch (_e) {}
+    this._moveWindow(win, rect.x, rect.y, rect.w, rect.h);
+}
+
+export function _handleFloatMaximize(win) {
+    if (this._gappedMaxSet.has(win)) {
+        const saved = this._floatMaxRects.get(win);
+        try { win.unmaximize(); } catch (_e) {}
+        if (saved && saved.w > 0) {
+            this._debugLog(`float maximize: restoring (${saved.x},${saved.y},${saved.w},${saved.h})`);
+            this._applyFloatRect(win, saved.x, saved.y, saved.w, saved.h, (success) => {
+                if (success) this._gappedMaxSet.delete(win);
+            });
+        } else {
+            this._gappedMaxSet.delete(win);
+        }
+        return;
+    }
+    if (!this._floatMaxRects.has(win)) {
+        this._debugLog('float maximize: no saved rect, leaving window normally maximized');
+        return;
+    }
+    const ws = win.get_workspace();
+    if (!ws) return;
+    let workArea = null;
+    try {
+        workArea = ws.get_work_area_for_monitor(win.get_monitor());
+    } catch (_e) {}
+    if (!workArea) return;
+    const rect = this._singleWindowRect(workArea);
+    if (!rect) return;
+    this._debugLog(`float maximize: gapped rect=(${rect.x},${rect.y},${rect.w},${rect.h})`);
+    this._gappedMaxSet.add(win);
+    this._applyFloatRect(win, rect.x, rect.y, rect.w, rect.h);
+}
+
+export function _applyFloatRect(win, x, y, w, h, onDone) {
+    let retries = 0;
+    const apply = () => {
+        if (!this._settings) return false;
+        if (!win.get_workspace()) return false;
+        try {
+            if (win.is_maximized()) win.unmaximize();
+        } catch (_e) {}
+        this._moveWindow(win, x, y, w, h);
+        const f = win.get_frame_rect();
+        if (f.x === x && f.y === y && f.width === w && f.height === h) {
+            if (onDone) { try { onDone(true); } catch (_e) {} }
+            return false;
+        }
+        retries++;
+        if (retries >= 15) {
+            if (onDone) { try { onDone(false); } catch (_e) {} }
+            return false;
+        }
+        return true;
+    };
+    const retry = () => {
+        if (!this._settings) return GLib.SOURCE_REMOVE;
+        return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
+    };
+    if (apply())
+        this._addTimeout(100, retry);
+}
+
+export function _trackFloatGeometry(win) {
+    if (!this._floatMaxRects || !win) return;
+    if (!this._isFloating(win) || win.is_maximized()) return;
+    if (this._gappedMaxSet.has(win)) return;
+    const f = win.get_frame_rect();
+    if (f.width > 0 && f.height > 0)
+        this._floatMaxRects.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+}
+
+export function _onWindowIdentityChanged(win) {
+    if (!this._settings || !win) return;
+    this._debugLog(`identity: ${this._winClassCandidates(win).join('/') || '?'} appId=${win.get_gtk_application_id() || '?'} ` +
+        `ws=${this._wsIndex(win.get_workspace())} managed=${this._windowWorkspaces.has(win)}`);
+    // Backstop for the Extensions app / prefs window: its wm-class and GTK
+    // app id can resolve AFTER the window was already added to the tiler.
+    // If it identifies as the Extensions app now, un-tile it and restore
+    // the layout so opening prefs never leaves the workspace rearranged.
+    if (this._isExtensionsAppWindow(win)) {
+        if (this._windowWorkspaces.has(win)) {
+            this._debugLog('extensions app: un-tiling settings window (late identity)');
+            const ws = win.get_workspace();
+            this._removeWindow(win);
+            if (ws) this._retileWorkspace(ws);
+        }
+        return;
+    }
+    if (!this._isFloating(win)) return;
+    const ws = win.get_workspace();
+    if (ws) {
+        const tree = this._bspGetTree(ws);
+        if (tree && this._bspCollectWindows(tree).includes(win)) {
+            this._bspTrees.set(ws, this._bspRemove(tree, win));
+            this._retileWorkspace(ws);
+        }
+    }
+    // The window may be in the maximized state from mutter's map-time
+    // auto-maximize (a pre-map full-area slot > 80% of the work area) —
+    // _restoreFloatNaturalRect refuses maximized windows, so undo the
+    // state first, then restore the spawn rect captured at _addWindow.
+    if (win.is_maximized()) {
+        try { win.unmaximize(); } catch (_e) {}
+    }
+    this._restoreFloatNaturalRect(win);
+    // Reveal: the window can be pending-hidden from the tiled
+    // choreography (actor.visible=false + mask uniform 0) when its
+    // identity resolved late to floating — nothing else reveals it, so
+    // it would sit invisible until the 2.5s safety timer. Reveal now.
+    // GUARD: a DELIBERATELY minimized window (the scratch layer, or the
+    // user's own minimize) must never be force-shown by an identity /
+    // title notify — GTK re-applies titles on state changes, so this
+    // reveal un-minimized scratch windows within milliseconds of the
+    // scratch-add's minimize (the "add does nothing" bug: hide →
+    // instant re-show → net zero on screen).
+    if (win.minimized) {
+        this._debugLog(`float reveal skipped (minimized): ${win.get_wm_class_instance() || '?'}`);
+        return;
+    }
+    this._debugLog(`float reveal: ${win.get_wm_class_instance() || '?'}`);
+    try {
+        if (this._pendingWarp) this._pendingWarp.delete(win);
+        const a = win.get_compositor_private();
+        if (a) {
+            a.visible = true;
+            a.set_opacity(255);
+        }
+        const effect = this._windowMasks && this._windowMasks.get(win);
+        if (effect && effect.setOpacityUniform)
+            effect.setOpacityUniform(1);
+    } catch (_e) {}
+}
+
+export function _restoreFloatNaturalRect(win) {
+    if (!this._savedRects || !this._savedRects.has(win)) return;
+    if (win.is_fullscreen() || win.is_maximized()) return;
+    const saved = this._savedRects.get(win);
+    if (!saved || saved.w === 0) return;
+    const frame = win.get_frame_rect();
+    if (frame.width === 0) return;
+    const ws = win.get_workspace();
+    if (!ws) return;
+    let workArea = null;
+    try {
+        workArea = ws.get_work_area_for_monitor(win.get_monitor());
+    } catch (_e) {}
+    if (!this._isValidWorkArea(workArea)) return;
+    if (frame.width < workArea.width - 20 || frame.height < workArea.height - 20) return;
+    this._debugLog(`float: restoring natural rect (${saved.x},${saved.y},${saved.w},${saved.h})`);
+    this._moveWindow(win, saved.x, saved.y, saved.w, saved.h);
+}
+
+export function _reapplyFloatRules() {
+    if (!this._settings) return;
+    for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+        const ws = global.workspace_manager.get_workspace_by_index(i);
+        for (const win of ws.list_windows()) {
+            if (this._isFloating(win)) {
+                this._restoreFloatNaturalRect(win);
+            }
+        }
+    }
+    this._updateBorders();
+}
+
+export function _capturePosition(win) {
+    if (!this._savedRects || this._savedRects.has(win)) return;
+    try {
+        const frame = win.get_frame_rect();
+        if (frame.width > 0 && frame.height > 0)
+            this._savedRects.set(win, { x: frame.x, y: frame.y, w: frame.width, h: frame.height });
+    } catch (_e) {}
+}
+
+export function _restoreSavedPositions() {
+    if (!this._savedRects) return;
+    for (const [win, rect] of this._savedRects) {
+        try {
+            if (!win.get_compositor_private() || win.is_fullscreen()) continue;
+            win.move_resize_frame(true, rect.x, rect.y, rect.w, rect.h);
+        } catch (_e) {}
+    }
+    this._savedRects.clear();
+}
+
+export function _repositionWindow(window, ws) {
+    if (!window || !ws || !this._settings) return;
+    if (this._getWorkspaceLayout(ws) === 'floating') return;
+    const [px, py] = global.get_pointer();
+    const tiled = this._getWindowsForWorkspace(ws).filter(w => !this._isFloating(w));
+    if (tiled.length <= 1) return;
+
+    const layout = this._getWorkspaceLayout(ws);
+    if (layout === 'dwindle') {
+        const targetLeaf = this._computeDwindleDropTarget(ws, px, py);
+        if (!targetLeaf || targetLeaf.type !== 'leaf') return;
+
+        const tree = this._bspGetTree(ws);
+        if (!tree) return;
+
+        // Preserve the split ratio at the drop target so the re-insert
+        // mirrors the previous proportions instead of resetting to the
+        // default dwindle-ratio.
+        let targetRatio = null;
+        const path = [];
+        this._bspFindPath(tree, targetLeaf.window, path);
+        for (let i = path.length - 1; i >= 0; i--) {
+            if (path[i].type === 'split' && path[i].ratio > 0 && path[i].ratio < 1) {
+                targetRatio = path[i].ratio;
+                break;
+            }
+        }
+
+        // Dropping the dragged window on its OWN leaf (or on a leaf the
+        // removal merges away) must leave the tree untouched: the old
+        // code removed the window and never re-inserted it, so the
+        // follow-up retile re-added it as the "newest" leaf — a silent
+        // arrangement reshuffle (and the reshuffled shape got persisted).
+        if (targetLeaf.window === window) {
+            this._bspTrees.set(ws, tree);
+            return;
+        }
+        let newTree = this._bspRemove(tree, window);
+        if (newTree.type === 'empty') newTree = null;
+        if (newTree && !this._bspFindLeaf(newTree, targetLeaf.window)) {
+            this._bspTrees.set(ws, tree);
+            return;
+        }
+        if (newTree) {
+            newTree = this._bspReplaceLeaf(newTree, targetLeaf, window, targetRatio);
+        }
+        this._bspTrees.set(ws, newTree);
+    } else {
+        const targetIdx = this._computeMasterStackDropTarget(ws, px, py);
+        if (targetIdx < 0) return;
+
+        const order = this._getWorkspaceOrder(ws);
+        // The drop target is expressed in TILED-only index space
+        // (master=0, stack=1..N-1) while the order interleaves
+        // toggle-floated windows — comparing/splicing across the two
+        // spaces placed the window at the wrong relative position
+        // whenever a float was interleaved. Map
+        // both sides to the tiled space, then back to the order.
+        const tiledIdx = tiled.indexOf(window);
+        if (tiledIdx === -1) return;
+        const currentIdx = order.indexOf(window);
+        if (currentIdx === -1 || tiledIdx === targetIdx) return;
+
+        order.splice(currentIdx, 1);
+        const adjustedTarget = targetIdx > tiledIdx ? targetIdx - 1 : targetIdx;
+        let insertIdx = order.length;
+        let tiledSeen = 0;
+        for (let i = 0; i < order.length; i++) {
+            const w = order[i];
+            if (this._isFloating(w) || w.minimized || w.is_skip_taskbar() ||
+                w.get_window_type() !== Meta.WindowType.NORMAL) continue;
+            if (tiledSeen === adjustedTarget) {
+                insertIdx = i;
+                break;
+            }
+            tiledSeen++;
+        }
+        order.splice(insertIdx, 0, window);
+        const tiledOnly = order.filter(w =>
+            !this._isFloating(w) &&
+            w.get_window_type() === Meta.WindowType.NORMAL &&
+            !w.is_skip_taskbar() &&
+            !w.minimized
+        );
+        if (layout === 'centered-master-stack')
+            this._retileCenteredMasterStack(ws, tiledOnly);
+        else
+            this._retileMasterStack(ws, tiledOnly);
+    }
+    // A drop-swap restructured the tree/order directly (not every path
+    // here goes through _doRetileWorkspace) — persist the new
+    // arrangement (debounced) so it survives a login.
+    this._scheduleSaveLayouts();
+}
+
 export const windowMethods = {
+    _moveWindow,
+    _convertMaximizedToGaps,
+    _handleFloatMaximize,
+    _applyFloatRect,
+    _trackFloatGeometry,
+    _onWindowIdentityChanged,
+    _restoreFloatNaturalRect,
+    _reapplyFloatRules,
+    _capturePosition,
+    _restoreSavedPositions,
+    _repositionWindow,
+
     _shouldManage,
     _moveCursorToWindow,
     _cursorWarpDeferred,

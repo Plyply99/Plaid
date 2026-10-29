@@ -84,20 +84,12 @@ export function _winClassCandidates(win) {
     // written for either shell version keep matching. The first entry is
     // the window's display class.
     const out = [];
-    try {
-        const inst = win.get_wm_class_instance();
-        if (inst) out.push(inst.toLowerCase());
-    } catch (_e) {}
-    try {
-        const cls = win.get_wm_class();
-        if (cls) out.push(cls.toLowerCase());
-    } catch (_e) {}
-    try {
-        if (win.get_gtk_application_id) {
-            const app = win.get_gtk_application_id();
-            if (app) out.push(app.toLowerCase());
-        }
-    } catch (_e) {}
+    const inst = win.get_wm_class_instance();
+    if (inst) out.push(inst.toLowerCase());
+    const cls = win.get_wm_class();
+    if (cls) out.push(cls.toLowerCase());
+    const app = win.get_gtk_application_id();
+    if (app) out.push(app.toLowerCase());
     return out;
 }
 
@@ -109,7 +101,20 @@ export function _floatClassMatches(win) {
     return false;
 }
 
+export function _debugLog(...args) {
+    if (!this._settings) return;
+    if (!this._settings.get_boolean('debug')) return;
+    log(`[plaid] ${args.join(' ')}`);
+}
+
+export function _currentTime() {
+    try { return global.get_current_time(); } catch (_e) { return 0; }
+}
+
 export const helperMethods = {
+    _debugLog,
+    _currentTime,
+
     _compileTitlePatterns,
     _floatingTitleMatches,
     _winClassCandidates,

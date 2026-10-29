@@ -28,8 +28,7 @@ export function collectOtherBindings(Gio, ownSchemaId) {
 
     // 1. Every FIXED schema — mutter, wm/media-keys keybindings, the shell, and
     //    other extensions that use a non-relocatable schema.
-    let schemaIds = [];
-    try { schemaIds = Gio.Settings.list_schemas(); } catch (_e) {}
+    const schemaIds = Gio.Settings.list_schemas();
     for (const schemaId of schemaIds) {
         if (schemaId === ownSchemaId) continue;
         let s;
@@ -52,20 +51,18 @@ export function collectOtherBindings(Gio, ownSchemaId) {
     // 2. GNOME custom shortcuts. These live in a RELOCATABLE schema instance,
     //    which list_schemas() never returns, and their `binding` key is type 's'
     //    (a single string) — both of which the loop above misses.
-    try {
-        const mk = new Gio.Settings({ schema_id: 'org.gnome.settings-daemon.plugins.media-keys' });
-        for (const path of mk.get_strv('custom-keybindings')) {
-            if (!path) continue;
-            let cs;
-            try { cs = new Gio.Settings({ schema_id: CUSTOM_SCHEMA, path }); } catch (_e) { continue; }
-            let combo = '';
-            let label = '';
-            try { combo = cs.get_string('binding'); } catch (_e) {}
-            try { label = cs.get_string('name'); } catch (_e) {}
-            if (combo)
-                out.push({ combo, schemaId: CUSTOM_SCHEMA, keyName: 'binding', path, type: 's', label });
-        }
-    } catch (_e) {}
+
+    const mk = new Gio.Settings({ schema_id: 'org.gnome.settings-daemon.plugins.media-keys' });
+    for (const path of mk.get_strv('custom-keybindings')) {
+        if (!path) continue;
+        let cs;
+        try { cs = new Gio.Settings({ schema_id: CUSTOM_SCHEMA, path }); } catch (_e) { continue; }
+        const combo = cs.get_string('binding');
+        const label = cs.get_string('name');
+        if (combo)
+            out.push({ combo, schemaId: CUSTOM_SCHEMA, keyName: 'binding', path, type: 's', label });
+    }
+
 
     return out;
 }
@@ -91,7 +88,7 @@ export function scanKeybindConflicts(Gio, ownSchemaId, combos) {
 // Built-in mutter actions match by action id; shell/extension bindings match
 // by the external binding name returned by mutter.
 export function resolveConflictFeedback(actionId, name, byActionId, byName) {
-    const hit = byActionId?.get(actionId);
+    const hit = byActionId ? byActionId.get(actionId) : null;
     if (hit) return hit;
     if (name && byName) return byName.get(name) || null;
     return null;

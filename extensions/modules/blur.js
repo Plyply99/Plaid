@@ -17,7 +17,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 // Snippet hook used by the corner SDF; the shell provides it at runtime.
-const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook?.FRAGMENT;
+const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook.FRAGMENT;
 
 const BLUR_EFFECT_NAME = 'plaid-window-blur';
 
@@ -84,7 +84,7 @@ const BLUR_SNIPPET_CODE = `
 // Separable Gaussian blur, from mutter's clutter-blur.c. It must use the
 // TEXTURE_LOOKUP hook — that hook is where cogl_sampler is declared; the
 // FRAGMENT hook fails to compile.
-const BLUR_LOOKUP_HOOK = Cogl.SnippetHook?.TEXTURE_LOOKUP;
+const BLUR_LOOKUP_HOOK = Cogl.SnippetHook.TEXTURE_LOOKUP;
 
 const BLUR_KERNEL_DECLARATIONS = `
 uniform float sigma;
@@ -769,7 +769,7 @@ export function _syncBlurStackingNow(recheck = false) {
             if (!blur._reAttachPending) {
                 this._debugLog(`blur: ${sourceDead ? 'source detached' : 'sibling detached'} → deferred re-attach (${win.get_wm_class_instance() || '?'})`);
                 blur._reAttachPending = true;
-                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._addIdle(() => {
                     if (!this._settings) return GLib.SOURCE_REMOVE;
                     blur._reAttachPending = false;
                     if (!this._windowBlurs || !this._windowBlurs.has(win)) return GLib.SOURCE_REMOVE;
@@ -799,7 +799,7 @@ export function _syncBlurStackingNow(recheck = false) {
                     // would spam while a mismatch persists.
                     this._debugLog(`blur: sibling mismatch → deferred re-attach (${win.get_wm_class_instance() || '?'} mon=${monitorW}x${monitorH} sib=${sW}x${sH} src=${aW}x${aH})`);
                     blur._reAttachPending = true;
-                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._addIdle(() => {
                         if (!this._settings) return GLib.SOURCE_REMOVE;
                         blur._reAttachPending = false;
                         if (!this._windowBlurs || !this._windowBlurs.has(win)) return GLib.SOURCE_REMOVE;

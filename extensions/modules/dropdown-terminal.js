@@ -324,7 +324,7 @@ export function _positionDropdownTerminal(win) {
         return apply() ? GLib.SOURCE_CONTINUE : GLib.SOURCE_REMOVE;
     };
     if (apply())
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, retry);
+        this._addTimeout(100, retry);
 }
 
 export function _dropdownMonitorIndex() {

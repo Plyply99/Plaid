@@ -74,7 +74,7 @@ export function _handleGrabBegin(metaWindow, grabOp) {
 
     if (this._isResizeGrab(grabOp)) {
         this._grabWindow = metaWindow;
-        const effect = this._windowMasks?.get(metaWindow);
+        const effect = this._windowMasks.get(metaWindow);
         if (effect)
             effect.setBorderWidth(0);
     }
@@ -234,8 +234,8 @@ export function _startGrabLoop(metaWindow, mode) {
                         const axis = this._grabResizeNodeW._w;
                         if (axis - gap > 0) {
                             const axisSize = axis - gap;
-                            const minW1 = this._grabResizeNodeW.first?._minW || 0;
-                            const minW2 = this._grabResizeNodeW.second?._minW || 0;
+                            const minW1 = this._grabResizeNodeW.first._minW || 0;
+                            const minW2 = this._grabResizeNodeW.second._minW || 0;
                             const minRatio = minW1 / axisSize;
                             const maxRatio = 1 - minW2 / axisSize;
                             const lo = maxRatio <= minRatio
@@ -250,8 +250,8 @@ export function _startGrabLoop(metaWindow, mode) {
                         const axis = this._grabResizeNodeH._h;
                         if (axis - gap > 0) {
                             const axisSize = axis - gap;
-                            const minH1 = this._grabResizeNodeH.first?._minH || 0;
-                            const minH2 = this._grabResizeNodeH.second?._minH || 0;
+                            const minH1 = this._grabResizeNodeH.first._minH || 0;
+                            const minH2 = this._grabResizeNodeH.second._minH || 0;
                             const minRatio = minH1 / axisSize;
                             const maxRatio = 1 - minH2 / axisSize;
                             const lo = maxRatio <= minRatio

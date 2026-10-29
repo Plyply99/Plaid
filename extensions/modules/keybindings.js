@@ -83,12 +83,10 @@ export function _pinOldKeybinds(oldDefaults) {
     if (!this._hasUserSettings()) return null;
     const pinned = [];
     for (const [key, value] of Object.entries(oldDefaults)) {
-        try {
-            if (this._settings.get_user_value(key) === null) {
-                this._settings.set_strv(key, value);
-                pinned.push(key);
-            }
-        } catch (_e) {}
+        if (this._settings.get_user_value(key) === null) {
+            this._settings.set_strv(key, value);
+            pinned.push(key);
+        }
     }
     return pinned;
 }
@@ -98,9 +96,7 @@ export function _hasUserSettings() {
     // writes) proves this is not a fresh install.
     for (const key of this._settings.settings_schema.list_keys()) {
         if (key === 'keybind-migration-done' || key === 'keybind-migration-2-done') continue;
-        try {
-            if (this._settings.get_user_value(key) !== null) return true;
-        } catch (_e) {}
+        if (this._settings.get_user_value(key) !== null) return true;
     }
     return false;
 }
@@ -146,8 +142,7 @@ export function _registerKeybindings(dialogDelayMs = 2000) {
         } else {
             log(`[plaid] keybind: ${key} grab FAILED (conflict or invalid binding)`);
             failures++;
-            let combos = [];
-            try { combos = this._settings.get_strv(key) || []; } catch (_e) {}
+            const combos = this._settings.get_strv(key) || [];
             for (const combo of combos) {
                 const norm = normalizeAccel(combo);
                 if (norm) this._failedKeybindCombos.set(norm, { key, combo });
@@ -155,7 +150,7 @@ export function _registerKeybindings(dialogDelayMs = 2000) {
         }
     }
     if (failures > 0)
-        log(`[plaid] keybindings registered: ${bindings.length - failures}/${bindings.length} ok (${failures} failed)`);
+        this._debugLog(`keybindings registered: ${bindings.length - failures}/${bindings.length} ok (${failures} failed)`);
     this._checkKeybindingConflicts(bindings, dialogDelayMs);
     // Re-scan when a binding changes (prefs, gsettings, CLI) so a clash with
     // GNOME is surfaced right away instead of only at the next login. Tracked so
@@ -188,8 +183,7 @@ export function _checkKeybindingConflicts(bindings, dialogDelayMs = 2000) {
         // modifier orders differently; a plain string compare misses it).
         const ourCombos = new Map(); // normalized -> { orig, owners }
         for (const { key } of bindings) {
-            let combos = [];
-            try { combos = this._settings.get_strv(key); } catch (_e) {}
+            const combos = this._settings.get_strv(key);
             for (const combo of combos) {
                 if (!combo) continue;
                 const norm = normalizeAccel(combo);
@@ -213,7 +207,7 @@ export function _checkKeybindingConflicts(bindings, dialogDelayMs = 2000) {
         // Only combos whose Plaid grab actually failed need runtime feedback:
         // a mode-gated other binding can leave our grab working. The dialog
         // follows the same set so it does not nag about non-problems.
-        const failed = conflicts.filter(c => this._failedKeybindCombos?.has(normalizeAccel(c.orig)));
+        const failed = conflicts.filter(c => this._failedKeybindCombos.has(normalizeAccel(c.orig)));
         // Feedback maps use ALL cross-schema conflicts: if Plaid won the grab
         // the other action never fires, so the map is inert; if the other side
         // wins (including after a live prefs edit), the OSD is exactly right.
@@ -234,7 +228,7 @@ export function _buildKeybindFeedbackMaps(conflicts) {
         const entry = {
             combo: c.orig,
             owner: describeConflict(c),
-            key: c.owners?.[0] || null,
+            key: c.owners ? c.owners[0] : null,
         };
         if (c.keyName)
             this._keybindConflictByName.set(c.keyName, entry);
@@ -243,19 +237,15 @@ export function _buildKeybindFeedbackMaps(conflicts) {
             const base = c.path.replace(/\/+$/, '').split('/').pop();
             if (base) this._keybindConflictByName.set(base, entry);
         }
-        try {
-            let id = 0;
-            if (typeof Meta.prefs_get_keybinding_action === 'function')
-                id = Meta.prefs_get_keybinding_action(c.keyName);
-            // Fallback for mutter's built-in actions: their schema names map
-            // directly onto the KeyBindingAction enum (maximize → MAXIMIZE,
-            // toggle-tiled-left → TOGGLE_TILED_LEFT, …).
-            if (!id && Meta.KeyBindingAction) {
-                const enumName = String(c.keyName || '').replace(/-/g, '_').toUpperCase();
-                id = Meta.KeyBindingAction[enumName] || 0;
-            }
-            if (id) this._keybindConflictById.set(id, entry);
-        } catch (_e) {}
+        let id = Meta.prefs_get_keybinding_action(c.keyName);
+        // Fallback for mutter's built-in actions: their schema names map
+        // directly onto the KeyBindingAction enum (maximize → MAXIMIZE,
+        // toggle-tiled-left → TOGGLE_TILED_LEFT, …).
+        if (!id) {
+            const enumName = String(c.keyName || '').replace(/-/g, '_').toUpperCase();
+            id = Meta.KeyBindingAction[enumName] || 0;
+        }
+        if (id) this._keybindConflictById.set(id, entry);
     }
     this._debugLog(`keybind feedback: ${this._keybindConflictById.size} by action, ` +
         `${this._keybindConflictByName.size} by name`);
@@ -263,12 +253,8 @@ export function _buildKeybindFeedbackMaps(conflicts) {
 
 export function _onAcceleratorActivated(actionId) {
     if (!this._settings || this._shuttingDown) return;
-    if (!this._keybindConflictById?.size && !this._keybindConflictByName?.size) return;
-    let name = null;
-    try {
-        if (typeof Meta.external_binding_name_for_action === 'function')
-            name = Meta.external_binding_name_for_action(actionId);
-    } catch (_e) {}
+    if (!this._keybindConflictById.size && !this._keybindConflictByName.size) return;
+    const name = Meta.external_binding_name_for_action(actionId);
     const hit = resolveConflictFeedback(actionId, name,
         this._keybindConflictById, this._keybindConflictByName);
     if (!hit) return;
@@ -288,7 +274,7 @@ export function _showKeybindConflict(combo, owner, keyName = null) {
         .replace('%s', () => owner);
     this._debugLog(`keybind conflict: ${msg}`);
     try {
-        if (Main.osdWindowManager?.showOne) {
+        if (Main.osdWindowManager.showOne) {
             const icon = new Gio.ThemedIcon({ name: 'dialog-warning-symbolic' });
             Main.osdWindowManager.showOne(
                 global.display.get_current_monitor(), icon, msg, null, -1);
@@ -315,12 +301,8 @@ export function _scheduleConflictScan(_bindings, dialogDelayMs = 150) {
         // empty. Re-adding refreshes the grab, the failed set, and the OSD
         // maps in one pass.
         this._debugLog('conflict scan: re-registering keybindings');
-        try {
-            this._removeKeybindings();
-            this._registerKeybindings(dialogDelayMs);
-        } catch (e) {
-            log(`[plaid] keybind re-register failed: ${e.message}`);
-        }
+        this._removeKeybindings();
+        this._registerKeybindings(dialogDelayMs);
         return GLib.SOURCE_REMOVE;
     });
 }
@@ -331,76 +313,70 @@ export function _showConflictDialog(conflicts, delayMs = 2000) {
     // after login settle (and never fights a startup modal); a binding change
     // passes a short delay instead.
     this._destroyConflictDialog();
-    try {
-        const dialog = new ModalDialog();
-        this._conflictDialog = dialog;
 
-        const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style: 'spacing: 10px;' });
-        content.add_child(new St.Label({
-            text: _('Shortcut conflict'),
-            style: 'font-weight: bold; font-size: 14px;',
-        }));
-        const allGnome = conflicts.every(c =>
-            String(c.schemaId || '').startsWith('org.gnome.'));
-        for (const c of conflicts) {
-            const isGnome = String(c.schemaId || '').startsWith('org.gnome.');
-            const line = new St.Label({
-                text: (isGnome
-                    ? _('%s conflicts with %s. Disable the GNOME shortcut and use it?')
-                    : _('%s conflicts with %s. Disable the conflicting shortcut and use it?'))
-                    .replace('%s', () => c.combo)
-                    .replace('%s', () => describeConflict(c)),
-            });
-            line.clutter_text.set_line_wrap(true);
-            content.add_child(line);
-        }
-        dialog.contentLayout.add_child(content);
+    const dialog = new ModalDialog();
+    this._conflictDialog = dialog;
 
-        dialog.setButtons([
-            {
-                label: allGnome
-                    ? _('Disable GNOME shortcut and use it')
-                    : _('Disable conflicting shortcut and use it'),
-                key: Clutter.KEY_f,
-                action: () => {
-                    for (const c of conflicts) {
-                        if (clearConflictBinding(Gio, c))
-                            log(`[plaid] keybinding conflict freed: ${c.schemaId}${c.path || ''} ${c.keyName} (was '${c.combo}')`);
-                        else
-                            log(`[plaid] keybinding conflict fix failed: ${c.schemaId}${c.path || ''} ${c.keyName}`);
-                    }
-                    // The other side owned the grab, so Plaid's binding was
-                    // never registered — drop and re-add ours now that the combo
-                    // is free, or the key stays dead until the next login.
-                    try {
-                        this._removeKeybindings();
-                        this._registerKeybindings();
-                    } catch (e) {
-                        log(`[plaid] keybinding re-grab failed: ${e.message}`);
-                    }
-                    this._destroyConflictDialog();
-                    this._showPopup(_('Shortcut fixed'),
-                        conflicts.length === 1
-                            ? _('Plaid now uses %s').replace('%s', conflicts[0].combo)
-                            : _('Plaid now uses its own shortcuts'));
-                },
-            },
-            {
-                label: _('Keep it as is'),
-                key: Clutter.KEY_Escape,
-                action: () => this._destroyConflictDialog(),
-            },
-        ]);
-
-        this._conflictDialogId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
-            this._conflictDialogId = 0;
-            if (!this._settings || !this._conflictDialog) return GLib.SOURCE_REMOVE;
-            try { dialog.open(); } catch (_e) {}
-            return GLib.SOURCE_REMOVE;
+    const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style: 'spacing: 10px;' });
+    content.add_child(new St.Label({
+        text: _('Shortcut conflict'),
+        style: 'font-weight: bold; font-size: 14px;',
+    }));
+    const allGnome = conflicts.every(c =>
+        String(c.schemaId || '').startsWith('org.gnome.'));
+    for (const c of conflicts) {
+        const isGnome = String(c.schemaId || '').startsWith('org.gnome.');
+        const line = new St.Label({
+            text: (isGnome
+                ? _('%s conflicts with %s. Disable the GNOME shortcut and use it?')
+                : _('%s conflicts with %s. Disable the conflicting shortcut and use it?'))
+                .replace('%s', () => c.combo)
+                .replace('%s', () => describeConflict(c)),
         });
-    } catch (e) {
-        log(`[plaid] conflict dialog failed: ${e.message}`);
+        line.clutter_text.set_line_wrap(true);
+        content.add_child(line);
     }
+    dialog.contentLayout.add_child(content);
+
+    dialog.setButtons([
+        {
+            label: allGnome
+                ? _('Disable GNOME shortcut and use it')
+                : _('Disable conflicting shortcut and use it'),
+            key: Clutter.KEY_f,
+            action: () => {
+                for (const c of conflicts) {
+                    if (clearConflictBinding(Gio, c))
+                        log(`[plaid] keybinding conflict freed: ${c.schemaId}${c.path || ''} ${c.keyName} (was '${c.combo}')`);
+                    else
+                        log(`[plaid] keybinding conflict fix failed: ${c.schemaId}${c.path || ''} ${c.keyName}`);
+                }
+                // The other side owned the grab, so Plaid's binding was
+                // never registered — drop and re-add ours now that the combo
+                // is free, or the key stays dead until the next login.
+                this._removeKeybindings();
+                this._registerKeybindings();
+                this._destroyConflictDialog();
+                this._showPopup(_('Shortcut fixed'),
+                    conflicts.length === 1
+                        ? _('Plaid now uses %s').replace('%s', conflicts[0].combo)
+                        : _('Plaid now uses its own shortcuts'));
+            },
+        },
+        {
+            label: _('Keep it as is'),
+            key: Clutter.KEY_Escape,
+            action: () => this._destroyConflictDialog(),
+        },
+    ]);
+
+    this._conflictDialogId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
+        this._conflictDialogId = 0;
+        if (!this._settings || !this._conflictDialog) return GLib.SOURCE_REMOVE;
+        dialog.open();
+        return GLib.SOURCE_REMOVE;
+    });
+
 }
 
 export function _destroyConflictDialog() {
@@ -415,7 +391,7 @@ export function _destroyConflictDialog() {
         this._conflictDialogId = 0;
     }
     if (this._conflictDialog) {
-        try { this._conflictDialog.close(); } catch (_e) {}
+        this._conflictDialog.close();
         this._conflictDialog = null;
     }
 }
@@ -429,7 +405,7 @@ export function _removeKeybindings() {
     // leave stale ids for _disconnectSignals to trip over.
     if (this._keybindChangeIds) {
         for (const id of this._keybindChangeIds) {
-            try { this._settings.disconnect(id); } catch (_e) {}
+            this._settings.disconnect(id);
         }
         this._keybindChangeIds = [];
     }

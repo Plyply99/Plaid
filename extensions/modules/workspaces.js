@@ -125,9 +125,7 @@ export function _suppressWorkspaceSwitcherPopup() {
 
 export function _restoreWorkspaceSwitcherPopup() {
     if (this._origWorkspaceSwitcherDisplay) {
-        try {
-            WorkspaceSwitcherPopup.prototype.display = this._origWorkspaceSwitcherDisplay;
-        } catch (_e) {}
+        WorkspaceSwitcherPopup.prototype.display = this._origWorkspaceSwitcherDisplay;
         this._origWorkspaceSwitcherDisplay = null;
     }
 }

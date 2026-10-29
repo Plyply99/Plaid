@@ -111,7 +111,7 @@ const MASK_SNIPPET_CODE = `
 // Shell.SnippetHook (the old fallback arm) does not exist on GNOME 50/51 —
 // referencing it threw at MODULE LOAD if Cogl.SnippetHook were ever absent.
 // Optional chaining keeps the load safe; the creation paths handle undefined.
-const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook?.FRAGMENT;
+const SNIPPET_HOOK_FRAGMENT = Cogl.SnippetHook.FRAGMENT;
 
 // The GNOME 50 mask class must never be registered on GNOME 51 (its vfuncs
 // no longer exist there), so registration is lazy — and it must register

@@ -245,12 +245,12 @@ export function _parseMinSizeOverrides(entries) {
 export function _getWindowMinSize(win) {
     let entry = null;
     for (const c of this._winClassCandidates(win)) {
-        entry = this._minSizeOverrides?.get(c);
+        entry = this._minSizeOverrides.get(c);
         if (entry) break;
     }
     if (!entry) {
         const title = (win.get_title() || '').toLowerCase();
-        entry = this._minSizeOverrides?.get(title);
+        entry = this._minSizeOverrides.get(title);
     }
     let w = 0;
     let h = 0;
@@ -277,7 +277,7 @@ export function _getWindowMinSize(win) {
     }
     // Some apps (ghostty) report no minimum, so raise the floor with the size
     // this window was seen to refuse to shrink below.
-    const obs = this._observedMinSizes?.get(win);
+    const obs = this._observedMinSizes.get(win);
     if (obs) {
         w = Math.max(w, obs.w);
         h = Math.max(h, obs.h);
@@ -317,8 +317,8 @@ export function _clampTreeToMinSizes(node, areaW, areaH, gap) {
     // nested mins — deep splits were handed slots smaller than their
     // windows' minimum, which overlap instead of shrinking.)
     if (node.direction === 'h') {
-        const minW1 = node.first?._minW || 0;
-        const minW2 = node.second?._minW || 0;
+        const minW1 = node.first._minW || 0;
+        const minW2 = node.second._minW || 0;
         const axisSize = areaW - gap;
         if (axisSize > 0) {
             const minRatio = minW1 / axisSize;
@@ -331,8 +331,8 @@ export function _clampTreeToMinSizes(node, areaW, areaH, gap) {
             }
         }
     } else {
-        const minH1 = node.first?._minH || 0;
-        const minH2 = node.second?._minH || 0;
+        const minH1 = node.first._minH || 0;
+        const minH2 = node.second._minH || 0;
         const axisSize = areaH - gap;
         if (axisSize > 0) {
             const minRatio = minH1 / axisSize;
@@ -346,8 +346,8 @@ export function _clampTreeToMinSizes(node, areaW, areaH, gap) {
         }
     }
     if (node.ratio !== before)
-        this._debugLog?.(`clamp: ${node.direction}-split ratio ${before.toFixed(4)} -> ${node.ratio.toFixed(4)} ` +
-            `mins=${node.first?._minW || 0}x${node.first?._minH || 0}/${node.second?._minW || 0}x${node.second?._minH || 0}`);
+        this._debugLog(`clamp: ${node.direction}-split ratio ${before.toFixed(4)} -> ${node.ratio.toFixed(4)} ` +
+            `mins=${node.first._minW || 0}x${node.first._minH || 0}/${node.second._minW || 0}x${node.second._minH || 0}`);
     const isH = node.direction === 'h';
     const axis = isH ? areaW : areaH;
     const split = Math.floor((axis - gap) * node.ratio);

@@ -80,8 +80,8 @@ export function _scheduleBackgroundAppReservation() {
         this._reserveBackgroundAppWorkspace();
         return GLib.SOURCE_REMOVE;
     };
-    GLib.idle_add(GLib.PRIORITY_DEFAULT, run);
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, run);
+    this._addIdle(run);
+    this._addTimeout(1500, run);
 }
 
 export function _reserveBackgroundAppWorkspace() {
@@ -116,7 +116,7 @@ export function _reserveBackgroundAppWorkspace() {
         try {
             if (global.workspace_manager.get_active_workspace() === this._backgroundAppParkingWs) {
                 global.workspace_manager.append_new_workspace(false, this._currentTime());
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                this._addTimeout(150, () => {
                     if (!this._settings) return GLib.SOURCE_REMOVE;
                     try {
                         const next = global.workspace_manager.get_workspace_by_index(1);
@@ -149,14 +149,14 @@ export function _reserveBackgroundAppWorkspace() {
             this._backgroundAppNWorkspacesId =
                 global.workspace_manager.connect('notify::n-workspaces', () => {
                     if (!this._settings) return;
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                    this._addTimeout(50, () => {
                         if (!this._settings) return GLib.SOURCE_REMOVE;
                         this._hideParkingCard();
                         return GLib.SOURCE_REMOVE;
                     });
                 });
         }
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+        this._addTimeout(100, () => {
             if (!this._settings) return GLib.SOURCE_REMOVE;
             this._hideParkingCard();
             return GLib.SOURCE_REMOVE;
@@ -223,8 +223,7 @@ export function _startBackgroundAppKeepAlive() {
         }
         return GLib.SOURCE_CONTINUE;
     };
-    this._backgroundAppKeepAliveId =
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60 * 60 * 1000, rekeep);
+    this._backgroundAppKeepAliveId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60 * 60 * 1000, rekeep);
 }
 
 export function _scheduleBackgroundAppRestart() {
@@ -392,7 +391,7 @@ export function _adoptBackgroundAppWindow() {
     // so we never spawn a second instance.
     let attempt = 0;
     const command = this._settings.get_string('background-app');
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+    this._addTimeout(500, () => {
         if (!this._settings) return GLib.SOURCE_REMOVE;
         if (this._backgroundAppWin) {
             this._debugLog('adopt: window already claimed elsewhere — cancelling retry');
@@ -573,7 +572,7 @@ export function _recheckBackgroundAppAfterProc() {
     if (!this._settings || this._bgAppRecheckPending) return;
     if (!this._settings.get_boolean('background-app-enabled')) return;
     const gen = this._markerSweepGen;
-    const id = this._addIdle(() => {
+    const id = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
         this._bgAppRecheckId = 0;
         this._bgAppRecheckPending = false;
         if (!this._settings) return false;
@@ -770,7 +769,7 @@ export function _configureBackgroundApp(win) {
         // Late re-raise: at login the shell's wallpaper actors settle
         // after the clone is created and can land above it in the
         // background group — re-insert on top once the startup is done.
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => {
+        this._addTimeout(10000, () => {
             if (!this._settings) return GLib.SOURCE_REMOVE;
             this._raiseBackgroundAppClone();
             this._debugLog('background app: clone re-raised after startup settle');
@@ -789,15 +788,15 @@ export function _configureBackgroundApp(win) {
                     this._backgroundAppFirstFrameId = 0;
                 }
                 this._debugLog('background app: first-frame fired, scheduling park in 3s');
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, deferredPark);
+                this._addTimeout(3000, deferredPark);
             });
         }
     } catch (_e) {}
     // Fallback: during the login burst the window can map and paint before
     // the claim's first-frame connect — the signal is then missed and the
     // pipeline would never run. This timer guarantees it regardless.
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, deferredPark);
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+    this._addTimeout(5000, deferredPark);
+    this._addTimeout(1000, () => {
         if (!this._settings) return GLib.SOURCE_REMOVE;
         if (win !== this._backgroundAppWin) return GLib.SOURCE_REMOVE;
         this._positionBackgroundAppClone();
@@ -875,8 +874,7 @@ export function _parkBackgroundAppOnWorkspace(win) {
             this._backgroundAppParkRetryCount++;
             if (this._backgroundAppParkRetryId)
                 GLib.source_remove(this._backgroundAppParkRetryId);
-            this._backgroundAppParkRetryId =
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+            this._backgroundAppParkRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
                     this._backgroundAppParkRetryId = 0;
                     if (!this._settings) return GLib.SOURCE_REMOVE;
                     if (this._backgroundAppWin)
@@ -1394,7 +1392,7 @@ export function _restoreFocusFromBackgroundApp() {
         prev.get_workspace() !== ws)
         return;
     this._debugLog('background app: stealing focus back');
-    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+    this._addIdle(() => {
         if (!this._settings) return false;
         if (global.display.focus_window === prev) return false;
         // The workspace may have moved while the idle was queued.
@@ -1534,7 +1532,7 @@ export function _closeBackgroundAppWindow(win) {
     const proc = this._backgroundAppProc;
     if (proc) {
         this._debugLog('background app: bg process force_exit scheduled');
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+        this._addTimeout(1000, () => {
             try { proc.force_exit(); } catch (_e) {}
             return GLib.SOURCE_REMOVE;
         });
