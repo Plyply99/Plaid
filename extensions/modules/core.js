@@ -182,7 +182,6 @@ export class PlaidCore {
         this._layoutPopup = null;
         this._layoutPopupHideId = 0;
         this._warningPopup = null;
-        this._warningPopupId = 0;
         this._pendingWarning = null;
         this._pendingWarningOverviewId = 0;
         this._origWorkspaceSwitcherDisplay = null;
@@ -265,7 +264,6 @@ export class PlaidCore {
         this.signals.connectSignals();
         this.keybindings.registerKeybindings();
         this.workspaces.suppressWorkspaceSwitcherPopup();
-        this.workspaces.initWorkspacePopupWarning();
         this.dropdown.initDropdownTerminal();
         this._workspacePill = null;
         this._workspacePillIndicators = null;

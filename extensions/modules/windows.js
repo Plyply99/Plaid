@@ -344,7 +344,7 @@ export class Windows extends PlaidSubsystem {
                 // float-listed ones are then never touched by the tiler and
                 // open at their own remembered geometry.
                 const idKnown = !!(win.get_wm_class_instance() ||
-                    (win.get_gtk_application_id ? win.get_gtk_application_id() : ''));
+                    win.get_gtk_application_id());
                 if (wsNow && idKnown && !this.isFloating(win)) {
                     const slot = this.core.grab.windowSlotRect(win, wsNow,
                         this.getWorkspaceLayout(wsNow),
@@ -1047,6 +1047,6 @@ export class Windows extends PlaidSubsystem {
                 }
             }
         }
-            super.destroy();
-}
+        super.destroy();
+    }
 }

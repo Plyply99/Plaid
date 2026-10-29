@@ -17,27 +17,19 @@ export class DropdownTerminal extends PlaidSubsystem {
     }
 
     initDropdownTerminal() {
-        try {
-            this.core._dropdownSettingsChangedId = this.connectObject(this.core._settings,
-                'changed::dropdown-terminal-command',
-                () => this.clearDropdownWindow(true));
-        } catch (_e) {
-            this.core._dropdownSettingsChangedId = 0;
-        }
-        try {
-            this.core._dropdownHeightChangedId = this.connectObject(this.core._settings,
-                'changed::dropdown-terminal-height',
-                () => {
-                    this.core.debugLog('dropdown: height setting changed');
-                    const win = this.core._dropdownWin;
-                    if (win && !win.minimized) {
-                        this.core.debugLog('dropdown: height setting changed, re-applying');
-                        this.positionDropdownTerminal(win);
-                    }
-                });
-        } catch (_e) {
-            this.core._dropdownHeightChangedId = 0;
-        }
+        this.core._dropdownSettingsChangedId = this.connectObject(this.core._settings,
+            'changed::dropdown-terminal-command',
+            () => this.clearDropdownWindow(true));
+        this.core._dropdownHeightChangedId = this.connectObject(this.core._settings,
+            'changed::dropdown-terminal-height',
+            () => {
+                this.core.debugLog('dropdown: height setting changed');
+                const win = this.core._dropdownWin;
+                if (win && !win.minimized) {
+                    this.core.debugLog('dropdown: height setting changed, re-applying');
+                    this.positionDropdownTerminal(win);
+                }
+            });
         this.adoptExistingDropdown();
     }
 
@@ -68,7 +60,7 @@ export class DropdownTerminal extends PlaidSubsystem {
                 this.core.blur.removeBlur(win);
                 this.core.borders.removeBorder(win);
                 this.core._dropdownWin = win;
-                const pid = win.get_pid ? win.get_pid() : 0;
+                const pid = win.get_pid();
                 if (pid > 0)
                     sessionState.ddtPid = pid;
                 win._plaidDdt = true;
@@ -98,7 +90,7 @@ export class DropdownTerminal extends PlaidSubsystem {
     isDropdownWindow(win, command) {
         if (!win) return false;
         if (win._plaidDdt) return true;
-        const pid = win.get_pid ? win.get_pid() : 0;
+        const pid = win.get_pid();
         if (sessionState.ddtPid && pid === sessionState.ddtPid) return true;
         return this.core.bgApp.isMarkerProcess(win, 'PLAID_DDT=1', command);
     }
@@ -233,7 +225,7 @@ export class DropdownTerminal extends PlaidSubsystem {
             }
         }
         this.core._dropdownWin = win;
-        const pid = win.get_pid ? win.get_pid() : 0;
+        const pid = win.get_pid();
         if (pid > 0)
             sessionState.ddtPid = pid;
         win._plaidDdt = true;
@@ -449,13 +441,9 @@ export class DropdownTerminal extends PlaidSubsystem {
         // Minimizing an ALREADY-minimized window is a no-op, so an actor left
         // visible by an earlier cycle would keep painting behind the tiles.
         // Hide it explicitly; revealDropdownWindow() restores it on show.
-        try {
-            const actor = win.get_compositor_private();
-            if (actor)
-                actor.visible = false;
-        } catch (_e) {
-            // Actor already destroyed.
-        }
+        const actor = win.get_compositor_private();
+        if (actor)
+            actor.visible = false;
     }
 
     clearDropdownWindow(close = false) {
@@ -513,6 +501,6 @@ export class DropdownTerminal extends PlaidSubsystem {
             this.core._dropdownHeightChangedId = 0;
         }
         this.core._dropdownPending = false;
-            super.destroy();
-}
+        super.destroy();
+    }
 }

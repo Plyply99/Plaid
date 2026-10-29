@@ -26,20 +26,12 @@ export class BackgroundApp extends PlaidSubsystem {
     }
 
     initBackgroundApp() {
-        try {
-            this.core._backgroundAppSettingsChangedId = this.connectObject(this.core._settings,
-                'changed::background-app',
-                () => this.scheduleBackgroundAppRestart());
-        } catch (_e) {
-            this.core._backgroundAppSettingsChangedId = 0;
-        }
-        try {
-            this.core._backgroundAppEnabledChangedId = this.connectObject(this.core._settings,
-                'changed::background-app-enabled',
-                () => this.scheduleBackgroundAppRestart());
-        } catch (_e) {
-            this.core._backgroundAppEnabledChangedId = 0;
-        }
+        this.core._backgroundAppSettingsChangedId = this.connectObject(this.core._settings,
+            'changed::background-app',
+            () => this.scheduleBackgroundAppRestart());
+        this.core._backgroundAppEnabledChangedId = this.connectObject(this.core._settings,
+            'changed::background-app-enabled',
+            () => this.scheduleBackgroundAppRestart());
         this.scheduleBackgroundAppReservation();
         const current = this.core._settings.get_string('background-app');
         if (current)
@@ -553,7 +545,7 @@ export class BackgroundApp extends PlaidSubsystem {
                     if (!w) continue;
                     let pid = 0;
                     { pid = w.get_pid(); }
-                    seen.push(`${w.get_wm_class_instance() || '?'}/${w.get_title ? w.get_title() || '' : ''}:pid${pid}`);
+                    seen.push(`${w.get_wm_class_instance() || '?'}/${w.get_title() || ''}:pid${pid}`);
                 }
             }
             this.core.debugLog(`adopt: scan miss — windows: ${seen.join(', ') || 'none'}`);
@@ -1636,11 +1628,7 @@ export class BackgroundApp extends PlaidSubsystem {
                     // Drop Plaid's 12h keep-alive instead of leaving the
                     // workspace pinned after the extension is gone. A new
                     // keepWorkspaceAlive() call replaces the old timer.
-                    try {
-                        Main.wm.keepWorkspaceAlive(parking, 1);
-                    } catch (_e) {
-                        // Workspace may already be gone; nothing to release.
-                    }
+                    Main.wm.keepWorkspaceAlive(parking, 1);
                     // The front-reserved ws0 is the shell's own first
                     // workspace — never remove it. Only the appended trailing
                     // fallback parking is removable. Sticky windows (the DDT)
@@ -1696,6 +1684,6 @@ export class BackgroundApp extends PlaidSubsystem {
             this.core._backgroundAppEnabledChangedId = 0;
         }
         this.core._mutterSettings = null;
-            super.destroy();
-}
+        super.destroy();
+    }
 }

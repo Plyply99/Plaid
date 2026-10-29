@@ -423,7 +423,7 @@ export class Signals extends PlaidSubsystem {
             '_pendingBorderId', '_stackSettleId', '_workspacePillUpdateId',
             '_workspaceLayoutsSaveId', '_conflictScanId', '_conflictDialogId',
             '_dropdownPendingId', '_dropdownSyncId', '_layoutPopupHideId',
-            '_warningPopupId', '_pointerFocusId', '_liveResizeId', '_animTickId',
+            '_pointerFocusId', '_liveResizeId', '_animTickId',
             '_backgroundAppReleaseId', '_backgroundAppRestartId',
             '_backgroundAppPendingId', '_backgroundAppParkCoalesceId',
             '_backgroundAppParkWatchTimeoutId', '_backgroundAppParkingFixId',
@@ -496,6 +496,6 @@ export class Signals extends PlaidSubsystem {
             GLib.source_remove(this.core._stackSettleId);
             this.core._stackSettleId = 0;
         }
-            super.destroy();
-}
+        super.destroy();
+    }
 }

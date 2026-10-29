@@ -458,6 +458,6 @@ export class Actions extends PlaidSubsystem {
             global.display.disconnectObject(this.core._pickFocusId);
             this.core._pickFocusId = null;
         }
-            super.destroy();
-}
+        super.destroy();
+    }
 }

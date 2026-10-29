@@ -947,6 +947,6 @@ export class Blur extends PlaidSubsystem {
 
     destroy() {
         this.removeAllBlurs();
-            super.destroy();
-}
+        super.destroy();
+    }
 }

@@ -194,6 +194,6 @@ export class WorkspacePill extends PlaidSubsystem {
 
     destroy() {
         this.restoreWorkspacePill();
-            super.destroy();
-}
+        super.destroy();
+    }
 }

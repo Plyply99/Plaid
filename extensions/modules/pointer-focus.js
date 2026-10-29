@@ -34,12 +34,8 @@ export class PointerFocus extends PlaidSubsystem {
     }
 
     initPointerFocus() {
-        try {
-            this.core._pointerFocusEnabledId = this.connectObject(this.core._settings,
-                'changed::pointer-focus', () => this.syncPointerFocus());
-        } catch (_e) {
-            this.core._pointerFocusEnabledId = 0;
-        }
+        this.core._pointerFocusEnabledId = this.connectObject(this.core._settings,
+            'changed::pointer-focus', () => this.syncPointerFocus());
         this.syncPointerFocus();
     }
 
@@ -212,6 +208,6 @@ export class PointerFocus extends PlaidSubsystem {
             this.core._settings.disconnectObject(this.core._pointerFocusEnabledId);
             this.core._pointerFocusEnabledId = 0;
         }
-            super.destroy();
-}
+        super.destroy();
+    }
 }

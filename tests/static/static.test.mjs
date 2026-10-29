@@ -232,3 +232,32 @@ test('GI namespaces are imported where they are used', () => {
     }
   }
 });
+
+test('shell code does not read another extension', () => {
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8');
+    assert.ok(!/just-perfection/.test(src), `${file} references Just Perfection`);
+    assert.ok(!/extensionManager\.lookup/.test(src), `${file} looks up another extension`);
+  }
+});
+
+test('no redundant existence checks for guaranteed Meta.Window methods', () => {
+  const methods = ['get_pid', 'get_title', 'get_gtk_application_id',
+    'get_compositor_private', 'get_workspace'];
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8');
+    for (const method of methods) {
+      assert.ok(!new RegExp(`\\.${method}\\s*\\?`).test(src),
+        `${file} guards guaranteed Meta.Window.${method}()`);
+    }
+  }
+});
+
+test('subsystem cleanup is the last statement and normally indented', () => {
+  for (const file of moduleFiles) {
+    const src = readFileSync(file, 'utf8');
+    assert.ok(!/^ {12}super\.destroy\(\);$/m.test(src),
+      `${file} has a misindented super.destroy()`);
+    assert.ok(!/\n\}\n\}\s*$/.test(src), `${file} has stray class-closing braces`);
+  }
+});

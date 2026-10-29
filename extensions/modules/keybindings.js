@@ -444,6 +444,6 @@ export class Keybindings extends PlaidSubsystem {
             GLib.source_remove(this.core._conflictScanId);
             this.core._conflictScanId = 0;
         }
-            super.destroy();
-}
+        super.destroy();
+    }
 }

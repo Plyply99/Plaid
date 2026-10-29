@@ -726,6 +726,6 @@ export class Grab extends PlaidSubsystem {
         this.disconnectGrabBoundaryHooks();
         this.core._grabOp = null;
         this.core._grabWindow = null;
-            super.destroy();
-}
+        super.destroy();
+    }
 }

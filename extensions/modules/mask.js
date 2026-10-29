@@ -695,6 +695,6 @@ export class Masks extends PlaidSubsystem {
 
     destroy() {
         this.removeAllMasks();
-            super.destroy();
-}
+        super.destroy();
+    }
 }

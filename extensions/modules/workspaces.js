@@ -141,15 +141,10 @@ export class Workspaces extends PlaidSubsystem {
     }
 
     suppressWorkspaceSwitcherPopup() {
-        try {
-            this.core._origWorkspaceSwitcherDisplay = WorkspaceSwitcherPopup.prototype.display;
-            WorkspaceSwitcherPopup.prototype.display = function (index) {
-                this.destroy();
-            };
-        } catch (e) {
-            this.core.debugLog(`workspace switcher suppression failed: ${e.message}`);
-            this.core._origWorkspaceSwitcherDisplay = null;
-        }
+        this.core._origWorkspaceSwitcherDisplay = WorkspaceSwitcherPopup.prototype.display;
+        WorkspaceSwitcherPopup.prototype.display = function (index) {
+            this.destroy();
+        };
     }
 
     restoreWorkspaceSwitcherPopup() {
@@ -157,120 +152,6 @@ export class Workspaces extends PlaidSubsystem {
             WorkspaceSwitcherPopup.prototype.display = this.core._origWorkspaceSwitcherDisplay;
             this.core._origWorkspaceSwitcherDisplay = null;
         }
-    }
-
-    getJPSettings() {
-        try {
-            // Cross-extension read: the extension manager record exposes the
-            // live extension object as stateObj; fall back to building a
-            // schema source from the extension directory (EGO installs keep
-            // their schema outside the default source).
-            const uuid = 'just-perfection-desktop@just-perfection';
-            const jpExt = Main.extensionManager.lookup(uuid);
-            if (!jpExt) return null;
-            const live = jpExt.stateObj && jpExt.stateObj.getSettings
-                ? jpExt.stateObj.getSettings() : null;
-            if (live) {
-                this.core.debugLog('workspace popup: JP settings acquired');
-                return live;
-            }
-            const schemaDir = jpExt.dir.get_child('schemas');
-            const def = Gio.SettingsSchemaSource.get_default();
-            const src = schemaDir.query_exists(null)
-                ? Gio.SettingsSchemaSource.new_from_directory(
-                    schemaDir.get_path(), def, false)
-                : def;
-            const schema = src.lookup('org.gnome.shell.extensions.just-perfection', true);
-            if (!schema) return null;
-            const settings = new Gio.Settings({ settings_schema: schema });
-            this.core.debugLog('workspace popup: JP settings acquired (schema source)');
-            return settings;
-        } catch (e) {
-            this.core.debugLog('workspace popup: JP settings lookup failed:', String(e));
-            return null;
-        }
-    }
-
-    initWorkspacePopupWarning() {
-        try {
-            this.core._shellSettings = new Gio.Settings({ schema_id: 'org.gnome.shell' });
-            this.core._shellSettingsChangedId = this.connectObject(this.core._shellSettings,
-                'changed::enabled-extensions',
-                () => this.updateWorkspacePopupWarning());
-        } catch (_e) {
-            this.core._shellSettings = null;
-        }
-        this.core._jpSettings = this.getJPSettings();
-        if (this.core._jpSettings) {
-            this.core._jpSettingsChangedId = this.connectObject(this.core._jpSettings,
-                'changed::workspace-popup',
-                () => this.updateWorkspacePopupWarning());
-        }
-        this.core._warningPopupId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
-            this.core._warningPopupId = 0;
-            if (!this.core._settings) return GLib.SOURCE_REMOVE;
-            this.updateWorkspacePopupWarning();
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    updateWorkspacePopupWarning() {
-        if (!this.core._settings) return;
-        let jpEnabled = false;
-        jpEnabled = !!(this.core._shellSettings &&
-            this.core._shellSettings.get_strv('enabled-extensions')
-                .includes('just-perfection-desktop@just-perfection'));
-        if (!jpEnabled) {
-            if (this.core._jpSettings) {
-                if (this.core._jpSettingsChangedId) {
-                    this.core._jpSettings.disconnectObject(this.core._jpSettingsChangedId);
-                }
-                this.core._jpSettings = null;
-                this.core._jpSettingsChangedId = 0;
-            }
-        } else if (!this.core._jpSettings) {
-            this.core._jpSettings = this.getJPSettings();
-            if (this.core._jpSettings) {
-                this.core._jpSettingsChangedId = this.connectObject(this.core._jpSettings,
-                    'changed::workspace-popup',
-                    () => this.updateWorkspacePopupWarning());
-            }
-        }
-        let overlap = false;
-        try {
-            const jpSuppresses = !!(this.core._jpSettings &&
-                !this.core._jpSettings.get_boolean('workspace-popup'));
-            overlap = jpEnabled && jpSuppresses;
-            this.core.debugLog(`workspace popup: jpEnabled=${jpEnabled} jpSuppresses=${jpSuppresses} overlap=${overlap}`);
-        } catch (e) {
-            overlap = false;
-            this.core.debugLog('workspace popup: overlap check error:', String(e));
-        }
-        if (overlap) {
-            if (!this.core._warningPopup) {
-                this.core.debugLog('workspace popup: showing warning');
-                this.showWarningPopup('Workspace Popup Hidden',
-                    'Just Perfection also manages the workspace popup — workspace-switch popups may be suppressed. Plaid’s tiling popups are unaffected.',
-                    'Click to dismiss');
-            }
-        } else {
-            this.hideWarningPopup();
-        }
-    }
-
-    hideWarningPopup() {
-        const popup = this.core._warningPopup;
-        if (!popup) return;
-        this.core._warningPopup = null;
-        popup.remove_all_transitions();
-        popup.ease({
-            opacity: 0,
-            duration: 200,
-            mode: Clutter.AnimationMode.EASE_IN_QUAD,
-            onComplete: () => {
-                popup.destroy();
-            },
-        });
     }
 
     showWarningPopup(title, subtitle, hint) {
@@ -394,22 +275,6 @@ export class Workspaces extends PlaidSubsystem {
             this.core._layoutPopup = null;
         }
         this.restoreWorkspaceSwitcherPopup();
-        if (this.core._shellSettings) {
-            if (this.core._shellSettingsChangedId)
-                this.core._shellSettings.disconnectObject(this.core._shellSettingsChangedId);
-            this.core._shellSettings = null;
-        }
-        if (this.core._jpSettings) {
-            if (this.core._jpSettingsChangedId)
-                this.core._jpSettings.disconnectObject(this.core._jpSettingsChangedId);
-            this.core._jpSettings = null;
-        }
-        this.core._shellSettingsChangedId = 0;
-        this.core._jpSettingsChangedId = 0;
-        if (this.core._warningPopupId) {
-            GLib.source_remove(this.core._warningPopupId);
-            this.core._warningPopupId = 0;
-        }
         if (this.core._warningPopup) {
             this.core._warningPopup.remove_all_transitions();
             this.core._warningPopup.destroy();
@@ -420,6 +285,6 @@ export class Workspaces extends PlaidSubsystem {
             this.core._pendingWarningOverviewId = 0;
         }
         this.core._pendingWarning = null;
-            super.destroy();
-}
+        super.destroy();
+    }
 }

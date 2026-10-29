@@ -531,6 +531,6 @@ export class Borders extends PlaidSubsystem {
     destroy() {
         this.stopBorderAnimation();
         this.removeAllBorders();
-            super.destroy();
-}
+        super.destroy();
+    }
 }
