@@ -213,6 +213,7 @@ export class Signals extends PlaidSubsystem {
                 this.core.bgApp.evacuateParkingWorkspace();
                 return;
             }
+            this.core.bgApp.hideParkingCard();
             if (this.core._settings.get_boolean('workspace-popup'))
                 this.core.workspaces.showWorkspacePopup(ws);
             // Re-assert float layering + refresh Flair after the switch

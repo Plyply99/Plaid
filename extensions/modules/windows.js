@@ -15,6 +15,7 @@ export class Windows extends PlaidSubsystem {
     shouldManage(win) {
         if (this.core._dropdownWin === win ||
             (this.core._dropdownWaiters && this.core._dropdownWaiters.has(win))) return false;
+        if (win._plaidDdt) return false;
         if (this.core._backgroundAppWin === win) return false;
         // The bg-app window must never be tiled — even mid-cycle when the new
         // instance hasn't claimed it yet (its skip_taskbar state does not
@@ -549,15 +550,44 @@ export class Windows extends PlaidSubsystem {
         this.core._floatHooks.delete(win);
     }
 
+    refreshWorkspaceIndices() {
+        for (const win of this.core._windowWorkspaces.keys()) {
+            let ws = null;
+            try {
+                ws = win.get_workspace();
+            } catch (_e) {
+                ws = null;
+            }
+            if (ws)
+                this.core._windowWSIndices.set(win, this.core.geometry.wsIndex(ws));
+            else
+                this.core._windowWSIndices.delete(win);
+        }
+    }
+
     getWindowsForWorkspace(workspace) {
         const order = this.getWorkspaceOrder(workspace);
-        return order.filter(w =>
-            w.get_window_type() === Meta.WindowType.NORMAL &&
-            !w.is_skip_taskbar() &&
-            !w.minimized &&
-            w !== this.core._backgroundAppWin &&
-            this.core._windowWSIndices.get(w) === this.core.geometry.wsIndex(workspace)
-        );
+        const targetIndex = this.core.geometry.wsIndex(workspace);
+        return order.filter(w => {
+            if (w.get_window_type() !== Meta.WindowType.NORMAL) return false;
+            if (w.is_skip_taskbar() || w.minimized) return false;
+            if (w === this.core._backgroundAppWin) return false;
+            // Membership by LIVE workspace object. The stored index goes stale
+            // when the shell's dynamic-workspace check removes the empty BGAPP
+            // parking while Plaid is disabled — every workspace then shifts
+            // down, and an index comparison silently filters out every tiled
+            // window (no Flair, no retile). Floats bypass this and kept working,
+            // which was the tell.
+            let live = null;
+            try {
+                live = w.get_workspace();
+            } catch (_e) {
+                live = null;
+            }
+            if (live)
+                return live === workspace;
+            return this.core._windowWSIndices.get(w) === targetIndex;
+        });
     }
 
     reassertFloatingTransients() {

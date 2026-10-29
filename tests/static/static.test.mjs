@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..');
@@ -195,4 +195,40 @@ test('keybinding conflict scanner is limited to known shortcut schemas', () => {
     'org.gnome.settings-daemon.plugins.media-keys',
   ])
     assert.ok(src.includes(schema), `scanner is missing ${schema}`);
+});
+
+test('no legacy self._ references in composed subsystems', () => {
+  for (const file of moduleFiles) {
+    const src = readFileSync(file, 'utf8');
+    assert.ok(!/\bself\._[A-Za-z]/.test(src), `${file} still uses a legacy self._ field`);
+  }
+});
+
+test('no writes to read-only Meta.Window properties', () => {
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8');
+    assert.ok(!/\b(?:win|w|metaWindow)\.(?:skip_taskbar|minimized|maximized|fullscreen)\s*=/.test(src),
+      `${file} writes a read-only Meta.Window property`);
+  }
+});
+
+test('GI namespaces are imported where they are used', () => {
+  const namespaces = ['Main', 'GLib', 'St', 'Clutter', 'Meta', 'Gio', 'Shell', 'Cogl', 'GObject', 'graphene', 'cairo'];
+  // keybind-conflicts.js receives Gio as an injected parameter so it can run
+  // in the GTK-only prefs process. layouts.js mentions St.Settings only in a
+  // comment; workspaces.js mentions org.gnome.Shell in a D-Bus name string.
+  const allowed = new Set([
+    'keybind-conflicts.js:Gio',
+    'layouts.js:St',
+    'workspaces.js:Shell',
+  ]);
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8');
+    for (const ns of namespaces) {
+      if (!new RegExp(`\\b${ns}\\.`).test(src)) continue;
+      if (allowed.has(`${basename(file)}:${ns}`)) continue;
+      const imported = new RegExp(`import\\s+(?:\\*\\s+as\\s+)?${ns}\\b`).test(src);
+      assert.ok(imported, `${file} uses ${ns} without importing it`);
+    }
+  }
 });

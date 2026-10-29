@@ -32,8 +32,6 @@ import { DragPreview } from './drag-preview.js';
 export class PlaidCore {
     constructor(ext) {
         this.ext = ext;
-        this._enabledThisShell = false;
-        this._stashedTiling = null;
 
         this.geometry = new Geometry(this);
         this.bsp = new Bsp(this);
@@ -109,8 +107,8 @@ export class PlaidCore {
     }
 
     enable() {
-        const wasEnabled = this._enabledThisShell;
-        this._enabledThisShell = true;
+        const wasEnabled = sessionState.enabledThisShell;
+        sessionState.enabledThisShell = true;
 
         this._settings = this.ext.getSettings();
         this._floatingClasses = new Set(this._settings.get_strv('float-windows'));
@@ -229,7 +227,6 @@ export class PlaidCore {
         this._backgroundAppParkingWs = null;
         this._backgroundAppHiding = null;
         this._backgroundAppParkingFixId = 0;
-        this._backgroundAppParkingLastRelocate = 0;
         this._dynamicWsWarned = false;
         this._lastRealFocusedWindow = null;
         this._floatMaxRects = new Map();
@@ -286,7 +283,7 @@ export class PlaidCore {
             this.dragPreview.updateDropOverlaySize();
             const resumeLockCycle = sessionState.lockCycle;
             const resumeLike = sessionState.lockCycle || wasEnabled;
-            if (resumeLike && this._stashedTiling)
+            if (resumeLike && sessionState.stashedTiling)
                 this.restoreTilingState();
             const bgCommand = this._settings.get_string('background-app');
             for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
@@ -317,8 +314,8 @@ export class PlaidCore {
     }
 
     restoreTilingState() {
-        const s = this._stashedTiling;
-        this._stashedTiling = null;
+        const s = sessionState.stashedTiling;
+        sessionState.stashedTiling = null;
         if (!s) return;
 
         const alive = (win) => {
@@ -328,19 +325,64 @@ export class PlaidCore {
                 return false;
             }
         };
-        for (const [win] of s.windowWorkspaces) {
+        // Re-derive per-window slots from the LIVE workspace. While Plaid is
+        // disabled the shell's dynamic-workspace check can remove the empty
+        // BGAPP parking, shifting every workspace index down; the stashed
+        // indices then no longer match and the tiled paths (Flair, retile)
+        // silently skip every window.
+        const liveWorkspaces = new Set();
+        const wm = global.workspace_manager;
+        if (wm) {
+            for (let i = 0; i < wm.get_n_workspaces(); i++)
+                liveWorkspaces.add(wm.get_workspace_by_index(i));
+        }
+
+        for (const win of [...s.windowWorkspaces.keys()]) {
             if (!alive(win)) {
                 s.windowWorkspaces.delete(win);
                 s.windowWSIndices.delete(win);
+                continue;
             }
+            let ws = null;
+            try {
+                ws = win.get_workspace();
+            } catch (_e) {
+                ws = null;
+            }
+            if (!ws) {
+                s.windowWorkspaces.delete(win);
+                s.windowWSIndices.delete(win);
+                continue;
+            }
+            const oldWs = s.windowWorkspaces.get(win);
+            if (oldWs !== ws) {
+                const oldOrder = s.workspaceOrders.get(oldWs);
+                if (oldOrder) {
+                    const i = oldOrder.indexOf(win);
+                    if (i !== -1) oldOrder.splice(i, 1);
+                }
+                let order = s.workspaceOrders.get(ws);
+                if (!order) {
+                    order = [];
+                    s.workspaceOrders.set(ws, order);
+                }
+                if (!order.includes(win)) order.push(win);
+                s.windowWorkspaces.set(win, ws);
+            }
+            s.windowWSIndices.set(win, this.geometry.wsIndex(ws));
         }
-        for (const [win] of s.windowWSIndices) {
-            if (!alive(win))
+        for (const win of [...s.windowWSIndices.keys()]) {
+            if (!s.windowWorkspaces.has(win))
                 s.windowWSIndices.delete(win);
         }
-        for (const [ws, order] of s.workspaceOrders) {
-            if (!order) continue;
-            s.workspaceOrders.set(ws, order.filter(alive));
+        for (const ws of [...s.workspaceOrders.keys()]) {
+            if (!liveWorkspaces.has(ws)) {
+                s.workspaceOrders.delete(ws);
+                s.bspTrees.delete(ws);
+                continue;
+            }
+            const order = s.workspaceOrders.get(ws);
+            if (order) s.workspaceOrders.set(ws, order.filter(alive));
         }
         for (const [ws, tree] of s.bspTrees) {
             if (!tree) continue;
@@ -397,8 +439,8 @@ export class PlaidCore {
         this.persistence.destroy();
         this._saveDirtySince = 0;
 
-        if (!this._stashedTiling) {
-            this._stashedTiling = {
+        if (!sessionState.stashedTiling) {
+            sessionState.stashedTiling = {
                 bspTrees: this._bspTrees,
                 workspaceLayouts: this._workspaceLayouts,
                 masterRatios: this._masterRatios,

@@ -220,10 +220,21 @@ export function fakeWin(opts = {}) {
     get_title: () => opts.title ?? '',
     get_min_size: () => opts.minSize ?? [0, 0],
     get_window_type: () => opts.type ?? 0,
+    get_pid: () => opts.pid ?? 0,
+    get_compositor_private: () => opts.actor ?? null,
     is_skip_taskbar: () => opts.skipTaskbar ?? false,
     is_fullscreen: () => opts.fullscreen ?? false,
     is_maximized: () => opts.maximized ?? false,
     minimized: opts.minimized ?? false,
+    minimize() { this.minimized = true; },
+    unminimize() { this.minimized = false; },
+    activate() {},
+    delete() {},
+    make_above() {},
+    unmake_above() {},
+    stick() {},
+    unstick() {},
+    is_on_all_workspaces: () => opts.sticky ?? false,
   };
 }
 

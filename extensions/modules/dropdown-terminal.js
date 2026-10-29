@@ -7,6 +7,7 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import { sessionState } from './session-state.js';
 import { PlaidSubsystem } from './subsystem.js';
 
 
@@ -19,7 +20,7 @@ export class DropdownTerminal extends PlaidSubsystem {
         try {
             this.core._dropdownSettingsChangedId = this.connectObject(this.core._settings,
                 'changed::dropdown-terminal-command',
-                () => this.clearDropdownWindow());
+                () => this.clearDropdownWindow(true));
         } catch (_e) {
             this.core._dropdownSettingsChangedId = 0;
         }
@@ -36,6 +37,89 @@ export class DropdownTerminal extends PlaidSubsystem {
                 });
         } catch (_e) {
             this.core._dropdownHeightChangedId = 0;
+        }
+        this.adoptExistingDropdown();
+    }
+
+    adoptExistingDropdown(attempt = 0) {
+        if (!this.core || !this.core._settings) return;
+        if (this.core._dropdownWin) return;
+        const command = this.core._settings.get_string('dropdown-terminal-command');
+        if (!command) return;
+        const wm = global.workspace_manager;
+        for (let i = 0; i < wm.get_n_workspaces(); i++) {
+            const ws = wm.get_workspace_by_index(i);
+            if (!ws) continue;
+            for (const win of ws.list_windows()) {
+                if (!this.isDropdownWindow(win, command)) continue;
+                if (win._plaidDdtCommand && win._plaidDdtCommand !== command) {
+                    // The command changed while Plaid was disabled; close the
+                    // stale terminal instead of adopting it.
+                    win._plaidDdt = false;
+                    if (sessionState.ddtPid === win.get_pid())
+                        sessionState.ddtPid = 0;
+                    try { win.delete(this.core.currentTime()); } catch (e) { this.core.debugLog(`dropdown: stale close failed: ${e.message}`); }
+                    continue;
+                }
+                // Adoption can be late (cold env cache / recycled wrapper):
+                // remove any tiled registration the idle pass may have made.
+                if (this.core._windowWorkspaces.has(win))
+                    this.core.windows.removeWindow(win);
+                this.core.blur.removeBlur(win);
+                this.core.borders.removeBorder(win);
+                this.core._dropdownWin = win;
+                const pid = win.get_pid ? win.get_pid() : 0;
+                if (pid > 0)
+                    sessionState.ddtPid = pid;
+                win._plaidDdt = true;
+                win._plaidDdtCommand = command;
+                this.core._dropdownPending = false;
+                this.configureDropdownTerminal(win);
+                // A surviving terminal must not sit behind the tiled windows
+                // after unlock or disable/enable. Adopt it, but keep it out of
+                // the way until the toggle explicitly unminimizes it.
+                win._plaidDdtRevealed = false;
+                this.hideDropdownWindow(win);
+                this.core.debugLog('dropdown: adopted surviving terminal');
+                return;
+            }
+        }
+        // One delayed retry covers the async /proc env read that a fresh core
+        // has to do before the PLAID_DDT marker is visible.
+        if (attempt === 0) {
+            this.core.signals.addTimeout(750, () => {
+                if (this.core._settings && !this.core._dropdownWin)
+                    this.adoptExistingDropdown(1);
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+    }
+
+    isDropdownWindow(win, command) {
+        if (!win) return false;
+        if (win._plaidDdt) return true;
+        const pid = win.get_pid ? win.get_pid() : 0;
+        if (sessionState.ddtPid && pid === sessionState.ddtPid) return true;
+        return this.core.bgApp.isMarkerProcess(win, 'PLAID_DDT=1', command);
+    }
+
+    minimizeSurvivingDropdowns() {
+        // Runs during teardown (including shell shutdown): a disposed workspace
+        // manager must never abort the rest of destroy().
+        try {
+            const command = this.core._settings
+                ? this.core._settings.get_string('dropdown-terminal-command') : '';
+            const wm = global.workspace_manager;
+            for (let i = 0; i < wm.get_n_workspaces(); i++) {
+                const ws = wm.get_workspace_by_index(i);
+                if (!ws) continue;
+                for (const win of ws.list_windows()) {
+                    if (!this.isDropdownWindow(win, command)) continue;
+                    this.hideDropdownWindow(win);
+                }
+            }
+        } catch (_e) {
+            // Workspace manager already torn down.
         }
     }
 
@@ -149,6 +233,11 @@ export class DropdownTerminal extends PlaidSubsystem {
             }
         }
         this.core._dropdownWin = win;
+        const pid = win.get_pid ? win.get_pid() : 0;
+        if (pid > 0)
+            sessionState.ddtPid = pid;
+        win._plaidDdt = true;
+        win._plaidDdtCommand = command;
         this.core._dropdownGeometryIds = [];
         this.core._dropdownGeometryIds.push(this.connectObject(win, 'size-changed', () => {
             if (this.core._dropdownWin === win) this.core.borders.applyDropdownEffects(win);
@@ -157,6 +246,8 @@ export class DropdownTerminal extends PlaidSubsystem {
             if (this.core._dropdownWin === win) this.core.borders.applyDropdownEffects(win);
         }));
         this.core._dropdownUnmanagedId = this.connectObject(win, 'unmanaged', () => {
+            if (sessionState.ddtPid === pid)
+                sessionState.ddtPid = 0;
             if (this.core._dropdownWin === win) {
                 this.core._dropdownWin = null;
             }
@@ -176,7 +267,14 @@ export class DropdownTerminal extends PlaidSubsystem {
     }
 
     recheckDropdownWaiters() {
-        if (!this.core._settings || !this.core._dropdownPending) return;
+        if (!this.core._settings) return;
+        if (!this.core._dropdownPending) {
+            // The async /proc env read lands after a fresh core's one-shot
+            // adoption attempt. Retry now that the marker is cached.
+            if (!this.core._dropdownWin && sessionState.ddtPid)
+                this.adoptExistingDropdown();
+            return;
+        }
         for (const win of [...this.core._dropdownWaiters.keys()]) {
             const cleanup = this.core._dropdownWaiters.get(win);
             if (!this.tryClaimDropdown(win)) continue;
@@ -341,7 +439,26 @@ export class DropdownTerminal extends PlaidSubsystem {
         return idx;
     }
 
-    clearDropdownWindow() {
+    hideDropdownWindow(win) {
+        if (!win) return;
+        try {
+            win.minimize();
+        } catch (e) {
+            this.core.debugLog(`dropdown: hide minimize failed: ${e.message}`);
+        }
+        // Minimizing an ALREADY-minimized window is a no-op, so an actor left
+        // visible by an earlier cycle would keep painting behind the tiles.
+        // Hide it explicitly; revealDropdownWindow() restores it on show.
+        try {
+            const actor = win.get_compositor_private();
+            if (actor)
+                actor.visible = false;
+        } catch (_e) {
+            // Actor already destroyed.
+        }
+    }
+
+    clearDropdownWindow(close = false) {
         this.clearDropdownWaiters();
         const win = this.core._dropdownWin;
         if (!win) return;
@@ -360,25 +477,25 @@ export class DropdownTerminal extends PlaidSubsystem {
         this.core.blur.removeBlur(win);
         { win.unmake_above(); }
         { win.unstick(); }
-        // If the terminal was still held hidden (disabled before the position
-        // loop revealed it), never leave it invisible after teardown.
-        {
-            const a = win.get_compositor_private();
-            if (a) {
-                a.visible = true;
-                a.set_opacity(255);
-                a.remove_all_transitions();
-            }
-            const effect = this.core._windowMasks && this.core._windowMasks.get(win);
-            if (effect && effect.setOpacityUniform)
-                effect.setOpacityUniform(1);
-        }
         win._plaidDdtRevealed = false;
+        if (!close) {
+            // Disable/lock keeps the terminal alive for adoption, but it must
+            // not sit behind the next session's tiled windows. The toggle
+            // unminimizes and reveals it when asked.
+            this.hideDropdownWindow(win);
+        }
         this.core._dropdownWin = null;
+        if (close) {
+            win._plaidDdt = false;
+            if (sessionState.ddtPid && sessionState.ddtPid === win.get_pid())
+                sessionState.ddtPid = 0;
+            try { win.delete(this.core.currentTime()); } catch (e) { this.core.debugLog(`dropdown: stale close failed: ${e.message}`); }
+        }
     }
 
     destroy() {
-        this.clearDropdownWindow();
+        this.clearDropdownWindow(false);
+        this.minimizeSurvivingDropdowns();
         if (this.core._dropdownPendingId) {
             GLib.source_remove(this.core._dropdownPendingId);
             this.core._dropdownPendingId = 0;
