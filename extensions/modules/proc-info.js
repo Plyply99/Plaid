@@ -1,9 +1,5 @@
-// Async /proc reads with per-extension caches.
-//
-// Process identity (cmdline/environ) is needed at window-add and hover time,
-// but synchronous reads block the compositor main loop. The helpers read
-// asynchronously and cache by PID, so callers can use a cached verdict and
-// fall back to a conservative answer until the first read settles.
+// Async /proc reads with per-extension caches. Process identity is needed at
+// window-add and hover time; synchronous reads would block the compositor.
 
 import Gio from 'gi://Gio';
 
@@ -17,7 +13,9 @@ export function readProcFile(path, callback) {
             const [ok, bytes] = f.load_contents_finish(res);
             if (ok)
                 data = bytes;
-        } catch (_e) {}
+        } catch (e) {
+            // A cancelled/failed /proc read is expected while processes exit.
+        }
         callback(data);
     });
 }
@@ -26,30 +24,24 @@ export function readProcFilePromise(path) {
     return new Promise((resolve) => readProcFile(path, resolve));
 }
 
-export const procInfoMethods = {
-    _procCaches() {
-        if (!this._procCmdlineCache) {
-            this._procCmdlineCache = new Map();
-            this._procCmdlineWaiters = new Map();
-            this._procEnvironCache = new Map();
-            this._procEnvironWaiters = new Map();
-        }
-    },
+export class ProcInfo {
+    constructor(core) {
+        this.core = core;
+        this._procCmdlineCache = new Map();
+        this._procCmdlineWaiters = new Map();
+        this._procEnvironCache = new Map();
+        this._procEnvironWaiters = new Map();
+    }
 
-    _readProcAsync(path, callback) {
-        readProcFile(path, callback);
-    },
-
-    _readProcFilePromise(path) {
+    readProcFilePromise(path) {
         return readProcFilePromise(path);
-    },
+    }
 
-    _getProcCmdline(pid, callback) {
+    getProcCmdline(pid, callback) {
         if (!pid) {
             callback('');
             return;
         }
-        this._procCaches();
         if (this._procCmdlineCache.has(pid)) {
             callback(this._procCmdlineCache.get(pid));
             return;
@@ -60,7 +52,7 @@ export const procInfoMethods = {
             return;
         }
         this._procCmdlineWaiters.set(pid, [callback]);
-        this._readProcAsync(`/proc/${pid}/cmdline`, (data) => {
+        readProcFile(`/proc/${pid}/cmdline`, (data) => {
             const cmd = data
                 ? new TextDecoder().decode(data).replace(/\0/g, ' ')
                 : '';
@@ -75,26 +67,21 @@ export const procInfoMethods = {
             }
             const callbacks = this._procCmdlineWaiters.get(pid) || [];
             this._procCmdlineWaiters.delete(pid);
-            for (const cb of callbacks) {
-                try {
-                    cb(cmd);
-                } catch (_e) {}
-            }
+            for (const cb of callbacks)
+                cb(cmd);
         });
-    },
+    }
 
-    _procCmdlineCached(pid) {
+    procCmdlineCached(pid) {
         if (!pid) return '';
-        this._procCaches();
         return this._procCmdlineCache.get(pid);
-    },
+    }
 
-    _getProcEnviron(pid, callback) {
+    getProcEnviron(pid, callback) {
         if (!pid) {
             callback('');
             return;
         }
-        this._procCaches();
         if (this._procEnvironCache.has(pid)) {
             callback(this._procEnvironCache.get(pid));
             return;
@@ -105,7 +92,7 @@ export const procInfoMethods = {
             return;
         }
         this._procEnvironWaiters.set(pid, [callback]);
-        this._readProcAsync(`/proc/${pid}/environ`, (data) => {
+        readProcFile(`/proc/${pid}/environ`, (data) => {
             const env = data ? new TextDecoder().decode(data) : '';
             if (data) {
                 if (this._procEnvironCache.size >= CACHE_LIMIT) {
@@ -116,17 +103,20 @@ export const procInfoMethods = {
             }
             const callbacks = this._procEnvironWaiters.get(pid) || [];
             this._procEnvironWaiters.delete(pid);
-            for (const cb of callbacks) {
-                try {
-                    cb(env);
-                } catch (_e) {}
-            }
+            for (const cb of callbacks)
+                cb(env);
         });
-    },
+    }
 
-    _procEnvironCached(pid) {
+    procEnvironCached(pid) {
         if (!pid) return '';
-        this._procCaches();
         return this._procEnvironCache.get(pid);
-    },
-};
+    }
+
+    destroy() {
+        this._procCmdlineCache.clear();
+        this._procCmdlineWaiters.clear();
+        this._procEnvironCache.clear();
+        this._procEnvironWaiters.clear();
+    }
+}

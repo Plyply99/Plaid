@@ -11,6 +11,7 @@ function keySettings(user = {}) {
     const defaults = {
         'keybind-migration-done': false,
         'keybind-migration-2-done': false,
+        'keybind-migration-3-done': false,
         'inside-gap': 8,
         'move-focus-left': ['<Super><Alt>h'],
         'move-focus-right': ['<Super><Alt>l'],
@@ -19,6 +20,7 @@ function keySettings(user = {}) {
         'toggle-float': ['<Super><Shift>f'],
         'scratchpad-toggle': ['<Super><Control>s'],
         'scratchpad-add': ['<Super><Shift>s'],
+        'cycle-layout': ['<Super><Shift>e'],
     };
     const keys = Object.keys(defaults);
     const u = { ...user };
@@ -40,7 +42,9 @@ test('migration: fresh install keeps the new conflict-free defaults (nothing pin
     s._migrateKeybindingDefaults();
     assert.equal(s._settings._user['keybind-migration-done'], true);
     assert.equal(s._settings._user['keybind-migration-2-done'], true);
+    assert.equal(s._settings._user['keybind-migration-3-done'], true);
     assert.equal('move-focus-left' in s._settings._user, false);
+    assert.equal('cycle-layout' in s._settings._user, false);
     assert.equal('toggle-float' in s._settings._user, false);
 });
 
@@ -52,6 +56,7 @@ test('migration: existing install pins the superseded nav + toggle-float default
     assert.deepEqual(s._settings._user['move-focus-up'], ['<Super>k']);
     assert.deepEqual(s._settings._user['move-focus-down'], ['<Super>j']);
     assert.deepEqual(s._settings._user['toggle-float'], ['<Super><Shift>space']);
+    assert.deepEqual(s._settings._user['cycle-layout'], ['<Super><Shift>grave']);
 });
 
 test('migration: the scratchpad pass still runs, independently of the nav pass', () => {
@@ -62,10 +67,11 @@ test('migration: the scratchpad pass still runs, independently of the nav pass',
 });
 
 test('migration: a customized key is never overwritten', () => {
-    const s = self({ 'inside-gap': 16, 'move-focus-left': ['<Super><Alt>Left'] });
+    const s = self({ 'inside-gap': 16, 'move-focus-left': ['<Super><Alt>Left'], 'cycle-layout': ['<Super><Shift>g'] });
     s._migrateKeybindingDefaults();
     assert.deepEqual(s._settings._user['move-focus-left'], ['<Super><Alt>Left']);
     assert.deepEqual(s._settings._user['move-focus-right'], ['<Super>l']); // others still pinned
+    assert.deepEqual(s._settings._user['cycle-layout'], ['<Super><Shift>g']);
 });
 
 test('migration: is idempotent (a second run changes nothing)', () => {

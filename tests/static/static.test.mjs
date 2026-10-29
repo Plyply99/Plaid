@@ -109,15 +109,19 @@ test('entry point stays small and free of lifecycle wrappers', () => {
   assert.ok(!code.includes('_disable'), 'the entry point must not keep a _disable() alias');
   assert.ok(!/\btry\s*\{/.test(code), 'the entry point must not wrap enable()/disable() in try/catch');
   assert.ok(!/\bcatch\s*\(/.test(code), 'the entry point must not catch errors');
-  assert.ok(!code.includes('Object.assign'), 'prototype augmentation belongs in bootstrap.js');
+  assert.ok(!code.includes('Object.assign'), 'the entry point must not merge prototypes');
+  assert.ok(!code.includes('attachMethods'), 'no custom attach-methods wrapper');
 
   const enable = code.indexOf('enable()');
   const disable = code.indexOf('disable()');
   assert.ok(enable >= 0 && disable > enable, 'enable() and disable() must both be present');
 
   const between = code.slice(enable, disable);
-  assert.ok(between.includes('enablePlaid.call(this)'), 'enable() must delegate to lifecycle.js');
-  assert.ok(code.slice(disable).includes('disablePlaid.call(this)'), 'disable() must delegate to lifecycle.js');
+  assert.ok(between.includes('new PlaidCore(this)'), 'enable() must create the core');
+  assert.ok(code.slice(disable).includes('this._plaid.destroy()'), 'disable() must destroy the core');
+
+  // No module-scope call expressions: initialization happens in enable().
+  assert.ok(!/^[A-Za-z_$][\w$]*\s*\(/m.test(code), 'no calls at module scope');
 });
 
 test('every GLib source is tracked or owned by a cleaned-up field', () => {
@@ -138,4 +142,57 @@ test('every GLib source is tracked or owned by a cleaned-up field', () => {
   }
 
   assert.deepEqual(missed, [], `untracked GLib sources:\n${missed.join('\n')}`);
+});
+
+test('shell modules export classes, not private function bundles', () => {
+  for (const file of moduleFiles) {
+    const src = readFileSync(file, 'utf8');
+    assert.ok(!/^export function _/m.test(src), `${file} exports a private-looking function name`);
+    assert.ok(!/^export const \w+Methods\s*=/m.test(src), `${file} still exports a method bundle`);
+  }
+});
+
+test('shell code logs through console.* only', () => {
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    assert.ok(!/(^|[^.\w$])log\s*\(/.test(src), `${file} still calls log()`);
+  }
+});
+
+test('shell code uses connectObject/disconnectObject for signals', () => {
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    assert.ok(!/\.connect\s*\(/.test(src), `${file} still uses raw .connect()`);
+    assert.ok(!/\.disconnect\s*\(/.test(src), `${file} still uses raw .disconnect()`);
+  }
+});
+
+test('shell modules have no empty catch blocks', () => {
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8');
+    assert.ok(!/catch\s*(\([^)]*\))?\s*\{\s*\}/.test(src), `${file} has an empty catch block`);
+  }
+});
+
+test('cycle-layout default avoids GNOME switch-group-backward', () => {
+  const block = schemaXml.match(/<key name="cycle-layout"[\s\S]*?<\/key>/)?.[0] || '';
+  assert.match(block, /<Super><Shift>e/, 'cycle-layout default must be the conflict-free Super+Shift+E');
+  assert.ok(schemaKeys.has('keybind-migration-3-done'), 'migration marker for cycle-layout is missing');
+});
+
+test('keybinding conflict scanner is limited to known shortcut schemas', () => {
+  const src = readFileSync(join(ext, 'modules', 'keybind-conflicts.js'), 'utf8');
+  assert.ok(!src.includes('list_schemas'), 'the scanner must not walk every installed schema');
+  for (const schema of [
+    'org.gnome.desktop.wm.keybindings',
+    'org.gnome.mutter.keybindings',
+    'org.gnome.mutter.wayland.keybindings',
+    'org.gnome.shell.keybindings',
+    'org.gnome.settings-daemon.plugins.media-keys',
+  ])
+    assert.ok(src.includes(schema), `scanner is missing ${schema}`);
 });

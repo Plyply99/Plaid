@@ -61,6 +61,14 @@ test('scan: finds a clash with a GNOME CUSTOM shortcut (relocatable, type s)', (
     assert.equal(describeConflict(got[0]), 'GNOME — Text Editor');
 });
 
+test('scan: Above_Tab aliases grave for GNOME switch-group-backward', () => {
+    const Gio = fakeGio({ schemas: { 'org.gnome.desktop.wm.keybindings': { 'switch-group-backward': ['<Shift><Super>Above_Tab'] } } });
+    const got = scanKeybindConflicts(Gio, 'plaid', combosOf([['<Super><Shift>grave', 'cycle-layout']]));
+    assert.equal(got.length, 1);
+    assert.equal(got[0].keyName, 'switch-group-backward');
+    assert.equal(describeConflict(got[0]), 'GNOME (Switch windows of an application backward)');
+});
+
 test('scan: modifier order does not matter', () => {
     const Gio = fakeGio({ schemas: { 'org.gnome.desktop.wm.keybindings': { 'switch-input-source-backward': ['<Shift><Super>space'] } } });
     const got = scanKeybindConflicts(Gio, 'plaid', combosOf([['<Super><Shift>space', 'toggle-float']]));
@@ -85,8 +93,9 @@ test('scan: never reports the owning schema against itself', () => {
 });
 
 test('describeConflict: labels each source', () => {
-    assert.equal(describeConflict({ path: null, schemaId: 'org.gnome.desktop.wm.keybindings', keyName: 'minimize' }), 'GNOME (minimize)');
-    assert.equal(describeConflict({ path: null, schemaId: 'org.gnome.desktop.wm.keybindings', keyName: 'switch-input-source-backward' }), 'GNOME (switch input source backward)');
+    assert.equal(describeConflict({ path: null, schemaId: 'org.gnome.desktop.wm.keybindings', keyName: 'minimize' }), 'GNOME (Hide window)');
+    assert.equal(describeConflict({ path: null, schemaId: 'org.gnome.desktop.wm.keybindings', keyName: 'switch-input-source-backward' }), 'GNOME (Switch input source backward)');
+    assert.equal(describeConflict({ path: null, schemaId: 'org.gnome.desktop.wm.keybindings', keyName: 'switch-group-backward' }), 'GNOME (Switch windows of an application backward)');
     assert.equal(describeConflict({ path: '/x/0/', schemaId: 'c', keyName: 'binding', label: '' }), 'GNOME — a custom shortcut');
     assert.equal(describeConflict({ path: null, schemaId: 'org.example.ext', keyName: 'do-thing' }), 'org.example.ext (do-thing)');
 });

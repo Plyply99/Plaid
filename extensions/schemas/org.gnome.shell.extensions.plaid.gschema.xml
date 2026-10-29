@@ -370,7 +370,7 @@
 
     <!-- Keybinding: Cycle Layout -->
     <key name="cycle-layout" type="as">
-      <default><![CDATA[['<Super><Shift>grave']]]></default>
+      <default><![CDATA[['<Super><Shift>e']]]></default>
       <summary>Cycle layout</summary>
       <description>Cycle between dwindle, master-stack, and centered-master-stack</description>
     </key>
@@ -398,6 +398,12 @@
       <default>false</default>
       <summary>Second keybinding default migration marker</summary>
       <description>Set once at enable after the second migration pass. The navigation defaults moved off bare Super+H/Super+L (GNOME's minimize and lock) to Alt+Super+H/L, and toggle-float moved off Super+Shift+Space (GNOME's switch-input-source-backward) to Super+Shift+F, so a fresh install never clashes with GNOME. Existing installs keep whatever they had — the pass pins the old values for keys the user has not customized</description>
+    </key>
+
+    <key name="keybind-migration-3-done" type="b">
+      <default>false</default>
+      <summary>Third keybinding default migration marker</summary>
+      <description>Set once at enable after the third migration pass. The cycle-layout default moved off Super+Shift+grave (GNOME's hidden switch-group-backward binding on US layouts) to Super+Shift+E. Existing installs keep the old default unless they had already customized the key</description>
     </key>
 
     <!-- Drop-Down Terminal -->

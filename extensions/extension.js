@@ -1,16 +1,15 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-import { attachMethods } from './modules/bootstrap.js';
-import { enablePlaid, disablePlaid } from './modules/lifecycle.js';
+import { PlaidCore } from './modules/core.js';
 
 export default class TilingWMExtension extends Extension {
     enable() {
-        enablePlaid.call(this);
+        this._plaid = new PlaidCore(this);
+        this._plaid.enable();
     }
 
     disable() {
-        disablePlaid.call(this);
+        this._plaid.destroy();
+        this._plaid = null;
     }
 }
-
-attachMethods(TilingWMExtension);

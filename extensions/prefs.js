@@ -1,10 +1,10 @@
 import Gio from 'gi://Gio';
 import Adw from 'gi://Adw';
-import Gtk from 'gi://Gtk?version=4.0';
-import Gdk from 'gi://Gdk?version=4.0';
+import Gtk from 'gi://Gtk';
+import Gdk from 'gi://Gdk';
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-import { normalizeAccel } from './modules/helpers.js';
+import { normalizeAccel, normalizeTypedAccel } from './modules/helpers.js';
 import { collectOtherBindings, findConflicts, describeConflict, clearConflictBinding } from './modules/keybind-conflicts.js';
 
 // Conflicts for one shortcut row — the same scan the extension runs, so the
@@ -216,7 +216,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     const ctx = area.get_style_context();
                     const [ok, color] = ctx.lookup_color('accent_color');
                     if (ok) accent = color;
-                } catch (_e) {}
+                } catch (e) {
+                    // The theme may not expose an accent color; keep the default.
+                }
                 cr.setSourceRGBA(accent.red, accent.green, accent.blue, accent.alpha);
                 cr.setLineWidth(2);
                 cr.rectangle(1, 1, width - 2, height - 2);
@@ -598,7 +600,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                     settings.set_strv(key, [hex]);
                     label.label = hex;
                     colorDot.queue_draw();
-                } catch (_e) {}
+                } catch (e) {
+                // GTK color/schema lookup is optional.
+            }
             });
         });
 
@@ -710,7 +714,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 const s = new Gio.Settings({ schema_id: schemaId });
                 s.connect('changed', () => this._refreshShortcutWarnings());
                 this._keybindWatchSettings.push(s);
-            } catch (_e) {}
+            } catch (e) {
+                // The schema may be absent on this system.
+            }
         }
     }
 
@@ -747,7 +753,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
                 mk.connect('changed::custom-keybindings', () => {
                     this._refreshShortcutWarnings();
                 });
-            } catch (_e) {}
+            } catch (e) {
+                // The media-keys schema may be absent on this system.
+            }
         }
         row.add_suffix(warn);
 
@@ -828,7 +836,7 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             label: _('Apply'),
         });
         const parseTyped = () => {
-            const text = entry.get_text().trim();
+            const text = normalizeTypedAccel(entry.get_text().trim());
             if (!text) return null;
             const [ok, keyval, mask] = Gtk.accelerator_parse(text);
             if (!ok || !Gtk.accelerator_valid(keyval, mask)) return null;
