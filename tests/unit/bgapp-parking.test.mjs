@@ -82,3 +82,44 @@ test('_evacuateParkingWorkspace: no user windows + real active is a no-op', () =
 
   assert.equal(activated, false);
 });
+
+test('_evacuateParkingWorkspace: a reentrant workspace change does not recurse', () => {
+  const parking = fakeWorkspace();
+  const real = fakeWorkspace();
+  const user = fakeWin();
+  let userWs = parking;
+  let moves = 0;
+  user.get_workspace = () => userWs;
+  user.change_workspace = (ws) => {
+    moves++;
+    userWs = ws;
+    parking._wins = parking._wins.filter(w => w !== user);
+    real._wins.push(user);
+    // A workspace change emits active-workspace-changed synchronously; the
+    // handler can re-enter evacuation before this call returns.
+    self.bgApp.evacuateParkingWorkspace();
+  };
+  parking._wins.push(user);
+
+  const wm = {
+    get_n_workspaces: () => 2,
+    get_workspace_by_index: (i) => (i === 0 ? parking : real),
+    get_active_workspace: () => parking,
+    append_new_workspace: () => real,
+  };
+  const self = makeSelf({}, {
+    _backgroundAppParkingWs: parking,
+    _backgroundAppWin: null,
+    _matchesBackgroundApp: () => false,
+    _currentTime: () => 0,
+    _wsIndex: (ws) => (ws === parking ? 0 : 1),
+    _scheduleWorkspacePillUpdate() {},
+    _debugLog() {},
+  });
+
+  withGlobalWorkspaceManager(wm, () => self._evacuateParkingWorkspace());
+
+  assert.equal(moves, 1, 'the window must be moved exactly once');
+  assert.equal(real.activated, true);
+  assert.equal(parking._wins.length, 0);
+});

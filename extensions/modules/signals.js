@@ -210,7 +210,19 @@ export class Signals extends PlaidSubsystem {
                 // and leave the parking before the session restore places new
                 // windows there.
                 this.core.debugLog('workspace: active workspace is the hidden parking slot');
-                this.core.bgApp.evacuateParkingWorkspace();
+                // Never switch workspaces synchronously from this signal. The
+                // switch animation (and extensions like Blur My Shell that
+                // wrap _finishWorkspaceSwitch) can re-emit
+                // active-workspace-changed while the parking is still the
+                // reported active workspace, which recursed until stack
+                // overflow. Let the current switch unwind first.
+                this.core.signals.addIdle(() => {
+                    if (!this.core._settings) return false;
+                    if (global.workspace_manager.get_active_workspace() ===
+                        this.core._backgroundAppParkingWs)
+                        this.core.bgApp.evacuateParkingWorkspace();
+                    return false;
+                });
                 return;
             }
             this.core.bgApp.hideParkingCard();

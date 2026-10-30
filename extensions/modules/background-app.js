@@ -23,6 +23,7 @@ import { PlaidSubsystem } from './subsystem.js';
 export class BackgroundApp extends PlaidSubsystem {
     constructor(core) {
         super(core);
+        this._evacuatingParking = false;
     }
 
     initBackgroundApp() {
@@ -1253,61 +1254,67 @@ export class BackgroundApp extends PlaidSubsystem {
     }
 
     evacuateParkingWorkspace() {
-        if (!this.core._settings) return;
-        const parking = this.core._backgroundAppParkingWs;
-        if (!parking) return;
-        const wm = global.workspace_manager;
-        let users = [];
+        if (this._evacuatingParking) return;
+        this._evacuatingParking = true;
         try {
-            users = parking.list_windows().filter(w =>
-                w && w !== this.core._backgroundAppWin &&
-                w !== sessionState.bgAppWindow &&
-                !w.is_on_all_workspaces() &&
-                !this.isBgAppProcessWindow(w) &&
-                !this.matchesBackgroundApp(w));
-        } catch (_e) {
-            return;
-        }
-        const active = wm.get_active_workspace();
-        if (users.length === 0 && active !== parking) {
-            this.hideParkingCard();
-            return;
-        }
-        let target = null;
-        let n = 0;
-        try { n = wm.get_n_workspaces(); } catch (_e) { return; }
-        for (let i = 0; i < n; i++) {
-            const ws = wm.get_workspace_by_index(i);
-            if (ws && ws !== parking) { target = ws; break; }
-        }
-        if (!target) {
-            { target = wm.append_new_workspace(false, this.core.currentTime()); }
-            if (!target) return;
-            this.core.debugLog('background app: evacuation appended a real workspace');
-        }
-        for (const win of users) {
-            {
-                if (win.get_workspace() === parking)
-                    win.change_workspace(target);
+            if (!this.core._settings) return;
+            const parking = this.core._backgroundAppParkingWs;
+            if (!parking) return;
+            const wm = global.workspace_manager;
+            let users = [];
+            try {
+                users = parking.list_windows().filter(w =>
+                    w && w !== this.core._backgroundAppWin &&
+                    w !== sessionState.bgAppWindow &&
+                    !w.is_on_all_workspaces() &&
+                    !this.isBgAppProcessWindow(w) &&
+                    !this.matchesBackgroundApp(w));
+            } catch (_e) {
+                return;
             }
-        }
-        if (active === parking) {
-            { target.activate(this.core.currentTime()); }
-        }
-        if (users.length > 0)
-            this.core.debugLog(`background app: evacuated ${users.length} window(s) from parking to ws=${this.core.geometry.wsIndex(target)}`);
-        this.core.workspacePill.scheduleWorkspacePillUpdate();
-
-        // The parking card may have been skipped earlier because user windows
-        // were still there. Re-run the hide once they have moved, and again
-        // after the activation/overview rebuild settles.
-        this.hideParkingCard();
-        for (const delay of [100, 500, 1500])
-            this.core.signals.addTimeout(delay, () => {
-                if (!this.core._settings) return GLib.SOURCE_REMOVE;
+            const active = wm.get_active_workspace();
+            if (users.length === 0 && active !== parking) {
                 this.hideParkingCard();
-                return GLib.SOURCE_REMOVE;
-            });
+                return;
+            }
+            let target = null;
+            let n = 0;
+            try { n = wm.get_n_workspaces(); } catch (_e) { return; }
+            for (let i = 0; i < n; i++) {
+                const ws = wm.get_workspace_by_index(i);
+                if (ws && ws !== parking) { target = ws; break; }
+            }
+            if (!target) {
+                { target = wm.append_new_workspace(false, this.core.currentTime()); }
+                if (!target) return;
+                this.core.debugLog('background app: evacuation appended a real workspace');
+            }
+            for (const win of users) {
+                {
+                    if (win.get_workspace() === parking)
+                        win.change_workspace(target);
+                }
+            }
+            if (active === parking) {
+                { target.activate(this.core.currentTime()); }
+            }
+            if (users.length > 0)
+                this.core.debugLog(`background app: evacuated ${users.length} window(s) from parking to ws=${this.core.geometry.wsIndex(target)}`);
+            this.core.workspacePill.scheduleWorkspacePillUpdate();
+
+            // The parking card may have been skipped earlier because user windows
+            // were still there. Re-run the hide once they have moved, and again
+            // after the activation/overview rebuild settles.
+            this.hideParkingCard();
+            for (const delay of [100, 500, 1500])
+                this.core.signals.addTimeout(delay, () => {
+                    if (!this.core._settings) return GLib.SOURCE_REMOVE;
+                    this.hideParkingCard();
+                    return GLib.SOURCE_REMOVE;
+                });
+        } finally {
+            this._evacuatingParking = false;
+        }
     }
 
     scheduleBackgroundAppParkingFix() {
