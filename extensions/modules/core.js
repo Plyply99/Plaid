@@ -443,7 +443,18 @@ export class PlaidCore {
         const isLocked = Main.sessionMode.isLocked;
         if (isLocked)
             sessionState.lockCycle = true;
-        this.debugLog(`disable: mode=${mode} isLocked=${isLocked} lockCycle=${sessionState.lockCycle}`);
+        if (this._shuttingDown) {
+            // The shell is exiting. Touching Wayland windows, GL effects, or
+            // restorable shell state here can block the main loop past
+            // systemd's stop timeout, which is the old logout hang. Only
+            // sources and signal handlers need to go before the process dies.
+            this.signals.destroy();
+            this.procInfo.destroy();
+            Main.sessionMode.disconnectObject(this);
+            this._settings = null;
+            this._mutterSettings = null;
+            return;
+        }
 
         this.persistence.destroy();
         this._saveDirtySince = 0;
