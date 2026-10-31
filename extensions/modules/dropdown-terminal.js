@@ -59,12 +59,7 @@ export class DropdownTerminal extends PlaidSubsystem {
                     this.core.windows.removeWindow(win);
                 this.core.blur.removeBlur(win);
                 this.core.borders.removeBorder(win);
-                this.core._dropdownWin = win;
-                const pid = win.get_pid();
-                if (pid > 0)
-                    sessionState.ddtPid = pid;
-                win._plaidDdt = true;
-                win._plaidDdtCommand = command;
+                this.armDropdownWindow(win, command);
                 this.core._dropdownPending = false;
                 this.configureDropdownTerminal(win);
                 // A surviving terminal must not sit behind the tiled windows
@@ -115,8 +110,72 @@ export class DropdownTerminal extends PlaidSubsystem {
         }
     }
 
+    isDropdownWindowAlive(win) {
+        if (!win) return false;
+        try {
+            return !!win.get_compositor_private();
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    disconnectDropdownSignals(win) {
+        if (win) {
+            if (this.core._dropdownGeometryIds) {
+                for (const id of this.core._dropdownGeometryIds)
+                    win.disconnectObject(id);
+            }
+            if (this.core._dropdownUnmanagedId)
+                win.disconnectObject(this.core._dropdownUnmanagedId);
+        }
+        this.core._dropdownGeometryIds = null;
+        this.core._dropdownUnmanagedId = 0;
+    }
+
+    forgetDropdownWindow(win) {
+        if (!win || this.core._dropdownWin !== win) return;
+        try {
+            this.disconnectDropdownSignals(win);
+        } catch (_e) {
+            // The window can be disposed after an unmanage; tracking is gone.
+        }
+        this.core._dropdownWin = null;
+        sessionState.ddtPid = 0;
+    }
+
+    armDropdownWindow(win, command) {
+        this.core._dropdownWin = win;
+        const pid = win.get_pid();
+        if (pid > 0)
+            sessionState.ddtPid = pid;
+        win._plaidDdt = true;
+        win._plaidDdtCommand = command;
+        this.core._dropdownGeometryIds = [
+            this.connectObject(win, 'size-changed', () => {
+                if (this.core._dropdownWin === win) this.core.borders.applyDropdownEffects(win);
+            }),
+            this.connectObject(win, 'position-changed', () => {
+                if (this.core._dropdownWin === win) this.core.borders.applyDropdownEffects(win);
+            }),
+        ];
+        this.core._dropdownUnmanagedId = this.connectObject(win, 'unmanaged', () => {
+            if (sessionState.ddtPid === pid)
+                sessionState.ddtPid = 0;
+            if (this.core._dropdownWin === win) {
+                this.core._dropdownWin = null;
+                this.core._dropdownGeometryIds = null;
+                this.core._dropdownUnmanagedId = 0;
+            }
+        });
+    }
+
     toggleDropdownTerminal() {
-        const win = this.core._dropdownWin;
+        let win = this.core._dropdownWin;
+        if (win && !this.isDropdownWindowAlive(win)) {
+            this.core.debugLog('dropdown: discarding stale tracked window');
+            this.forgetDropdownWindow(win);
+            win = null;
+        }
         if (win) {
             if (win.minimized) {
                 this.showDropdownTerminal(win);
@@ -136,6 +195,10 @@ export class DropdownTerminal extends PlaidSubsystem {
             this.clearDropdownWaiters();
             return GLib.SOURCE_REMOVE;
         });
+        this.launchDropdownTerminal(command);
+    }
+
+    launchDropdownTerminal(command) {
         let appInfo = null;
         {
             appInfo = Gio.AppInfo.create_from_commandline(
@@ -224,26 +287,7 @@ export class DropdownTerminal extends PlaidSubsystem {
                 a.set_opacity(0);
             }
         }
-        this.core._dropdownWin = win;
-        const pid = win.get_pid();
-        if (pid > 0)
-            sessionState.ddtPid = pid;
-        win._plaidDdt = true;
-        win._plaidDdtCommand = command;
-        this.core._dropdownGeometryIds = [];
-        this.core._dropdownGeometryIds.push(this.connectObject(win, 'size-changed', () => {
-            if (this.core._dropdownWin === win) this.core.borders.applyDropdownEffects(win);
-        }));
-        this.core._dropdownGeometryIds.push(this.connectObject(win, 'position-changed', () => {
-            if (this.core._dropdownWin === win) this.core.borders.applyDropdownEffects(win);
-        }));
-        this.core._dropdownUnmanagedId = this.connectObject(win, 'unmanaged', () => {
-            if (sessionState.ddtPid === pid)
-                sessionState.ddtPid = 0;
-            if (this.core._dropdownWin === win) {
-                this.core._dropdownWin = null;
-            }
-        });
+        this.armDropdownWindow(win, command);
         this.configureDropdownTerminal(win);
         this.showDropdownTerminal(win);
         // Reveal backstop: `move_resize_frame` is asynchronous, and a client
@@ -450,16 +494,7 @@ export class DropdownTerminal extends PlaidSubsystem {
         this.clearDropdownWaiters();
         const win = this.core._dropdownWin;
         if (!win) return;
-        if (this.core._dropdownGeometryIds) {
-            for (const id of this.core._dropdownGeometryIds) {
-                win.disconnectObject(id);
-            }
-            this.core._dropdownGeometryIds = null;
-        }
-        if (this.core._dropdownUnmanagedId) {
-            win.disconnectObject(this.core._dropdownUnmanagedId);
-            this.core._dropdownUnmanagedId = 0;
-        }
+        this.disconnectDropdownSignals(win);
         this.core.borders.removeBorder(win);
         this.core.masks.removeMask(win);
         this.core.blur.removeBlur(win);

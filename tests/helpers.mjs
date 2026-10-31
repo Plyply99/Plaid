@@ -222,6 +222,12 @@ export function fakeWin(opts = {}) {
     get_window_type: () => opts.type ?? 0,
     get_pid: () => opts.pid ?? 0,
     get_compositor_private: () => opts.actor ?? null,
+    _signals: {},
+    connectObject(name, callback) {
+      this._signals[name] = callback;
+      return {};
+    },
+    disconnectObject() {},
     is_skip_taskbar: () => opts.skipTaskbar ?? false,
     is_fullscreen: () => opts.fullscreen ?? false,
     is_maximized: () => opts.maximized ?? false,

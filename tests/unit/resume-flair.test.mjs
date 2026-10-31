@@ -144,3 +144,43 @@ test('recheckDropdownWaiters: retries adoption when no spawn is pending', () => 
   assert.equal(core._dropdownWin, win);
   sessionState.ddtPid = 0;
 });
+
+test('adoptExistingDropdown: re-arms the unmanaged cleanup', () => {
+  sessionState.ddtPid = 0;
+  const win = fakeWin({ pid: 4242, minimized: false });
+  win._plaidDdt = true;
+  win._plaidDdtCommand = 'ghostty';
+  const ws = { list_windows: () => [win] };
+  const wm = { get_n_workspaces: () => 1, get_workspace_by_index: () => ws };
+  const core = makeSelf({ 'dropdown-terminal-command': 'ghostty' });
+
+  withGlobal({ workspace_manager: wm, get_current_time: () => 0 }, () => {
+    core.dropdown.adoptExistingDropdown();
+  });
+
+  assert.equal(core._dropdownWin, win);
+  assert.equal(sessionState.ddtPid, 4242);
+  assert.equal(typeof win._signals.unmanaged, 'function');
+
+  win._signals.unmanaged();
+  assert.equal(core._dropdownWin, null);
+  assert.equal(sessionState.ddtPid, 0);
+});
+
+test('toggleDropdownTerminal: discards a stale tracked window and relaunches', () => {
+  sessionState.ddtPid = 4242;
+  const win = fakeWin({ minimized: false });
+  win.get_compositor_private = () => null;
+  const core = makeSelf({ 'dropdown-terminal-command': 'ghostty' });
+  core._dropdownWin = win;
+  let launched = false;
+  core.dropdown.launchDropdownTerminal = () => {
+    launched = true;
+  };
+
+  core.dropdown.toggleDropdownTerminal();
+
+  assert.equal(core._dropdownWin, null);
+  assert.equal(sessionState.ddtPid, 0);
+  assert.equal(launched, true);
+});
