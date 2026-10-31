@@ -23,6 +23,9 @@ import { PlaidSubsystem } from './subsystem.js';
 export class BackgroundApp extends PlaidSubsystem {
     constructor(core) {
         super(core);
+        // Reentrancy guard, not a lifecycle flag: a workspace change can
+        // synchronously re-enter evacuation through another extension's
+        // workspace-switch hook.
         this._evacuatingParking = false;
     }
 
@@ -705,20 +708,45 @@ export class BackgroundApp extends PlaidSubsystem {
         this.core._markerSweepPending = true;
         const gen = (this.core._markerSweepGen || 0) + 1;
         this.core._markerSweepGen = gen;
+        const enumerateChildren = (dir) => new Promise((resolve, reject) => {
+            dir.enumerate_children_async(
+                'standard::name', Gio.FileQueryInfoFlags.NONE,
+                GLib.PRIORITY_DEFAULT, null, (d, res) => {
+                    try {
+                        resolve(d.enumerate_children_finish(res));
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+        });
+        const nextFiles = (children, count) => new Promise((resolve, reject) => {
+            children.next_files_async(
+                count, GLib.PRIORITY_DEFAULT, null, (c, res) => {
+                    try {
+                        resolve(c.next_files_finish(res));
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+        });
         const run = async () => {
             const set = new Set();
-            {
-                const dir = Gio.File.new_for_path('/proc');
-                const children = dir.enumerate_children(
-                    'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            const dir = Gio.File.new_for_path('/proc');
+            // Directory listing is async too: a synchronous enumerator here
+            // blocks the compositor while /proc is walked.
+            const children = await enumerateChildren(dir);
+            try {
                 const pids = [];
-                let info;
-                while ((info = children.next_file(null))) {
-                    const name = info.get_name();
-                    if (/^\d+$/.test(name))
-                        pids.push(parseInt(name, 10));
-                }
-                { children.close(null); }
+                let infos;
+                do {
+                    if (this.core._markerSweepGen !== gen) return;
+                    infos = await nextFiles(children, 256);
+                    for (const info of infos) {
+                        const name = info.get_name();
+                        if (/^\d+$/.test(name))
+                            pids.push(parseInt(name, 10));
+                    }
+                } while (infos.length > 0);
                 for (let start = 0; start < pids.length; start += 32) {
                     if (this.core._markerSweepGen !== gen) return;
                     const batch = pids.slice(start, start + 32);
@@ -738,6 +766,8 @@ export class BackgroundApp extends PlaidSubsystem {
                         if (last > 0) set.add(last);
                     }
                 }
+            } finally {
+                children.close(null);
             }
             if (this.core._markerSweepGen !== gen) return;
             this.core._markerSweepPending = false;

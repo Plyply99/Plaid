@@ -261,3 +261,19 @@ test('subsystem cleanup is the last statement and normally indented', () => {
     assert.ok(!/\n\}\n\}\s*$/.test(src), `${file} has stray class-closing braces`);
   }
 });
+
+test('shell code avoids synchronous file APIs', () => {
+  const forbidden = [
+    ['GLib.file_get_contents()', /GLib\.file_get_contents\s*\(/],
+    ['sync load_contents()', /\.load_contents\s*\(/],
+    ['sync enumerate_children()', /\.enumerate_children\s*\(/],
+    ['sync next_file()', /\.next_file\s*\(/],
+  ];
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    for (const [name, re] of forbidden)
+      assert.ok(!re.test(src), `${file} uses ${name}`);
+  }
+});
