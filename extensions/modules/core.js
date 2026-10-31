@@ -306,6 +306,17 @@ export class PlaidCore {
             if (!resumeLockCycle)
                 this.layouts.retileAll();
             this.bgApp.checkDynamicWorkspaces();
+            // retileAll() is intentionally skipped on a lock-cycle resume, and
+            // nothing else schedules the first Flair pass. Without this, the
+            // new core's border/mask/blur maps stay empty until a focus or
+            // restack signal fires. updateBorders() is debounced, so the
+            // delayed pass coalesces with any signal-triggered pass.
+            this.borders.updateBorders();
+            this.signals.addTimeout(300, () => {
+                if (!this._settings) return false;
+                this.borders.updateBorders();
+                return false;
+            });
             sessionState.lockCycle = false;
             return false;
         });
