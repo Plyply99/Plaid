@@ -19,7 +19,6 @@ import * as WorkspaceThumbnailModule from 'resource:///org/gnome/shell/ui/worksp
 import { sessionState } from './session-state.js';
 import { PlaidSubsystem } from './subsystem.js';
 
-
 export class BackgroundApp extends PlaidSubsystem {
     constructor(core) {
         super(core);
@@ -27,6 +26,7 @@ export class BackgroundApp extends PlaidSubsystem {
         // synchronously re-enter evacuation through another extension's
         // workspace-switch hook.
         this._evacuatingParking = false;
+        this._markerSweepCancellable = null;
     }
 
     initBackgroundApp() {
@@ -217,14 +217,10 @@ export class BackgroundApp extends PlaidSubsystem {
             return recorded;
         const win = this.core._backgroundAppWin;
         if (win) {
-            try {
-                const ws = win.get_workspace();
-                if (ws && this.workspaceIndex(ws) >= 0 &&
-                    !this.workspaceHasUserWindows(ws))
-                    return ws;
-            } catch (_e) {
-                // Mid-unmap; fall through to a fresh reservation.
-            }
+            const ws = win.get_workspace();
+            if (ws && this.workspaceIndex(ws) >= 0 &&
+                !this.workspaceHasUserWindows(ws))
+                return ws;
         }
         return null;
     }
@@ -235,12 +231,8 @@ export class BackgroundApp extends PlaidSubsystem {
         // Never reorder a workspace that still contains real user windows:
         // that would move their workspace slot and could merge layouts.
         if (this.workspaceHasUserWindows(parking)) return false;
-        try {
-            global.workspace_manager.reorder_workspace(parking, 0);
-        } catch (e) {
-            this.core.debugLog(`background app: parking reorder failed: ${e.message}`);
-            return false;
-        }
+        global.workspace_manager.reorder_workspace(parking, 0);
+
         // Index-keyed fallback map only; live-workspace membership is the
         // primary path, but keep the fallback accurate.
         this.core.windows.refreshWorkspaceIndices();
@@ -264,16 +256,12 @@ export class BackgroundApp extends PlaidSubsystem {
         // particular), and mutter's workspace.list_windows() includes them —
         // counting them made every hide guard bail out and exposed ws0.
         if (!ws) return false;
-        try {
-            return ws.list_windows().some(w =>
-                w && w !== this.core._backgroundAppWin &&
-                w !== sessionState.bgAppWindow &&
-                !w.is_on_all_workspaces() &&
-                !this.isBgAppProcessWindow(w) &&
-                !(this.core._settings && this.matchesBackgroundApp(w)));
-        } catch (_e) {
-            return true;
-        }
+        return ws.list_windows().some(w =>
+            w && w !== this.core._backgroundAppWin &&
+            w !== sessionState.bgAppWindow &&
+            !w.is_on_all_workspaces() &&
+            !this.isBgAppProcessWindow(w) &&
+            !(this.core._settings && this.matchesBackgroundApp(w)));
     }
 
     hideParkingCard() {
@@ -283,16 +271,13 @@ export class BackgroundApp extends PlaidSubsystem {
         // leading blank) — the price of stability over surgical removal.
         const parkingWs = this.core._backgroundAppParkingWs;
         if (!parkingWs) return;
-        try {
-            // Never hide the card while it is the user's current workspace or
-            // still holds a user window. The evacuation should make both cases
-            // transient, but an invisible current workspace is worse than a
-            // visible parking card.
-            if (global.workspace_manager.get_active_workspace() === parkingWs) return;
-            if (this.workspaceHasUserWindows(parkingWs)) return;
-        } catch (_e) {
-            return;
-        }
+        // Never hide the card while it is the user's current workspace or
+        // still holds a user window. The evacuation should make both cases
+        // transient, but an invisible current workspace is worse than a
+        // visible parking card.
+        if (global.workspace_manager.get_active_workspace() === parkingWs) return;
+        if (this.workspaceHasUserWindows(parkingWs)) return;
+
         {
             const controls = Main.overview && Main.overview._overview && Main.overview._overview.controls;
             const display = controls && controls._workspacesDisplay;
@@ -333,12 +318,8 @@ export class BackgroundApp extends PlaidSubsystem {
     }
 
     isDynamicWorkspaces() {
-        try {
-            if (!this.core._mutterSettings) return false;
-            return this.core._mutterSettings.get_boolean('dynamic-workspaces');
-        } catch (_e) {
-            return false;
-        }
+        if (!this.core._mutterSettings) return false;
+        return this.core._mutterSettings.get_boolean('dynamic-workspaces');
     }
 
     checkDynamicWorkspaces() {
@@ -703,15 +684,18 @@ export class BackgroundApp extends PlaidSubsystem {
     }
 
     startMarkerPidSweep(marker) {
+        if (this.core._shuttingDown) return;
         if (this.core._markerSweepPending) return;
         if (!this.markerSweepAllowed()) return;
         this.core._markerSweepPending = true;
         const gen = (this.core._markerSweepGen || 0) + 1;
         this.core._markerSweepGen = gen;
+        const cancellable = new Gio.Cancellable();
+        this._markerSweepCancellable = cancellable;
         const enumerateChildren = (dir) => new Promise((resolve, reject) => {
             dir.enumerate_children_async(
                 'standard::name', Gio.FileQueryInfoFlags.NONE,
-                GLib.PRIORITY_DEFAULT, null, (d, res) => {
+                GLib.PRIORITY_DEFAULT, cancellable, (d, res) => {
                     try {
                         resolve(d.enumerate_children_finish(res));
                     } catch (e) {
@@ -721,7 +705,7 @@ export class BackgroundApp extends PlaidSubsystem {
         });
         const nextFiles = (children, count) => new Promise((resolve, reject) => {
             children.next_files_async(
-                count, GLib.PRIORITY_DEFAULT, null, (c, res) => {
+                count, GLib.PRIORITY_DEFAULT, cancellable, (c, res) => {
                     try {
                         resolve(c.next_files_finish(res));
                     } catch (e) {
@@ -751,13 +735,13 @@ export class BackgroundApp extends PlaidSubsystem {
                     if (this.core._markerSweepGen !== gen) return;
                     const batch = pids.slice(start, start + 32);
                     const envs = await Promise.all(batch.map(pidN =>
-                        this.core.procInfo.readProcFilePromise(`/proc/${pidN}/environ`)));
+                        this.core.procInfo.readProcFilePromise(`/proc/${pidN}/environ`, cancellable)));
                     if (this.core._markerSweepGen !== gen) return;
                     for (let i = 0; i < batch.length; i++) {
                         if (!envs[i]) continue;
                         const env = new TextDecoder().decode(envs[i]);
                         if (!env.split('\0').includes(marker)) continue;
-                        const status = await this.core.procInfo.readProcFilePromise(`/proc/${batch[i]}/status`);
+                        const status = await this.core.procInfo.readProcFilePromise(`/proc/${batch[i]}/status`, cancellable);
                         if (!status) continue;
                         const m = new TextDecoder().decode(status).match(/^NSpid:\s+(.+)$/m);
                         if (!m) continue;
@@ -767,7 +751,8 @@ export class BackgroundApp extends PlaidSubsystem {
                     }
                 }
             } finally {
-                children.close(null);
+                if (!cancellable.is_cancelled())
+                    children.close(null);
             }
             if (this.core._markerSweepGen !== gen) return;
             this.core._markerSweepPending = false;
@@ -780,7 +765,19 @@ export class BackgroundApp extends PlaidSubsystem {
         run().catch(() => {
             if (this.core._markerSweepGen === gen)
                 this.core._markerSweepPending = false;
+        }).finally(() => {
+            if (this._markerSweepCancellable === cancellable)
+                this._markerSweepCancellable = null;
         });
+    }
+
+    cancelMarkerSweep() {
+        if (this._markerSweepCancellable) {
+            this._markerSweepCancellable.cancel();
+            this._markerSweepCancellable = null;
+        }
+        this.core._markerSweepGen = (this.core._markerSweepGen || 0) + 1;
+        this.core._markerSweepPending = false;
     }
 
     handleBackgroundAppWindowCreated(win) {
@@ -867,23 +864,12 @@ export class BackgroundApp extends PlaidSubsystem {
             }
             // Defer the park out of the login burst: the workspace mutation,
             // the maximize and the clone's first paint land in the settled
-            // session. Each step is independent so a park failure can never
-            // skip the clone.
-            try {
-                this.parkBackgroundAppOnWorkspace(win);
-            } catch (e) {
-                this.core.debugLog(`background app: park failed: ${e.message}`);
-            }
-            try {
-                this.startBackgroundAppParkWatch(win);
-            } catch (e) {
-                this.core.debugLog(`background app: park watch failed: ${e.message}`);
-            }
-            try {
-                this.ensureBackgroundAppClone(win);
-            } catch (e) {
-                this.core.debugLog(`background app: clone failed: ${e.message}`);
-            }
+            // session. The clone is built after the park so it starts from the
+            // settled maximized source.
+            this.parkBackgroundAppOnWorkspace(win);
+            this.startBackgroundAppParkWatch(win);
+            this.ensureBackgroundAppClone(win);
+
             // Retry/heal the clone from here (post-park, so the clone is built
             // from the settled maximized source) until it is stable.
             this.startBackgroundAppCloneWatch(win);
@@ -1017,25 +1003,14 @@ export class BackgroundApp extends PlaidSubsystem {
             { parked = win.maximized_horz && win.maximized_vert; }
             if (parked) return;
         }
-        try {
-            if (win.get_workspace() !== this.core._backgroundAppParkingWs)
-                win.change_workspace(this.core._backgroundAppParkingWs);
-        } catch (e) {
-            this.core.debugLog(`background app: park change_workspace failed: ${e.message}`);
-        }
-        try {
-            // Maximize for a sharp full-size clone source — mutter-enforced,
-            // clients cannot refuse it (native Wayland clients may ignore
-            // plain move_resize configures). The GIR signature takes no args.
-            win.maximize();
-        } catch (e) {
-            this.core.debugLog(`background app: park maximize failed: ${e.message}`);
-        }
-        try {
-            win.move_resize_frame(true, mon.x, mon.y, mon.width, mon.height);
-        } catch (e) {
-            this.core.debugLog(`background app: park resize failed: ${e.message}`);
-        }
+
+        if (win.get_workspace() !== this.core._backgroundAppParkingWs)
+            win.change_workspace(this.core._backgroundAppParkingWs);
+        // Maximize for a sharp full-size clone source — mutter-enforced,
+        // clients cannot refuse it (native Wayland clients may ignore
+        // plain move_resize configures). The GIR signature takes no args.
+        win.maximize();
+        win.move_resize_frame(true, mon.x, mon.y, mon.width, mon.height);
         const f = win.get_frame_rect();
         this.core.debugLog(`background app: parked ws=${beforeIdx}->${targetIdx} frame=(${f.x},${f.y},${f.width},${f.height})`);
         this.hideParkingCard();
@@ -1063,16 +1038,12 @@ export class BackgroundApp extends PlaidSubsystem {
         };
         const parkingIsClear = (ws) => {
             if (!ws) return false;
-            try {
-                if (global.workspace_manager.get_active_workspace() === ws) return false;
-                // Sticky windows (the DDT) are on every workspace and must not
-                // count as parking content — that was the ws0-visible bug.
-                return !ws.list_windows().some(w =>
-                    w && w !== sessionState.bgAppWindow &&
-                    !w.is_on_all_workspaces());
-            } catch (_e) {
-                return false;
-            }
+            if (global.workspace_manager.get_active_workspace() === ws) return false;
+            // Sticky windows (the DDT) are on every workspace and must not
+            // count as parking content — that was the ws0-visible bug.
+            return !ws.list_windows().some(w =>
+                w && w !== sessionState.bgAppWindow &&
+                !w.is_on_all_workspaces());
         };
 
         const origGetNeighbor = Meta.Workspace.prototype.get_neighbor;
@@ -1195,14 +1166,9 @@ export class BackgroundApp extends PlaidSubsystem {
             remapBindings.push(`move-to-workspace-${i}`);
         }
         remapBindings.push('switch-to-workspace-last', 'move-to-workspace-last');
-        try {
-            const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
-            for (const name of remapBindings)
-                Main.wm.setCustomKeybindingHandler(name, modes, remapHandler);
-        } catch (e) {
-            // A keybind registration failure must never abort the reservation.
-            this.core.debugLog(`background app: keybind remap failed: ${e.message}`);
-        }
+        const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+        for (const name of remapBindings)
+            Main.wm.setCustomKeybindingHandler(name, modes, remapHandler);
         this.core._backgroundAppHiding = {
             origGetNeighbor, wrappedGetNeighbor,
             origUpdateVisibility, wrappedUpdateVisibility,
@@ -1291,17 +1257,12 @@ export class BackgroundApp extends PlaidSubsystem {
             const parking = this.core._backgroundAppParkingWs;
             if (!parking) return;
             const wm = global.workspace_manager;
-            let users = [];
-            try {
-                users = parking.list_windows().filter(w =>
-                    w && w !== this.core._backgroundAppWin &&
-                    w !== sessionState.bgAppWindow &&
-                    !w.is_on_all_workspaces() &&
-                    !this.isBgAppProcessWindow(w) &&
-                    !this.matchesBackgroundApp(w));
-            } catch (_e) {
-                return;
-            }
+            const users = parking.list_windows().filter(w =>
+                w && w !== this.core._backgroundAppWin &&
+                w !== sessionState.bgAppWindow &&
+                !w.is_on_all_workspaces() &&
+                !this.isBgAppProcessWindow(w) &&
+                !this.matchesBackgroundApp(w));
             const active = wm.get_active_workspace();
             if (users.length === 0 && active !== parking) {
                 this.hideParkingCard();
@@ -1309,7 +1270,7 @@ export class BackgroundApp extends PlaidSubsystem {
             }
             let target = null;
             let n = 0;
-            try { n = wm.get_n_workspaces(); } catch (_e) { return; }
+            n = wm.get_n_workspaces();
             for (let i = 0; i < n; i++) {
                 const ws = wm.get_workspace_by_index(i);
                 if (ws && ws !== parking) { target = ws; break; }
@@ -1396,11 +1357,7 @@ export class BackgroundApp extends PlaidSubsystem {
         sessionState.parkingWorkspace = this.core._backgroundAppParkingWs;
         sessionState.parkingFront = this.core._backgroundAppParkingFront;
         // Route through the logged park so every re-park is journal-visible.
-        try {
-            this.parkBackgroundAppOnWorkspace(this.core._backgroundAppWin);
-        } catch (e) {
-            this.core.debugLog(`background app: reassert park failed: ${e.message}`);
-        }
+        this.parkBackgroundAppOnWorkspace(this.core._backgroundAppWin);
     }
 
     ensureBackgroundAppClone(win) {
@@ -1501,24 +1458,20 @@ export class BackgroundApp extends PlaidSubsystem {
             this.core.debugLog('background app: clone position skipped (monitor geometry unavailable)');
             return;
         }
-        try {
-            clone.set_position(mon.x, mon.y);
+        clone.set_position(mon.x, mon.y);
+        clone.set_size(mon.width, mon.height);
+        // The same-size set_size is a no-op, so the clone never re-runs
+        // clutter_clone_allocate and its internal scale stays 1.0 (computed
+        // when the source was 0x0). Nudge the size to force a real
+        // re-allocation that recomputes the stretch from the settled source.
+        {
+            clone.queue_relayout();
+            clone.set_size(mon.width + 1, mon.height + 1);
             clone.set_size(mon.width, mon.height);
-            // The same-size set_size is a no-op, so the clone never re-runs
-            // clutter_clone_allocate and its internal scale stays 1.0 (computed
-            // when the source was 0x0). Nudge the size to force a real
-            // re-allocation that recomputes the stretch from the settled source.
-            {
-                clone.queue_relayout();
-                clone.set_size(mon.width + 1, mon.height + 1);
-                clone.set_size(mon.width, mon.height);
-            }
-            const src = clone.get_source();
-            this.core.debugLog(`background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
-                `source=${src ? `${Math.round(src.width)}x${Math.round(src.height)}` : 'none'}`);
-        } catch (e) {
-            this.core.debugLog(`background app: clone position failed: ${e.message}`);
         }
+        const src = clone.get_source();
+        this.core.debugLog(`background app: clone at (${mon.x},${mon.y},${mon.width},${mon.height}) ` +
+            `source=${src ? `${Math.round(src.width)}x${Math.round(src.height)}` : 'none'}`);
     }
 
     refillBackgroundApp() {
@@ -1553,8 +1506,7 @@ export class BackgroundApp extends PlaidSubsystem {
     }
 
     clearBackgroundApp(releaseReservation = true) {
-        this.core._markerSweepGen = (this.core._markerSweepGen || 0) + 1;
-        this.core._markerSweepPending = false;
+        this.cancelMarkerSweep();
         this.core._bgAppRecheckPending = false;
         this.core._markerPidCache = null;
         if (this.core._bgAppRecheckId) {
@@ -1670,16 +1622,10 @@ export class BackgroundApp extends PlaidSubsystem {
                     // workspace — never remove it. Only the appended trailing
                     // fallback parking is removable. Sticky windows (the DDT)
                     // and the BGAPP itself do not make the parking occupied.
-                    let empty = false;
-                    try {
-                        empty = !parking.list_windows().some(w =>
-                            w && !w.is_on_all_workspaces() &&
-                            w !== sessionState.bgAppWindow &&
-                            !this.isBgAppProcessWindow(w));
-                    } catch (_e) {
-                        // Workspace already disposed during shutdown.
-                        empty = false;
-                    }
+                    const empty = !parking.list_windows().some(w =>
+                        w && !w.is_on_all_workspaces() &&
+                        w !== sessionState.bgAppWindow &&
+                        !this.isBgAppProcessWindow(w));
                     if (!this.core._backgroundAppParkingFront && empty)
                         global.workspace_manager.remove_workspace(parking, this.core.currentTime());
                 }

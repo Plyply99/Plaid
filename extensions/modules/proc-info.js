@@ -5,9 +5,9 @@ import Gio from 'gi://Gio';
 
 const CACHE_LIMIT = 256;
 
-export function readProcFile(path, callback) {
+export function readProcFile(path, callback, cancellable = null) {
     const file = Gio.File.new_for_path(path);
-    file.load_contents_async(null, (f, res) => {
+    file.load_contents_async(cancellable, (f, res) => {
         let data = null;
         try {
             const [ok, bytes] = f.load_contents_finish(res);
@@ -20,8 +20,8 @@ export function readProcFile(path, callback) {
     });
 }
 
-export function readProcFilePromise(path) {
-    return new Promise((resolve) => readProcFile(path, resolve));
+export function readProcFilePromise(path, cancellable = null) {
+    return new Promise((resolve) => readProcFile(path, resolve, cancellable));
 }
 
 export class ProcInfo {
@@ -33,8 +33,8 @@ export class ProcInfo {
         this._procEnvironWaiters = new Map();
     }
 
-    readProcFilePromise(path) {
-        return readProcFilePromise(path);
+    readProcFilePromise(path, cancellable = null) {
+        return readProcFilePromise(path, cancellable);
     }
 
     getProcCmdline(pid, callback) {

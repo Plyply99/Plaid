@@ -8,36 +8,7 @@ import { PlaidSubsystem } from './subsystem.js';
 
 // --- Grab-Based Mouse Resize & Swap ---
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // --- Pick Mode ---
-
 
 export class Grab extends PlaidSubsystem {
     constructor(core) {
@@ -65,28 +36,24 @@ export class Grab extends PlaidSubsystem {
     }
 
     computeGrabGraceThreshold() {
-        try {
-            const [px, py] = global.get_pointer();
-            // get_monitor_at_point() does not exist on Meta.Display in
-            // GNOME 50/51 — the old call threw (swallowed) and the grace
-            // was pinned at 10px on every monitor. Find the monitor by
-            // geometry containment instead.
-            let mon = null;
-            const n = global.display.get_n_monitors();
-            for (let i = 0; i < n; i++) {
-                const g = global.display.get_monitor_geometry(i);
-                if (px >= g.x && px < g.x + g.width && py >= g.y && py < g.y + g.height) {
-                    mon = g;
-                    break;
-                }
+        const [px, py] = global.get_pointer();
+        // get_monitor_at_point() does not exist on Meta.Display in
+        // GNOME 50/51 — the old call threw (swallowed) and the grace
+        // was pinned at 10px on every monitor. Find the monitor by
+        // geometry containment instead.
+        let mon = null;
+        const n = global.display.get_n_monitors();
+        for (let i = 0; i < n; i++) {
+            const g = global.display.get_monitor_geometry(i);
+            if (px >= g.x && px < g.x + g.width && py >= g.y && py < g.y + g.height) {
+                mon = g;
+                break;
             }
-            if (!mon)
-                mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
-            const minDim = Math.min(mon.width, mon.height);
-            return Math.max(10, Math.min(30, Math.round(minDim / 100)));
-        } catch (_e) {
-            return 10;
         }
+        if (!mon)
+            mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
+        const minDim = Math.min(mon.width, mon.height);
+        return Math.max(10, Math.min(30, Math.round(minDim / 100)));
     }
 
     handleGrabBegin(metaWindow, grabOp) {
@@ -712,13 +679,10 @@ export class Grab extends PlaidSubsystem {
             this.core._animTargets.set(win, { x, y, w, h });
             return;
         }
-        try {
-            const actor = win.get_compositor_private();
-            if (actor) actor.remove_all_transitions();
-            win.move_resize_frame(true, x, y, w, h);
-        } catch (e) {
-            this.core.debugLog(`_safeMove FAILED: ${win.get_wm_class_instance() || '?'} to ${x},${y} ${w}x${h}: ${e.message}`);
-        }
+
+        const actor = win.get_compositor_private();
+        if (actor) actor.remove_all_transitions();
+        win.move_resize_frame(true, x, y, w, h);
     }
 
     destroy() {

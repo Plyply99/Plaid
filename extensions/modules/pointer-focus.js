@@ -8,25 +8,10 @@ import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { PlaidSubsystem } from './subsystem.js';
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // The Chromium/CEF process model: every child process (renderer, gpu-process,
 // zygote, crashpad-handler…) carries --type= on its cmdline. Steam's CEF host
 // (./steamwebhelper …) is the exception — no --type= — so match its process
 // name here too. Verdicts cached per PID (own cache).
-
 
 export class PointerFocus extends PlaidSubsystem {
     constructor(core) {
@@ -62,35 +47,27 @@ export class PointerFocus extends PlaidSubsystem {
     }
 
     pointerFocusTick() {
-        try {
-            const [px, py] = global.get_pointer();
-            if (px === this.core._pointerFocusLastX && py === this.core._pointerFocusLastY)
-                return;
-            this.core._pointerFocusLastX = px;
-            this.core._pointerFocusLastY = py;
-            this.applyPointerFocus(px, py);
-        } catch (e) {
-            this.core.debugLog(`pointer focus: tick failed: ${e.message}`);
-        }
+        const [px, py] = global.get_pointer();
+        if (px === this.core._pointerFocusLastX && py === this.core._pointerFocusLastY)
+            return;
+        this.core._pointerFocusLastX = px;
+        this.core._pointerFocusLastY = py;
+        this.applyPointerFocus(px, py);
     }
 
     applyPointerFocus(px, py) {
-        try {
-            if (Main.overview.visible) return;
-            if (Main.modalCount > 0) return;
-            const target = this.resolveWindowByScan(px, py);
-            if (!target) return;
-            if (!this.canPointerFocusWindow(target)) return;
-            if (target === global.display.focus_window) return;
-            if (target === this.core._backgroundAppWin) return;
-            // Scratchpad members are NOT excluded: a shown scratchpad window is an
-            // ordinary visible float, so hover focus treats it normally. Hidden
-            // scratch windows never reach here — the scan skips minimized windows.
-            this.core.debugLog(`pointer focus: ${target.get_wm_class_instance() || '?'} title=${target.get_title() || '?'}`);
-            target.focus(global.get_current_time());
-        } catch (e) {
-            this.core.debugLog(`pointer focus: apply failed: ${e.message}`);
-        }
+        if (Main.overview.visible) return;
+        if (Main.modalCount > 0) return;
+        const target = this.resolveWindowByScan(px, py);
+        if (!target) return;
+        if (!this.canPointerFocusWindow(target)) return;
+        if (target === global.display.focus_window) return;
+        if (target === this.core._backgroundAppWin) return;
+        // Scratchpad members are NOT excluded: a shown scratchpad window is an
+        // ordinary visible float, so hover focus treats it normally. Hidden
+        // scratch windows never reach here — the scan skips minimized windows.
+        this.core.debugLog(`pointer focus: ${target.get_wm_class_instance() || '?'} title=${target.get_title() || '?'}`);
+        target.focus(global.get_current_time());
     }
 
     resolveWindowByScan(px, py) {
@@ -168,38 +145,34 @@ export class PointerFocus extends PlaidSubsystem {
     }
 
     isChromiumProcessWindow(win) {
-        try {
-            const pid = win.get_pid();
-            if (!pid) return false;
-            if (this.core._chromiumProcessCache) {
-                const cached = this.core._chromiumProcessCache.get(pid);
-                if (cached !== undefined) return cached;
-            }
-            const evaluate = (cmd) => {
-                const verdict = /--type=|steamwebhelper/.test(cmd || '');
-                if (!this.core._chromiumProcessCache) return;
-                if (this.core._chromiumProcessCache.size >= 256)
-                    this.core._chromiumProcessCache.clear();
-                this.core._chromiumProcessCache.set(pid, verdict);
-                if (!verdict) {
-                    // Force the next tick to re-evaluate this position; the tick
-                    // otherwise short-circuits when the pointer has not moved.
-                    this.core._pointerFocusLastX = -1;
-                    this.core._pointerFocusLastY = -1;
-                }
-            };
-            const cachedCmd = this.core.procInfo.procCmdlineCached(pid);
-            if (cachedCmd !== undefined) {
-                evaluate(cachedCmd);
-                return this.core._chromiumProcessCache.get(pid) === true;
-            }
-            this.core.procInfo.getProcCmdline(pid, evaluate);
-            // Unknown process: skip hover focus until the async read lands. This
-            // preserves the menu-safety behavior for Chromium/Steam on first hover.
-            return true;
-        } catch (_e) {
-            return false;
+        const pid = win.get_pid();
+        if (!pid) return false;
+        if (this.core._chromiumProcessCache) {
+            const cached = this.core._chromiumProcessCache.get(pid);
+            if (cached !== undefined) return cached;
         }
+        const evaluate = (cmd) => {
+            const verdict = /--type=|steamwebhelper/.test(cmd || '');
+            if (!this.core._chromiumProcessCache) return;
+            if (this.core._chromiumProcessCache.size >= 256)
+                this.core._chromiumProcessCache.clear();
+            this.core._chromiumProcessCache.set(pid, verdict);
+            if (!verdict) {
+                // Force the next tick to re-evaluate this position; the tick
+                // otherwise short-circuits when the pointer has not moved.
+                this.core._pointerFocusLastX = -1;
+                this.core._pointerFocusLastY = -1;
+            }
+        };
+        const cachedCmd = this.core.procInfo.procCmdlineCached(pid);
+        if (cachedCmd !== undefined) {
+            evaluate(cachedCmd);
+            return this.core._chromiumProcessCache.get(pid) === true;
+        }
+        this.core.procInfo.getProcCmdline(pid, evaluate);
+        // Unknown process: skip hover focus until the async read lands. This
+        // preserves the menu-safety behavior for Chromium/Steam on first hover.
+        return true;
     }
 
     destroy() {

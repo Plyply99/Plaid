@@ -327,13 +327,7 @@ export class PlaidCore {
         sessionState.stashedTiling = null;
         if (!s) return;
 
-        const alive = (win) => {
-            try {
-                return !!(win && win.get_compositor_private());
-            } catch (e) {
-                return false;
-            }
-        };
+        const alive = (win) => !!(win && win.get_compositor_private());
         // Re-derive per-window slots from the LIVE workspace. While Plaid is
         // disabled the shell's dynamic-workspace check can remove the empty
         // BGAPP parking, shifting every workspace index down; the stashed
@@ -352,12 +346,7 @@ export class PlaidCore {
                 s.windowWSIndices.delete(win);
                 continue;
             }
-            let ws = null;
-            try {
-                ws = win.get_workspace();
-            } catch (_e) {
-                ws = null;
-            }
+            const ws = win.get_workspace();
             if (!ws) {
                 s.windowWorkspaces.delete(win);
                 s.windowWSIndices.delete(win);
@@ -439,11 +428,11 @@ export class PlaidCore {
     }
 
     destroy() {
-        const mode = Main.sessionMode.currentMode;
         const isLocked = Main.sessionMode.isLocked;
         if (isLocked)
             sessionState.lockCycle = true;
         if (this._shuttingDown) {
+            this.bgApp.cancelMarkerSweep();
             // The shell is exiting. Touching Wayland windows, GL effects, or
             // restorable shell state here can block the main loop past
             // systemd's stop timeout, which is the old logout hang. Only

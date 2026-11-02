@@ -1,14 +1,7 @@
 // Workspace retile orchestration and the master-stack / dwindle layout
 // implementation. Methods live on this subsystem class.
 
-
-
-
-
-
-
 // --- Animation ---
-
 
 export class Layouts {
     constructor(core) {
@@ -388,12 +381,10 @@ export class Layouts {
         }
         const frameA = winA.get_frame_rect();
         const frameB = winB.get_frame_rect();
-        try {
-            winA.move_resize_frame(true, frameB.x, frameB.y, frameB.width, frameB.height);
-            winB.move_resize_frame(true, frameA.x, frameA.y, frameA.width, frameA.height);
-        } catch (e) {
-            this.core.debugLog(`swap move_resize failed: ${e.message}`);
-        }
+
+        winA.move_resize_frame(true, frameB.x, frameB.y, frameB.width, frameB.height);
+        winB.move_resize_frame(true, frameA.x, frameA.y, frameA.width, frameA.height);
+
     }
 
     resizeMasterStack(focused, workspace, axis, delta) {

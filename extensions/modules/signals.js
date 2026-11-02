@@ -427,6 +427,7 @@ export class Signals extends PlaidSubsystem {
         // global::shutdown. Only the first one does work.
         if (this.core._shuttingDown) return;
         this.core._shuttingDown = true;
+        this.core.bgApp.cancelMarkerSweep();
         // Tracked GLib sources (idle/timeout wrappers).
         this.removeAllSources();
 

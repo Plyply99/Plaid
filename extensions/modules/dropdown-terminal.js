@@ -10,7 +10,6 @@ import Meta from 'gi://Meta';
 import { sessionState } from './session-state.js';
 import { PlaidSubsystem } from './subsystem.js';
 
-
 export class DropdownTerminal extends PlaidSubsystem {
     constructor(core) {
         super(core);
@@ -50,7 +49,7 @@ export class DropdownTerminal extends PlaidSubsystem {
                     win._plaidDdt = false;
                     if (sessionState.ddtPid === win.get_pid())
                         sessionState.ddtPid = 0;
-                    try { win.delete(this.core.currentTime()); } catch (e) { this.core.debugLog(`dropdown: stale close failed: ${e.message}`); }
+                    win.delete(this.core.currentTime());
                     continue;
                 }
                 // Adoption can be late (cold env cache / recycled wrapper):
@@ -112,11 +111,8 @@ export class DropdownTerminal extends PlaidSubsystem {
 
     isDropdownWindowAlive(win) {
         if (!win) return false;
-        try {
-            return !!win.get_compositor_private();
-        } catch (_e) {
-            return false;
-        }
+
+        return !!win.get_compositor_private();
     }
 
     disconnectDropdownSignals(win) {
@@ -134,11 +130,9 @@ export class DropdownTerminal extends PlaidSubsystem {
 
     forgetDropdownWindow(win) {
         if (!win || this.core._dropdownWin !== win) return;
-        try {
-            this.disconnectDropdownSignals(win);
-        } catch (_e) {
-            // The window can be disposed after an unmanage; tracking is gone.
-        }
+
+        this.disconnectDropdownSignals(win);
+
         this.core._dropdownWin = null;
         sessionState.ddtPid = 0;
     }
@@ -477,11 +471,9 @@ export class DropdownTerminal extends PlaidSubsystem {
 
     hideDropdownWindow(win) {
         if (!win) return;
-        try {
-            win.minimize();
-        } catch (e) {
-            this.core.debugLog(`dropdown: hide minimize failed: ${e.message}`);
-        }
+
+        win.minimize();
+
         // Minimizing an ALREADY-minimized window is a no-op, so an actor left
         // visible by an earlier cycle would keep painting behind the tiles.
         // Hide it explicitly; revealDropdownWindow() restores it on show.
@@ -512,7 +504,7 @@ export class DropdownTerminal extends PlaidSubsystem {
             win._plaidDdt = false;
             if (sessionState.ddtPid && sessionState.ddtPid === win.get_pid())
                 sessionState.ddtPid = 0;
-            try { win.delete(this.core.currentTime()); } catch (e) { this.core.debugLog(`dropdown: stale close failed: ${e.message}`); }
+            win.delete(this.core.currentTime());
         }
     }
 

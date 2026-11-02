@@ -9,7 +9,6 @@ import St from 'gi://St';
 import cairo from 'gi://cairo';
 import { PlaidSubsystem } from './subsystem.js';
 
-
 export class Borders extends PlaidSubsystem {
     constructor(core) {
         super(core);
@@ -88,8 +87,7 @@ export class Borders extends PlaidSubsystem {
             // while the geometry sig stays identical — the border would
             // linger on the dead actor (invisible). The parent check forces
             // a recreate on the current actor.
-            let alive = false;
-            try { alive = old.get_parent() === actor; } catch (_e) { alive = false; }
+            const alive = old.get_parent() === actor;
             if (old._plaidSig === sig && alive) return true;
             old.destroy();
             this.core._windowBorders.delete(win);
@@ -241,31 +239,23 @@ export class Borders extends PlaidSubsystem {
 
     startBorderAnimation() {
         if (this.core._borderAnimId) return;
-        try {
-            if (!this.core._settings.get_boolean('gradient-borders')) return;
-            if (this.core._settings.get_int('border-animation-speed') <= 0) return;
-        } catch (e) {
-            this.core.debugLog(`_startBorderAnimation failed: ${e.message}`);
-            return;
-        }
+
+        if (!this.core._settings.get_boolean('gradient-borders')) return;
+        if (this.core._settings.get_int('border-animation-speed') <= 0) return;
+
         this.core.debugLog('border animation: start');
         this.core._borderAnimId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
-            try {
-                if (!this.core._settings ||
-                    !this.core._settings.get_boolean('gradient-borders') ||
-                    this.core._settings.get_int('border-animation-speed') <= 0) {
-                    this.core.debugLog('border animation: stop (settings)');
-                    this.stopBorderAnimation();
-                    return GLib.SOURCE_REMOVE;
-                }
-                if (this.core._grabOp) {
-                    return GLib.SOURCE_CONTINUE;
-                }
-            } catch (e) {
-                this.core.debugLog(`border animation tick failed: ${e.message}`);
+            if (!this.core._settings ||
+                !this.core._settings.get_boolean('gradient-borders') ||
+                this.core._settings.get_int('border-animation-speed') <= 0) {
+                this.core.debugLog('border animation: stop (settings)');
                 this.stopBorderAnimation();
                 return GLib.SOURCE_REMOVE;
             }
+            if (this.core._grabOp) {
+                return GLib.SOURCE_CONTINUE;
+            }
+
             // Rotation follows border-animation-speed alone (see _repaintBorder).
             const period = this.core.borderMath.borderRotationMs(this.core._settings.get_int('border-animation-speed'));
             const theta = period > 0 ? ((Date.now() / period) % 1) * Math.PI * 2 : 0;
@@ -289,19 +279,14 @@ export class Borders extends PlaidSubsystem {
     }
 
     syncBorderAnimation() {
-        try {
-            if (!this.core._settings) return;
-            const wantAnim = this.core._settings.get_boolean('gradient-borders') &&
-                this.core._settings.get_int('border-animation-speed') > 0 &&
-                (this.core._windowBorders.size > 0 || this.core._windowMasks.size > 0);
-            if (wantAnim)
-                this.startBorderAnimation();
-            else
-                this.stopBorderAnimation();
-        } catch (e) {
-            this.core.debugLog(`_syncBorderAnimation failed: ${e.message}`);
+        if (!this.core._settings) return;
+        const wantAnim = this.core._settings.get_boolean('gradient-borders') &&
+            this.core._settings.get_int('border-animation-speed') > 0 &&
+            (this.core._windowBorders.size > 0 || this.core._windowMasks.size > 0);
+        if (wantAnim)
+            this.startBorderAnimation();
+        else
             this.stopBorderAnimation();
-        }
     }
 
     updateBordersDuringGrab() {

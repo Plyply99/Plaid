@@ -4,16 +4,7 @@
 //
 // Methods live on this subsystem class.
 
-
-
-
-
-
-
-
-
 // --- Grab-Based Mouse Resize & Swap ---
-
 
 export class Scratchpad {
     constructor(core) {
@@ -39,25 +30,22 @@ export class Scratchpad {
             this.core.debugLog('scratch add: skipped (no workspace)');
             return;
         }
-        try {
-            const frame = win.get_frame_rect();
-            this.core._scratchpadWindows.set(win, {
-                workspace: ws,
-                x: frame.x, y: frame.y, w: frame.width, h: frame.height,
-            });
-            this.core._toggleFloatWindows.add(win);
-            win.minimize();
-            {
-                const a = win.get_compositor_private();
-                this.core.debugLog(`scratch add: after minimize minimized=${win.minimized} actorVisible=${a ? a.visible : '?'}`);
-            }
-            this.core._scratchpadVisible = false;
-            this.core.layouts.retileWorkspace(ws);
-            this.core.workspaces.showPopup('Added to Scratchpad');
-            this.core.debugLog(`scratch add: added ${win.get_wm_class() || 'window'}`);
-        } catch (e) {
-            this.core.debugLog(`scratch add failed: ${e.message}`);
+
+        const frame = win.get_frame_rect();
+        this.core._scratchpadWindows.set(win, {
+            workspace: ws,
+            x: frame.x, y: frame.y, w: frame.width, h: frame.height,
+        });
+        this.core._toggleFloatWindows.add(win);
+        win.minimize();
+        {
+            const a = win.get_compositor_private();
+            this.core.debugLog(`scratch add: after minimize minimized=${win.minimized} actorVisible=${a ? a.visible : '?'}`);
         }
+        this.core._scratchpadVisible = false;
+        this.core.layouts.retileWorkspace(ws);
+        this.core.workspaces.showPopup('Added to Scratchpad');
+        this.core.debugLog(`scratch add: added ${win.get_wm_class() || 'window'}`);
     }
 
     scratchpadToggle() {
@@ -173,29 +161,23 @@ export class Scratchpad {
             this.core._scratchpadRings.get(win).destroy();
             this.core._scratchpadRings.delete(win);
         }
-        try {
-            win.unminimize();
-            if (saved.workspace && win.get_workspace() !== saved.workspace) {
-                { win.change_workspace(saved.workspace); }
-            }
-            // The remove/toggle-off key always runs on a VISIBLE, active
-            // window — it is already at its remembered (or user-adjusted)
-            // position, so keep it there. The old unconditional re-apply of
-            // the saved rect yanked a moved-while-shown window back to a
-            // stale rect. Only fall back to the saved rect if the frame is
-            // unusable (degenerate = can't tell where the window is).
-            const f = win.get_frame_rect();
-            if (f.width <= 0 || f.height <= 0) {
-                win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
-            }
-            this.core.layouts.retileWorkspace(saved.workspace);
-            this.core.workspaces.showPopup('Removed from Scratchpad');
-        } catch (e) {
-            // Was a silent catch: an exception here (e.g. a dead saved
-            // workspace from dynamic-workspace churn) left the toggle-off
-            // with NO restore and NO popup — "the key does nothing".
-            this.core.debugLog(`scratch remove failed: ${e.message}`);
+
+        win.unminimize();
+        if (saved.workspace && win.get_workspace() !== saved.workspace) {
+            { win.change_workspace(saved.workspace); }
         }
+        // The remove/toggle-off key always runs on a VISIBLE, active
+        // window — it is already at its remembered (or user-adjusted)
+        // position, so keep it there. The old unconditional re-apply of
+        // the saved rect yanked a moved-while-shown window back to a
+        // stale rect. Only fall back to the saved rect if the frame is
+        // unusable (degenerate = can't tell where the window is).
+        const f = win.get_frame_rect();
+        if (f.width <= 0 || f.height <= 0) {
+            win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
+        }
+        this.core.layouts.retileWorkspace(saved.workspace);
+        this.core.workspaces.showPopup('Removed from Scratchpad');
     }
 
     destroy() {

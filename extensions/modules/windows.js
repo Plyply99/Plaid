@@ -6,7 +6,6 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import { PlaidSubsystem } from './subsystem.js';
 
-
 export class Windows extends PlaidSubsystem {
     constructor(core) {
         super(core);
@@ -47,23 +46,18 @@ export class Windows extends PlaidSubsystem {
     }
 
     moveCursorToWindow(win) {
-        try {
-            const frame = win.get_frame_rect();
-            if (frame.width === 0 || frame.height === 0) return false;
-            const centerX = frame.x + frame.width / 2;
-            const centerY = frame.y + frame.height / 2;
-            // mutter-51 removed Clutter.get_default_backend (the 51.β→.rc
-            // window); the context-accessor route works on both 50 and 51.
-            const backend = (typeof Clutter.get_default_backend === 'function')
-                ? Clutter.get_default_backend()
-                : global.stage.get_context().get_backend();
-            const seat = backend.get_default_seat();
-            seat.warp_pointer(centerX, centerY);
-            return true;
-        } catch (e) {
-            this.core.debugLog(`_moveCursorToWindow failed: ${e.message}`);
-            return false;
-        }
+        const frame = win.get_frame_rect();
+        if (frame.width === 0 || frame.height === 0) return false;
+        const centerX = frame.x + frame.width / 2;
+        const centerY = frame.y + frame.height / 2;
+        // mutter-51 removed Clutter.get_default_backend (the 51.β→.rc
+        // window); the context-accessor route works on both 50 and 51.
+        const backend = (typeof Clutter.get_default_backend === 'function')
+            ? Clutter.get_default_backend()
+            : global.stage.get_context().get_backend();
+        const seat = backend.get_default_seat();
+        seat.warp_pointer(centerX, centerY);
+        return true;
     }
 
     cursorWarpDeferred(win) {
@@ -552,12 +546,7 @@ export class Windows extends PlaidSubsystem {
 
     refreshWorkspaceIndices() {
         for (const win of this.core._windowWorkspaces.keys()) {
-            let ws = null;
-            try {
-                ws = win.get_workspace();
-            } catch (_e) {
-                ws = null;
-            }
+            const ws = win.get_workspace();
             if (ws)
                 this.core._windowWSIndices.set(win, this.core.geometry.wsIndex(ws));
             else
@@ -578,12 +567,7 @@ export class Windows extends PlaidSubsystem {
             // down, and an index comparison silently filters out every tiled
             // window (no Flair, no retile). Floats bypass this and kept working,
             // which was the tell.
-            let live = null;
-            try {
-                live = w.get_workspace();
-            } catch (_e) {
-                live = null;
-            }
+            const live = w.get_workspace();
             if (live)
                 return live === workspace;
             return this.core._windowWSIndices.get(w) === targetIndex;
@@ -591,7 +575,6 @@ export class Windows extends PlaidSubsystem {
     }
 
     reassertFloatingTransients() {
-
         if (!this.core._settings || !this.core._settings.get_boolean('enabled'))
             return false;
         let moved = false;
@@ -718,13 +701,9 @@ export class Windows extends PlaidSubsystem {
             this.core._animTargets.set(win, { x, y, w, h });
             return;
         }
-        try {
-            const actor = win.get_compositor_private();
-            if (actor) actor.remove_all_transitions();
-            win.move_resize_frame(true, x, y, w, h);
-        } catch (e) {
-            this.core.debugLog(`_moveWindow failed: ${e.message}`);
-        }
+        const actor = win.get_compositor_private();
+        if (actor) actor.remove_all_transitions();
+        win.move_resize_frame(true, x, y, w, h);
     }
 
     convertMaximizedToGaps(win) {

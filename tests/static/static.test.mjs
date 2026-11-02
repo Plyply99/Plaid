@@ -277,3 +277,33 @@ test('shell code avoids synchronous file APIs', () => {
       assert.ok(!re.test(src), `${file} uses ${name}`);
   }
 });
+
+test('GObject.registerClass is not inside a class method', () => {
+  for (const file of moduleFiles) {
+    const src = readFileSync(file, 'utf8');
+    assert.ok(!/^ {8,}.*GObject\.registerClass/m.test(src),
+      `${file} registers a GObject class inside a class method`);
+  }
+});
+
+test('try/catch budget and no wrappers around standard calls', () => {
+  const budgets = new Map([
+    ['blur.js', 6],
+    ['mask.js', 3],
+    ['background-app.js', 8],
+  ]);
+  const denied = 'disconnectObject|destroy|get_compositor_private|get_frame_rect|' +
+    'get_buffer_rect|get_workspace|minimize|maximize|unminimize|delete|' +
+    'change_workspace|move_resize_frame|make_above|stick|raise|activate';
+  const wrapped = new RegExp(`\\btry\\s*\\{\\s*(?:[A-Za-z_$][\\w$]*\\.)*(?:${denied})\\s*\\(`);
+  let total = 0;
+  for (const file of [join(ext, 'extension.js'), ...moduleFiles]) {
+    const src = readFileSync(file, 'utf8');
+    const count = (src.match(/\btry\s*\{/g) || []).length;
+    total += count;
+    const allowed = budgets.get(basename(file)) ?? 3;
+    assert.ok(count <= allowed, `${file} has ${count} try blocks (max ${allowed})`);
+    assert.ok(!wrapped.test(src), `${file} wraps a standard call in try/catch`);
+  }
+  assert.ok(total <= 35, `shell code has ${total} try blocks (max 35)`);
+});

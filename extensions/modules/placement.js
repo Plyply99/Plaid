@@ -6,34 +6,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import St from 'gi://St';
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // --- Master-Stack Helpers ---
-
 
 export class Placement {
     constructor(core) {
@@ -185,22 +158,18 @@ export class Placement {
             // stopped on the first in-slot tick — a restore landing between
             // ticks would be missed.
             const heldSlotOk = () => {
-                try {
-                    const ws = s.win.get_workspace();
-                    if (!ws) return false;
-                    const layout = this.core.windows.getWorkspaceLayout(ws);
-                    if (layout === 'floating') return true;
-                    const gap = this.core._settings.get_int('inside-gap');
-                    const workArea = ws.get_work_area_for_monitor(global.display.get_primary_monitor());
-                    if (!workArea || !workArea.width) return false;
-                    const slot = this.core.grab.windowSlotRect(s.win, ws, layout, workArea, gap);
-                    if (!slot) return false;
-                    const f = s.win.get_frame_rect();
-                    return Math.abs(f.x - slot.x) <= 4 && Math.abs(f.y - slot.y) <= 4 &&
-                        Math.abs(f.width - slot.w) <= 4 && Math.abs(f.height - slot.h) <= 4;
-                } catch (_e) {
-                    return false;
-                }
+                const ws = s.win.get_workspace();
+                if (!ws) return false;
+                const layout = this.core.windows.getWorkspaceLayout(ws);
+                if (layout === 'floating') return true;
+                const gap = this.core._settings.get_int('inside-gap');
+                const workArea = ws.get_work_area_for_monitor(global.display.get_primary_monitor());
+                if (!workArea || !workArea.width) return false;
+                const slot = this.core.grab.windowSlotRect(s.win, ws, layout, workArea, gap);
+                if (!slot) return false;
+                const f = s.win.get_frame_rect();
+                return Math.abs(f.x - slot.x) <= 4 && Math.abs(f.y - slot.y) <= 4 &&
+                    Math.abs(f.width - slot.w) <= 4 && Math.abs(f.height - slot.h) <= 4;
             };
             const revealHeld = () => {
                 if (!this.core._settings || !s.win || !s.win._plaidHoldReveal) return;
@@ -236,18 +205,14 @@ export class Placement {
                     // the fallback restore the final state instead of only
                     // signalling completion, or the window stays see-through.
                     if (!(this.core._pendingWarp && this.core._pendingWarp.has(s.win))) {
-                        try {
-                            const a = s.win.get_compositor_private();
-                            if (a) {
-                                a.visible = true;
-                                a.set_opacity(255);
-                            }
-                            const effect = this.core._windowMasks && this.core._windowMasks.get(s.win);
-                            if (effect && effect.setOpacityUniform)
-                                effect.setOpacityUniform(1);
-                        } catch (e) {
-                            this.core.debugLog(`fade finalize failed: ${e.message}`);
+                        const a = s.win.get_compositor_private();
+                        if (a) {
+                            a.visible = true;
+                            a.set_opacity(255);
                         }
+                        const effect = this.core._windowMasks && this.core._windowMasks.get(s.win);
+                        if (effect && effect.setOpacityUniform)
+                            effect.setOpacityUniform(1);
                     }
                     done();
                 }
@@ -482,83 +447,79 @@ export class Placement {
     }
 
     verifyAnimationLanding(s, kind, pure = false) {
-        try {
-            if (this.core._grabOp) return false;
-            const win = s.win;
-            if (!win || !win.get_compositor_private()) {
-                if (!pure)
-                    this.core.debugLog(`anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
-                return false;
-            }
-            if (this.core._landingGivenUp && this.core._landingGivenUp.has(win)) return false;
-            const f = win.get_frame_rect();
-            // The deferred new-window placement must land PRECISELY (pure
-            // mode): the 16px tolerance silently accepted off-landings like
-            // mutter's shadow-clamped frame (8px x-offset) and never
-            // re-requested, leaving the window at wrong screen gaps. The
-            // animated tick path keeps 16px — sliding frames.
-            const tol = kind === 'new' && pure ? 4 : 16;
-            if (Math.abs(f.x - s.targetX) > tol || Math.abs(f.y - s.targetY) > tol ||
-                Math.abs(f.width - s.targetW) > tol || Math.abs(f.height - s.targetH) > tol) {
-                if (!pure) {
-                    this.core.debugLog(`anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} ` +
-                        `frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
-                    {
-                        const mws = win.get_workspace();
-                        if (mws) {
-                            const tree = this.core.bsp.bspGetTree(mws);
-                            const min = this.core.bsp.getWindowMinSize(win);
-                            if (tree)
-                                this.core.debugLog(`diag: tree=${JSON.stringify(tree)} min=${min.w}x${min.h}`);
-                        }
-                    }
-                    const prev = this.core._mismatchFrames.get(win);
-                    this.core._mismatchFrames.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
-                    const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
-                    // A settling client can re-apply its remembered geometry
-                    // after placement (XWayland Emacs: 1936x1185). That is not a
-                    // minimum-size refusal — learning it as one bent the dwindle
-                    // ratio to the client's own frame and persisted the result.
-                    // Wait out the settle window; stable clients still bend and
-                    // float through the normal retry path afterwards.
-                    const settling = !!(win._plaidSettleUntil && win._plaidSettleUntil > Date.now());
-                    if (!settling && prev && refusesShrink &&
-                        Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
-                        Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1) {
-                        this.recordObservedMin(win, f, { w: s.targetW, h: s.targetH });
-                        this.adjustPinnedTree(win, win.get_workspace());
-                    }
-                    this.retryLanding(win);
-                }
-                return false;
-            } else {
-                if (this.core._landingRetries) this.core._landingRetries.delete(win);
-                if (this.core._landingGivenUp) this.core._landingGivenUp.delete(win);
-                if (this.core._mismatchFrames) this.core._mismatchFrames.delete(win);
-                if (this.core._pendingWarp && this.core._pendingWarp.has(win)) {
-                    this.core._pendingWarp.delete(win);
-                    this.core.windows.moveCursorToWindow(win);
-                    // The window has landed — cancel the 2.5s backstop reveal
-                    // (it must not force-reveal a window that later moves to
-                    // an inactive workspace) and re-attach flair that the
-                    // pending-warp state skipped.
-                    //
-                    // The settle poll is deliberately NOT cancelled here:
-                    // this function also runs on the 'tiled' verify path of
-                    // every animated retile, where killing an armed settle
-                    // poll would silently skip the client-resize correction
-                    // for give-up windows. The poll self-expires at 6s.
-                    if (win._plaidInvisibleTimer) {
-                        GLib.source_remove(win._plaidInvisibleTimer);
-                        win._plaidInvisibleTimer = 0;
-                    }
-                    this.core.signals.scheduleBorders();
-                    this.core.borders.updateBorders();
-                }
-                return true;
-            }
-        } catch (_e) {
+        if (this.core._grabOp) return false;
+        const win = s.win;
+        if (!win || !win.get_compositor_private()) {
+            if (!pure)
+                this.core.debugLog(`anim: landing skipped (window gone) ${kind} id=${win ? win.get_id() : '?'}`);
             return false;
+        }
+        if (this.core._landingGivenUp && this.core._landingGivenUp.has(win)) return false;
+        const f = win.get_frame_rect();
+        // The deferred new-window placement must land PRECISELY (pure
+        // mode): the 16px tolerance silently accepted off-landings like
+        // mutter's shadow-clamped frame (8px x-offset) and never
+        // re-requested, leaving the window at wrong screen gaps. The
+        // animated tick path keeps 16px — sliding frames.
+        const tol = kind === 'new' && pure ? 4 : 16;
+        if (Math.abs(f.x - s.targetX) > tol || Math.abs(f.y - s.targetY) > tol ||
+            Math.abs(f.width - s.targetW) > tol || Math.abs(f.height - s.targetH) > tol) {
+            if (!pure) {
+                this.core.debugLog(`anim: landing mismatch (${kind}) ${win.get_wm_class_instance() || '?'} id=${win.get_id()} minimized=${win.minimized} ` +
+                    `frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                {
+                    const mws = win.get_workspace();
+                    if (mws) {
+                        const tree = this.core.bsp.bspGetTree(mws);
+                        const min = this.core.bsp.getWindowMinSize(win);
+                        if (tree)
+                            this.core.debugLog(`diag: tree=${JSON.stringify(tree)} min=${min.w}x${min.h}`);
+                    }
+                }
+                const prev = this.core._mismatchFrames.get(win);
+                this.core._mismatchFrames.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+                const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
+                // A settling client can re-apply its remembered geometry
+                // after placement (XWayland Emacs: 1936x1185). That is not a
+                // minimum-size refusal — learning it as one bent the dwindle
+                // ratio to the client's own frame and persisted the result.
+                // Wait out the settle window; stable clients still bend and
+                // float through the normal retry path afterwards.
+                const settling = !!(win._plaidSettleUntil && win._plaidSettleUntil > Date.now());
+                if (!settling && prev && refusesShrink &&
+                    Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
+                    Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1) {
+                    this.recordObservedMin(win, f, { w: s.targetW, h: s.targetH });
+                    this.adjustPinnedTree(win, win.get_workspace());
+                }
+                this.retryLanding(win);
+            }
+            return false;
+        } else {
+            if (this.core._landingRetries) this.core._landingRetries.delete(win);
+            if (this.core._landingGivenUp) this.core._landingGivenUp.delete(win);
+            if (this.core._mismatchFrames) this.core._mismatchFrames.delete(win);
+            if (this.core._pendingWarp && this.core._pendingWarp.has(win)) {
+                this.core._pendingWarp.delete(win);
+                this.core.windows.moveCursorToWindow(win);
+                // The window has landed — cancel the 2.5s backstop reveal
+                // (it must not force-reveal a window that later moves to
+                // an inactive workspace) and re-attach flair that the
+                // pending-warp state skipped.
+                //
+                // The settle poll is deliberately NOT cancelled here:
+                // this function also runs on the 'tiled' verify path of
+                // every animated retile, where killing an armed settle
+                // poll would silently skip the client-resize correction
+                // for give-up windows. The poll self-expires at 6s.
+                if (win._plaidInvisibleTimer) {
+                    GLib.source_remove(win._plaidInvisibleTimer);
+                    win._plaidInvisibleTimer = 0;
+                }
+                this.core.signals.scheduleBorders();
+                this.core.borders.updateBorders();
+            }
+            return true;
         }
     }
 

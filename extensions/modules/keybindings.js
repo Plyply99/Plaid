@@ -33,7 +33,6 @@ const PLAID_KEYBIND_KEYS = [
     'scratchpad-toggle', 'scratchpad-add', 'dropdown-terminal',
 ];
 
-
 export class Keybindings extends PlaidSubsystem {
     constructor(core) {
         super(core);
@@ -294,15 +293,11 @@ export class Keybindings extends PlaidSubsystem {
             .replace('%s', () => action)
             .replace('%s', () => owner);
         this.core.debugLog(`keybind conflict: ${msg}`);
-        try {
-            if (Main.osdWindowManager.showOne) {
-                const icon = new Gio.ThemedIcon({ name: 'dialog-warning-symbolic' });
-                Main.osdWindowManager.showOne(
-                    global.display.get_current_monitor(), icon, msg, null, -1);
-                return;
-            }
-        } catch (e) {
-            this.core.debugLog(`keybind conflict osd failed: ${e.message}`);
+        if (Main.osdWindowManager && Main.osdWindowManager.showOne) {
+            const icon = new Gio.ThemedIcon({ name: 'dialog-warning-symbolic' });
+            Main.osdWindowManager.showOne(
+                global.display.get_current_monitor(), icon, msg, null, -1);
+            return;
         }
         this.core.workspaces.showPopup(_('Shortcut unavailable'), msg, 2200);
     }
