@@ -13,11 +13,16 @@ echo "Syntax gate OK"
 
 npm test
 
-if [ -x /tmp/opencode/shexli313/bin/shexli ] && [ -f dist/plaid@plyply99.zip ]; then
+# Shexli is a persistent venv (not part of the repo). Recreate it with:
+#   python3.13 -m venv ~/Projects/shexli
+#   ~/Projects/shexli/bin/pip install shexli==0.2.1
+SHEXLI="${SHEXLI:-$HOME/Projects/shexli/bin/shexli}"
+
+if [ -x "$SHEXLI" ] && [ -f dist/plaid@plyply99.zip ]; then
     echo
     echo "Shexli"
     echo "-------"
-    /tmp/opencode/shexli313/bin/shexli --format text dist/plaid@plyply99.zip || true
+    "$SHEXLI" --format text dist/plaid@plyply99.zip || true
 else
     echo "Shexli skipped (venv or dist/plaid@plyply99.zip missing)"
 fi
