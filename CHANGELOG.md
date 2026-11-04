@@ -32,9 +32,11 @@ Releases older than v50.43 predate this changelog; see the git history and the
   no longer overlap, and dwindle layouts restore their saved shape.
 - **Scratchpad reveal blur fixed.** No more offset blurred layer before the window snaps
   into place.
-- **Conflict-free shortcuts.** Navigation defaults no longer clash with GNOME. Existing
-  installs keep their previous bindings through a one-time migration; fresh installs get
-  the new ones. Plaid detects conflicts live and shows a badge in preferences.
+- **Conflict-free shortcuts.** Navigation defaults no longer clash with GNOME. Focus,
+  scratchpad, cycle-layout, and toggle-float keep their previous bindings for existing
+  installs through a one-time migration; fresh installs get the new ones. Swap now uses
+  `Super+Ctrl` and resize `Super+Shift`. Plaid detects conflicts live and shows a badge
+  in preferences.
 - **Auto Update.** New releases download and install automatically and load at the
   next login.
 - **Faster login and logout.** `/proc` scanning is asynchronous, and shutdown no longer
