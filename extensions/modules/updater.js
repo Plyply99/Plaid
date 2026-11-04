@@ -45,9 +45,11 @@ export class Updater extends PlaidSubsystem {
             if (latest <= installed)
                 return;
             let assetUrl = null;
+            let assetDigest = null;
             for (const asset of (json.assets || [])) {
                 if (asset.name === ASSET_NAME) {
                     assetUrl = asset.browser_download_url || null;
+                    assetDigest = asset.digest || null;
                     break;
                 }
             }
@@ -56,8 +58,14 @@ export class Updater extends PlaidSubsystem {
                     'Could not find the update zip. Check the release page.');
                 return;
             }
+            // Without an authenticated digest from the release metadata, we
+            // cannot verify the downloaded zip has not been tampered with.
+            if (!assetDigest || !assetDigest.startsWith('sha256:')) {
+                Main.notify('Plaid update failed', UPDATE_FAILED);
+                return;
+            }
             updateFound = true;
-            await this._install(assetUrl, version[1], version[2]);
+            await this._install(assetUrl, version[1], version[2], assetDigest.slice(7));
         } catch (e) {
             if (updateFound && !this._destroyed)
                 Main.notify('Plaid update failed', UPDATE_FAILED);
@@ -66,11 +74,15 @@ export class Updater extends PlaidSubsystem {
         }
     }
 
-    async _install(assetUrl, major, minor) {
+    async _install(assetUrl, major, minor, expectedSha256) {
         const zipPath = `${GLib.get_home_dir()}/Downloads/${ASSET_NAME}`;
         await this._run(['curl', '-sfL', '--max-time', '60', '-o', zipPath, assetUrl]);
         if (this._destroyed)
             return;
+        const actualSha256 = (await this._communicate(['sha256sum', zipPath]))
+            .trim().split(/\s+/)[0];
+        if (actualSha256 !== expectedSha256)
+            throw new Error('downloaded update failed integrity verification');
         await this._run(['gnome-extensions', 'install', '--force', zipPath]);
         if (!this._destroyed)
             Main.notify(`Plaid v${major}.${minor} available`, UPDATE_MESSAGE);
