@@ -12,6 +12,39 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
+## v51.27 — 2026-11-04
+
+- **New default look.** Window blur, rounded corners (15px), gradient borders, and a
+  refreshed border palette are enabled by default. Turn off **Window Blur**, **Round
+  Window Corners**, and **Gradient Borders** in settings for the old square look.
+- **Workspace switching no longer freezes** when another extension patches the switch
+  animation (Blur My Shell). Evacuation of the hidden parking workspace is deferred out
+  of the switch signal and guarded against re-entry.
+- **Background app fixes.** The reserved workspace stays hidden in the overview, sticky
+  drop-down terminals no longer count as parked windows, and the parking card no longer
+  flashes during evacuation.
+- **Drop-down terminal fixes.** A terminal adopted after a lock or disable cycle keeps
+  its handlers, and toggling with a stale tracked window launches a fresh terminal
+  instead of doing nothing.
+- **Flair returns immediately after unlock.** Borders, blur, and rounded corners no
+  longer wait for a focus or mouse event.
+- **Tiling fixes.** Retiles are settle-safe, X11 windows keep their reveal, minimum sizes
+  no longer overlap, and dwindle layouts restore their saved shape.
+- **Scratchpad reveal blur fixed.** No more offset blurred layer before the window snaps
+  into place.
+- **Conflict-free shortcuts.** Navigation defaults no longer clash with GNOME. Existing
+  installs keep their previous bindings through a one-time migration; fresh installs get
+  the new ones. Plaid detects conflicts live and shows a badge in preferences.
+- **Auto Update.** New releases download and install automatically and load at the
+  next login.
+- **Faster login and logout.** `/proc` scanning is asynchronous, and shutdown no longer
+  waits on window or effect teardown.
+- **Removed:** the Plaid Terminal Settings scripts and the Plaid Welcome overlay. Plaid
+  no longer writes to your shell profile, and it still never changes GNOME's keybindings
+  or edge-tiling.
+- **Drop-down terminal command** now defaults to empty; set your terminal (for example
+  `ghostty` or `ptyxis`) in preferences.
+
 ## v51.23 — 2026-10-10
 
 - **Scratchpad reveal blur fixed.** Revealing a window from the scratchpad no longer
