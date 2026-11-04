@@ -342,6 +342,13 @@
       <description>Show a popup with the workspace number and its layout when switching workspaces, and a popup when tiling is toggled on or off</description>
     </key>
 
+    <!-- Auto-update from the project releases -->
+    <key name="release-check-enabled" type="b">
+      <default>true</default>
+      <summary>Automatic Plaid updates</summary>
+      <description>Download and install new Plaid releases automatically; they load on the next login.</description>
+    </key>
+
     <!-- Pick mode: used to capture a window click for float rules -->
     <key name="pick-mode" type="b">
       <default>false</default>

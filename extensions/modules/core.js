@@ -28,6 +28,7 @@ import { ProcInfo } from './proc-info.js';
 import { Signals } from './signals.js';
 import { Actions } from './actions.js';
 import { DragPreview } from './drag-preview.js';
+import { Updater } from './updater.js';
 
 export class PlaidCore {
     constructor(ext) {
@@ -55,6 +56,7 @@ export class PlaidCore {
         this.signals = new Signals(this);
         this.actions = new Actions(this);
         this.dragPreview = new DragPreview(this);
+        this.updater = new Updater(this);
     }
 
     compileTitlePatterns(titles) {
@@ -277,6 +279,13 @@ export class PlaidCore {
         this.workspacePill.initWorkspacePill();
         this.bgApp.initBackgroundApp();
         this.pointerFocus.initPointerFocus();
+        // Auto-update check (GitHub build only). Deferred so login stays fast;
+        // Updater.checkForUpdates() itself skips system-wide installs and is a
+        // no-op when the setting is off.
+        this.signals.addTimeout(15000, () => {
+            this.updater.checkForUpdates();
+            return false;
+        });
         this.signals.addIdle(() => {
             this.dragPreview.updateDropOverlaySize();
             const resumeLockCycle = sessionState.lockCycle;
@@ -439,6 +448,7 @@ export class PlaidCore {
             // sources and signal handlers need to go before the process dies.
             this.signals.destroy();
             this.procInfo.destroy();
+            this.updater.destroy();
             Main.sessionMode.disconnectObject(this);
             this._settings = null;
             this._mutterSettings = null;
@@ -480,6 +490,7 @@ export class PlaidCore {
         this.actions.destroy();
         this.scratchpad.destroy();
         this.dragPreview.destroy();
+        this.updater.destroy();
         this.borders.destroy();
         this.masks.destroy();
         this.blur.destroy();
