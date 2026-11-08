@@ -93,7 +93,12 @@ export class ProcInfo {
         }
         this._procEnvironWaiters.set(pid, [callback]);
         readProcFile(`/proc/${pid}/environ`, (data) => {
-            const env = data ? new TextDecoder().decode(data) : '';
+            // Only Plaid's own markers are read from an environment
+            // (PLAID_BGAPP, PLAID_DDT): those entries are kept, not the whole
+            // block (several KB for each process seen, up to the cache limit).
+            const env = data
+                ? new TextDecoder().decode(data).split('\0').filter(e => e.startsWith('PLAID_')).join('\0')
+                : '';
             if (data) {
                 if (this._procEnvironCache.size >= CACHE_LIMIT) {
                     const oldest = this._procEnvironCache.keys().next().value;

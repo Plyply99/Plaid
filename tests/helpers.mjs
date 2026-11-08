@@ -22,6 +22,33 @@ export function oneMonitor(extra = {}) {
 if (!globalThis.global) globalThis.global = {};
 if (!globalThis.global.display) globalThis.global.display = oneMonitor();
 
+export function frameClock() {
+  const g = globalThis.global;
+  const old = { stage: g.stage, backend: g.backend };
+  const handlers = [];
+  const emitter = () => ({
+    connectObject(...a) {
+      const obj = a.pop();
+      for (let i = 0; i + 1 < a.length; i += 2) handlers.push([this, obj, a[i], a[i + 1]]);
+    },
+    disconnectObject(obj) {
+      for (let i = handlers.length - 1; i >= 0; i--)
+        if (handlers[i][0] === this && handlers[i][1] === obj) handlers.splice(i, 1);
+    },
+  });
+  const stage = Object.assign(emitter(), { updates: 0, schedule_update() { this.updates++; } });
+  const tracker = emitter();
+  g.stage = stage;
+  g.backend = { ...(g.backend ?? {}), get_cursor_tracker: () => tracker };
+  const emit = (e, sig, ...args) => { for (const [o, , s, fn] of [...handlers]) if (o === e && s === sig) fn(e, ...args); };
+  return {
+    stage, tracker, handlers,
+    frame: (view) => emit(stage, 'before-update', view),
+    move: () => emit(tracker, 'position-invalidated'),
+    restore: () => { g.stage = old.stage; g.backend = old.backend; },
+  };
+}
+
 export function fakeSettings(values = {}) {
   return {
     get_int: (k) => (k in values ? values[k] : 0),

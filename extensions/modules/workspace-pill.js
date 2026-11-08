@@ -92,38 +92,45 @@ export class WorkspacePill extends PlaidSubsystem {
             focused && !focused.skip_taskbar && focused !== this.core._backgroundAppWin;
 
         if (this.core._workspacePillFocusedWin) {
-            this.core._workspacePillFocusedWin.disconnectObject(this.core._workspacePillTitleId);
-            this.core._workspacePillFocusedWin.disconnectObject(this.core._workspacePillUnmanagedId);
+            this.disconnectToken(this.core._workspacePillTitleId);
+            this.disconnectToken(this.core._workspacePillUnmanagedId);
             this.core._workspacePillFocusedWin = null;
             this.core._workspacePillTitleId = 0;
             this.core._workspacePillUnmanagedId = 0;
         }
 
-        // The icon lives in the numbers row at the active slot. Remove it
-        // first so the rebuild can place it at the correct position —
-        // add_child on an already-parented actor is a no-op (no reorder).
-        if (icon.get_parent() === numbers)
-            numbers.remove_child(icon);
-        // Never destroy the shared icon: destroying it would leave a
-        // dangling reference that the next add_child would crash on.
-        // Destroy only the label children.
-        for (const child of numbers.get_children()) {
-            if (child !== icon)
-                child.destroy();
-        }
-        for (let i = 0; i < n; i++) {
-            if (i === parkingIdx) continue;
-            if (i === active && showFocus) {
-                numbers.add_child(icon);
-            } else {
-                const label = new St.Label({
-                    text: String(this.core.geometry.bgAppRealToDisplay(i) + 1),
-                    style_class: 'plaid-workspace-pill-number',
-                    y_align: Clutter.ActorAlign.CENTER,
-                });
-                if (i === active)
-                    label.add_style_pseudo_class('active');
-                numbers.add_child(label);
+        // The numbers row is rebuilt only when its shape changes: a focus
+        // change within a workspace keeps it (the row is on the actor, so a
+        // new pill always builds).
+        const rowKey = `${n}|${active}|${parkingIdx}|${showFocus ? 1 : 0}`;
+        if (numbers._plaidRowKey !== rowKey) {
+            numbers._plaidRowKey = rowKey;
+            // The icon lives in the numbers row at the active slot. Remove it
+            // first so the rebuild can place it at the correct position —
+            // add_child on an already-parented actor is a no-op (no reorder).
+            if (icon.get_parent() === numbers)
+                numbers.remove_child(icon);
+            // Never destroy the shared icon: destroying it would leave a
+            // dangling reference that the next add_child would crash on.
+            // Destroy only the label children.
+            for (const child of numbers.get_children()) {
+                if (child !== icon)
+                    child.destroy();
+            }
+            for (let i = 0; i < n; i++) {
+                if (i === parkingIdx) continue;
+                if (i === active && showFocus) {
+                    numbers.add_child(icon);
+                } else {
+                    const label = new St.Label({
+                        text: String(this.core.geometry.bgAppRealToDisplay(i) + 1),
+                        style_class: 'plaid-workspace-pill-number',
+                        y_align: Clutter.ActorAlign.CENTER,
+                    });
+                    if (i === active)
+                        label.add_style_pseudo_class('active');
+                    numbers.add_child(label);
+                }
             }
         }
 
@@ -134,14 +141,16 @@ export class WorkspacePill extends PlaidSubsystem {
             let title = focused.get_title() || '';
             if (title.length > 60)
                 title = title.slice(0, 60) + '…';
-            titleActor.set_text(title);
+            if (titleActor.text !== title)
+                titleActor.set_text(title);
             titleActor.visible = true;
             this.core._workspacePillFocusedWin = focused;
             this.core._workspacePillTitleId =
                 this.connectObject(focused, 'notify::title', () => this.scheduleWorkspacePillUpdate());
             this.core._workspacePillUnmanagedId = this.connectObject(focused, 'unmanaged', () => {
                 if (this.core._workspacePillFocusedWin !== focused) return;
-                focused.disconnectObject(this.core._workspacePillTitleId);
+                this.disconnectToken(this.core._workspacePillTitleId);
+                this.disconnectToken(this.core._workspacePillUnmanagedId);
                 this.core._workspacePillFocusedWin = null;
                 this.core._workspacePillTitleId = 0;
                 this.core._workspacePillUnmanagedId = 0;
@@ -171,8 +180,8 @@ export class WorkspacePill extends PlaidSubsystem {
             this.core._workspacePillFocusedWin = null;
             this.core._workspacePillTitleId = 0;
             this.core._workspacePillUnmanagedId = 0;
-            win.disconnectObject(titleId);
-            win.disconnectObject(unmanagedId);
+            this.disconnectToken(titleId);
+            this.disconnectToken(unmanagedId);
         }
         if (this.core._workspacePillIndicators) {
             const activities = Main.panel.statusArea.activities;

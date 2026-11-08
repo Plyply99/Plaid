@@ -412,12 +412,12 @@ export class Windows extends PlaidSubsystem {
             this.core._windowSignals = new Map();
         const sigIds = [];
         sigIds.push({ emitter: win, id: this.connectObject(win, 'position-changed', () => {
-            this.core.borders.updateBorders();
+            this.core.borders.noteGeometry(win);
             this.convertMaximizedToGaps(win);
             this.trackFloatGeometry(win);
         }) });
         sigIds.push({ emitter: win, id: this.connectObject(win, 'size-changed', () => {
-            this.core.borders.updateBorders();
+            this.core.borders.noteGeometry(win);
             this.convertMaximizedToGaps(win);
             this.trackFloatGeometry(win);
             // Settle window (event-driven client-resize correction): a
@@ -506,12 +506,12 @@ export class Windows extends PlaidSubsystem {
         if (!this.core._settings || !this.core._floatHooks || this.core._floatHooks.has(win)) return;
         const ids = [
             this.connectObject(win, 'position-changed', () => {
-                this.core.borders.updateBorders();
+                this.core.borders.noteGeometry(win);
                 this.convertMaximizedToGaps(win);
                 this.trackFloatGeometry(win);
             }),
             this.connectObject(win, 'size-changed', () => {
-                this.core.borders.updateBorders();
+                this.core.borders.noteGeometry(win);
                 this.convertMaximizedToGaps(win);
                 this.trackFloatGeometry(win);
             }),

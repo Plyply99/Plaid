@@ -64,7 +64,9 @@ function withTick(fn) {
 }
 const at = (theta) => (theta / (Math.PI * 2)) * PERIOD;
 function border(step, mapped = true) {
-  return { _plaidBorder: { thetaStep: step }, mapped, repaints: 0, queue_repaint() { this.repaints++; } };
+  const b = { _plaidBorder: { thetaStep: step }, mapped, repaints: 0 };
+  b._plaidStrips = [{ visible: true, queue_repaint() { b.repaints++; } }];
+  return b;
 }
 function mask(step, mapped = true) {
   const actor = { mapped };
@@ -215,6 +217,8 @@ test('_handleGrabEnd syncs the border animation instead of starting it', () => {
     _startBorderAnimation: () => calls.push('start'),
     _syncBorderAnimation: () => calls.push('sync'),
   });
+  // The passes a live resize stood in for: one at the end.
+  self.signals.scheduleBorders = () => calls.push('pass');
   self._grabOp = 1;
   const ws = { id: 0 };
   const old = globalThis.global;
@@ -228,7 +232,7 @@ test('_handleGrabEnd syncs the border animation instead of starting it', () => {
   } finally {
     globalThis.global = old;
   }
-  assert.deepEqual(calls, ['sync']);
+  assert.deepEqual(calls, ['sync', 'pass']);
 });
 
 test('_doUpdateBorders: with no Flair on it removes every border, mask and blur and walks no window', () => {

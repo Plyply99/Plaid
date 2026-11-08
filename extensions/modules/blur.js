@@ -544,6 +544,7 @@ export class Blur extends PlaidSubsystem {
                     blur._sibling.destroy();
                     blur._sibling = null;
                 }
+                this.releaseBlurHooks(blur);
                 this.core._windowBlurs.delete(win);
                 blur = null;
                 this.core.debugLog('blur self-heal: host dead, recreating');
@@ -713,7 +714,7 @@ export class Blur extends PlaidSubsystem {
     }
 
     syncBlurStackingNow(recheck = false) {
-        if (!this.core._windowBlurs) return false;
+        if (!this.core._windowBlurs || this.core._windowBlurs.size === 0) return false;
         let changed = false;
         const monitors = global.display.get_n_monitors();
         let monitorW = 0, monitorH = 0;
@@ -826,31 +827,20 @@ export class Blur extends PlaidSubsystem {
 
             sibling.destroy();
         }
-        // These signals can outlive their actor; a failed disconnect must not abort
-        // the rest of the teardown (the sibling is already gone).
-        if (blur._actorDestroyId) {
-            const id = blur._actorDestroyId;
-            blur._actorDestroyId = 0;
-
-            const a = win.get_compositor_private();
-            if (a) a.disconnectObject(id);
-        }
-        if (blur._actorParentSetId) {
-            const id = blur._actorParentSetId;
-            blur._actorParentSetId = 0;
-
-            const a = win.get_compositor_private();
-            if (a) a.disconnectObject(id);
-        }
-        if (blur._settleNotifyIds && blur._settleNotifyIds.length) {
-            const ids = blur._settleNotifyIds;
-            blur._settleNotifyIds = [];
-
-            const a = win.get_compositor_private();
-            if (a)
-                for (const id of ids) a.disconnectObject(id);
-        }
+        this.releaseBlurHooks(blur);
         this.core._windowBlurs.delete(win);
+    }
+
+    // The hooks a blur holds on its window actor. Released through their
+    // tokens, also once the actor is gone: a token kept for a dead actor held
+    // it in the list until disable.
+    releaseBlurHooks(blur) {
+        for (const key of ['_actorDestroyId', '_actorParentSetId', '_viewsToken']) {
+            if (blur[key]) this.disconnectToken(blur[key]);
+            blur[key] = key === '_viewsToken' ? null : 0;
+        }
+        for (const token of blur._settleNotifyIds ?? []) this.disconnectToken(token);
+        blur._settleNotifyIds = [];
     }
 
     removeAllBlurs() {

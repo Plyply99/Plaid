@@ -181,6 +181,8 @@ export class Grab extends PlaidSubsystem {
         this.core._grabInitialStackRatios = null;
         // Sync, not start: no 30fps tick when nothing animates.
         this.core.borders.syncBorderAnimation();
+        // The passes the resize loop stood in for (noteGeometry).
+        this.core.borders.updateBorders();
     }
 
     isResizeGrab(grabOp) {
@@ -202,14 +204,14 @@ export class Grab extends PlaidSubsystem {
 
     startGrabLoop(metaWindow, mode) {
         this.stopLiveResizeLoop();
-
-        const ws = metaWindow.get_workspace();
+        this._loopMode = mode;
 
         this.core._liveResizeId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
             if (!this.core._settings || !metaWindow || !this.core._grabOp) {
                 this.core._liveResizeId = 0;
                 return GLib.SOURCE_REMOVE;
             }
+            const ws = metaWindow.get_workspace();
             const frame = metaWindow.get_frame_rect();
             if (frame.width === 0 || frame.height === 0) return GLib.SOURCE_CONTINUE;
 
@@ -373,11 +375,16 @@ export class Grab extends PlaidSubsystem {
         });
     }
 
+    resizeLoopRunning() {
+        return !!this.core._liveResizeId && this._loopMode === 'resize';
+    }
+
     stopLiveResizeLoop() {
         if (this.core._liveResizeId) {
             GLib.source_remove(this.core._liveResizeId);
             this.core._liveResizeId = 0;
         }
+        this._loopMode = null;
     }
 
     moveTiledExcept(skipWindow) {
@@ -543,17 +550,12 @@ export class Grab extends PlaidSubsystem {
     }
 
     disconnectGrabBoundaryHooks() {
-        const win = this.core._grabWindow;
         if (this.core._grabSizeChangedId) {
-            if (win) {
-                win.disconnectObject(this.core._grabSizeChangedId);
-            }
+            this.disconnectToken(this.core._grabSizeChangedId);
             this.core._grabSizeChangedId = 0;
         }
         if (this.core._grabPositionChangedId) {
-            if (win) {
-                win.disconnectObject(this.core._grabPositionChangedId);
-            }
+            this.disconnectToken(this.core._grabPositionChangedId);
             this.core._grabPositionChangedId = 0;
         }
     }

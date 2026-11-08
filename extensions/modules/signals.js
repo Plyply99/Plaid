@@ -344,6 +344,7 @@ export class Signals extends PlaidSubsystem {
         });
         this.connectObject(this.core._settings, 'changed::gradient-direction', () => this.core.borders.updateBorders());
         this.connectObject(this.core._settings, 'changed::border-animation-speed', () => {
+            this.core.borders.forgetRotation();
             this.core.borders.syncBorderAnimation();
             this.core.borders.updateBorders();
         });

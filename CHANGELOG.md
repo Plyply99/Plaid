@@ -23,6 +23,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Animated borders use less idle CPU.** Gradient borders and masks redraw only
   while visible and only once the rotation visibly changes colour; the animation
   timer stops entirely when nothing can animate.
+- **Lighter gradient borders.** Each border is drawn as four thin edge strips
+  instead of a full-window surface, using far less memory and redrawing only what
+  changed while a window is moved or resized. Static gradients are smoother.
 
 ## v51.27 — 2026-11-04
 

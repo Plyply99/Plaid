@@ -115,15 +115,11 @@ export class DropdownTerminal extends PlaidSubsystem {
         return !!win.get_compositor_private();
     }
 
-    disconnectDropdownSignals(win) {
-        if (win) {
-            if (this.core._dropdownGeometryIds) {
-                for (const id of this.core._dropdownGeometryIds)
-                    win.disconnectObject(id);
-            }
-            if (this.core._dropdownUnmanagedId)
-                win.disconnectObject(this.core._dropdownUnmanagedId);
-        }
+    disconnectDropdownSignals() {
+        for (const id of this.core._dropdownGeometryIds ?? [])
+            this.disconnectToken(id);
+        if (this.core._dropdownUnmanagedId)
+            this.disconnectToken(this.core._dropdownUnmanagedId);
         this.core._dropdownGeometryIds = null;
         this.core._dropdownUnmanagedId = 0;
     }
@@ -131,7 +127,7 @@ export class DropdownTerminal extends PlaidSubsystem {
     forgetDropdownWindow(win) {
         if (!win || this.core._dropdownWin !== win) return;
 
-        this.disconnectDropdownSignals(win);
+        this.disconnectDropdownSignals();
 
         this.core._dropdownWin = null;
         sessionState.ddtPid = 0;
@@ -157,8 +153,7 @@ export class DropdownTerminal extends PlaidSubsystem {
                 sessionState.ddtPid = 0;
             if (this.core._dropdownWin === win) {
                 this.core._dropdownWin = null;
-                this.core._dropdownGeometryIds = null;
-                this.core._dropdownUnmanagedId = 0;
+                this.disconnectDropdownSignals();
             }
         });
     }
@@ -486,7 +481,7 @@ export class DropdownTerminal extends PlaidSubsystem {
         this.clearDropdownWaiters();
         const win = this.core._dropdownWin;
         if (!win) return;
-        this.disconnectDropdownSignals(win);
+        this.disconnectDropdownSignals();
         this.core.borders.removeBorder(win);
         this.core.masks.removeMask(win);
         this.core.blur.removeBlur(win);

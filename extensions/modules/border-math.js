@@ -23,12 +23,10 @@ export class BorderMath {
         };
     }
 
-    buildBorderSegments(border) {
+    buildBorderSegments(border, w = border.width, h = border.height) {
         const info = border._plaidBorder;
         if (!info) return [];
-        const w = border.width;
-        const h = border.height;
-        const key = `${w}x${h}x${info.radius}`;
+        const key = `${w}x${h}x${info.radius}x${info.width}`;
         if (border._plaidSegs && border._plaidSegKey === key)
             return border._plaidSegs;
 
@@ -85,6 +83,63 @@ export class BorderMath {
         border._plaidSegs = segs;
         border._plaidSegKey = key;
         return segs;
+    }
+
+    // The stroke's rounded rect in a w x h border: inset half the stroke, the
+    // radius clamped to it (the same rect buildBorderSegments walks). Null
+    // when the stroke fills the border.
+    borderPath(info, w, h) {
+        const bw = info.width;
+        const pw = w - bw, ph = h - bw;
+        if (pw <= 0 || ph <= 0) return null;
+        return { x: bw / 2, y: bw / 2, pw, ph, r: Math.min(Math.max(0, info.radius), pw / 2, ph / 2) };
+    }
+
+    // The line a static gradient runs along, in border pixels: its colour at a
+    // point is borderGradientPos's (vertical y/h, horizontal x/w, diagonal
+    // (x+y)/(w+h)), clamped at the ends.
+    borderGradientLine(w, h, direction) {
+        if (direction === 'horizontal') return [0, 0, w, 0];
+        if (direction === 'diagonal') return [0, 0, (w + h) / 2, (w + h) / 2];
+        return [0, 0, 0, h];
+    }
+
+    // The four strips a w x h gradient border is drawn in: top and bottom the
+    // full width, left and right the rows between. Each reaches as deep as a
+    // corner (clamped radius plus stroke, plus one antialiased pixel); on a
+    // border under two corners deep they meet, and no pixel is in two strips.
+    borderStripRects(info, w, h) {
+        const bw = info?.width ?? 0;
+        const r = Math.max(0, Math.min(info?.radius ?? 0, (w - bw) / 2, (h - bw) / 2));
+        const depth = Math.ceil(r + bw) + 1;
+        const t = Math.max(0, Math.min(depth, Math.floor(h / 2)));
+        const bottom = Math.max(t, h - depth);
+        const s = Math.max(0, Math.min(depth, Math.floor(w / 2)));
+        const right = Math.max(s, w - depth);
+        const mid = bottom - t;
+        return [
+            { x: 0, y: 0, w, h: t },
+            { x: 0, y: bottom, w, h: h - bottom },
+            { x: 0, y: t, w: s, h: mid },
+            { x: right, y: t, w: w - right, h: mid },
+        ];
+    }
+
+    // Per segment, its run's colour: a run is the segments in a row that round
+    // to one 8-bit colour, drawn in its first segment's exact colour. A strip
+    // starting mid-run draws it in that colour too.
+    borderRuns(segs, w, h, info, animated, theta) {
+        const list = [];
+        let run = null;
+        for (const seg of segs) {
+            const p = { x: (seg.x0 + seg.x1) / 2, y: (seg.y0 + seg.y1) / 2 };
+            const gpos = this.borderGradientPos(w, h, p, info.direction, animated, theta, w / 2, h / 2);
+            const c = this.lerpRgb(info.color1, info.color2, gpos);
+            const key = (Math.round(c.r * 255) << 16) | (Math.round(c.g * 255) << 8) | Math.round(c.b * 255);
+            if (!run || run.key !== key) run = { key, c };
+            list.push(run);
+        }
+        return list;
     }
 
     borderGradientPos(w, h, p, direction, animated, theta, cx, cy) {

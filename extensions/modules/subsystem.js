@@ -8,15 +8,24 @@ export class PlaidSubsystem {
     }
 
     connectObject(emitter, ...args) {
-        const token = {};
+        const token = { emitter, owner: this };
         emitter.connectObject(...args, token);
-        this._tokens.push({ emitter, token });
+        this._tokens.push(token);
         return token;
     }
 
+    disconnectToken(token) {
+        if (!token) return;
+        const list = token.owner?._tokens;
+        const i = list ? list.indexOf(token) : -1;
+        if (i < 0) return;
+        list.splice(i, 1);
+        token.emitter.disconnectObject(token);
+    }
+
     disconnectAll() {
-        for (const { emitter, token } of this._tokens)
-            emitter.disconnectObject(token);
+        for (const token of this._tokens)
+            token.emitter.disconnectObject(token);
         this._tokens = [];
     }
 

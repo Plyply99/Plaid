@@ -68,7 +68,7 @@ export class BackgroundApp extends PlaidSubsystem {
         }
         this.core.debugLog('background app: release reservation (no window after 20s)');
         if (this.core._backgroundAppNWorkspacesId) {
-            global.workspace_manager.disconnectObject(this.core._backgroundAppNWorkspacesId);
+            this.disconnectToken(this.core._backgroundAppNWorkspacesId);
             this.core._backgroundAppNWorkspacesId = 0;
         }
         if (this.core._backgroundAppKeepAliveId) {
@@ -560,7 +560,8 @@ export class BackgroundApp extends PlaidSubsystem {
         this.core._backgroundAppWin = win;
         sessionState.bgAppWindow = win;
         this.core._backgroundAppSpawnRetries = 0;
-        this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
+        const unmanaged = this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
+            this.releaseUnmanagedHook(unmanaged);
             this.core.debugLog(`background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
             if (this.core._backgroundAppWin === win)
                 this.core._backgroundAppWin = null;
@@ -839,7 +840,8 @@ export class BackgroundApp extends PlaidSubsystem {
         this.core.borders.removeBorder(win);
         this.core._backgroundAppWin = win;
         sessionState.bgAppWindow = win;
-        this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
+        const unmanaged = this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
+            this.releaseUnmanagedHook(unmanaged);
             this.core.debugLog(`background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
             if (this.core._backgroundAppWin === win)
                 this.core._backgroundAppWin = null;
@@ -895,11 +897,14 @@ export class BackgroundApp extends PlaidSubsystem {
         {
             const actor = win.get_compositor_private();
             if (actor) {
-                this.core._backgroundAppFirstFrameId = this.connectObject(actor, 'first-frame', () => {
-                    if (this.core._backgroundAppFirstFrameId) {
-                        actor.disconnectObject(this.core._backgroundAppFirstFrameId);
+                // An earlier window's hook, never fired (its actor showed long
+                // ago), is released before this one takes the field.
+                if (this.core._backgroundAppFirstFrameId) this.disconnectToken(this.core._backgroundAppFirstFrameId);
+                const firstFrame = this.core._backgroundAppFirstFrameId = this.connectObject(actor, 'first-frame', () => {
+                    // Its own hook: a later window's may be in the field.
+                    this.disconnectToken(firstFrame);
+                    if (this.core._backgroundAppFirstFrameId === firstFrame)
                         this.core._backgroundAppFirstFrameId = 0;
-                    }
                     this.core.debugLog('background app: first-frame fired, scheduling park in 3s');
                     this.core.signals.addTimeout(3000, deferredPark);
                 });
@@ -1255,6 +1260,13 @@ export class BackgroundApp extends PlaidSubsystem {
         }
     }
 
+    // The background window's unmanaged hook fired: its token is released,
+    // and forgotten unless a later window's hook replaced it.
+    releaseUnmanagedHook(token) {
+        this.disconnectToken(token);
+        if (this.core._backgroundAppUnmanagedId === token) this.core._backgroundAppUnmanagedId = 0;
+    }
+
     evacuateParkingWorkspace() {
         if (this._evacuatingParking) return;
         this._evacuatingParking = true;
@@ -1564,8 +1576,7 @@ export class BackgroundApp extends PlaidSubsystem {
             this.core._backgroundAppClone = null;
         }
         if (this.core._backgroundAppGroupAddedId) {
-            const bg = Main.layoutManager._backgroundGroup;
-            if (bg) bg.disconnectObject(this.core._backgroundAppGroupAddedId);
+            this.disconnectToken(this.core._backgroundAppGroupAddedId);
             this.core._backgroundAppGroupAddedId = 0;
         }
         if (this.core._backgroundAppWaiter) {
@@ -1582,18 +1593,14 @@ export class BackgroundApp extends PlaidSubsystem {
         const win = this.core._backgroundAppWin;
         this.core.debugLog(`bg teardown: win=${win ? win.get_wm_class_instance() || '?' : 'null'} ` +
             `waiter=${!!this.core._backgroundAppWaiter} lockCycle=${sessionState.lockCycle}`);
+        // Released through their tokens, also when the window or its actor is
+        // already gone.
         if (this.core._backgroundAppUnmanagedId) {
-            if (win) {
-                win.disconnectObject(this.core._backgroundAppUnmanagedId);
-            }
+            this.disconnectToken(this.core._backgroundAppUnmanagedId);
             this.core._backgroundAppUnmanagedId = 0;
         }
-        if (this.core._backgroundAppFirstFrameId && win) {
-            // A destroyed window actor cannot be disconnected; teardown continues.
-            {
-                const actor = win.get_compositor_private();
-                if (actor) actor.disconnectObject(this.core._backgroundAppFirstFrameId);
-            }
+        if (this.core._backgroundAppFirstFrameId) {
+            this.disconnectToken(this.core._backgroundAppFirstFrameId);
             this.core._backgroundAppFirstFrameId = 0;
         }
         if (win && !sessionState.lockCycle) {
@@ -1659,11 +1666,11 @@ export class BackgroundApp extends PlaidSubsystem {
     destroy() {
         this.clearBackgroundApp(true);
         if (this.core._backgroundAppSettingsChangedId) {
-            this.core._settings.disconnectObject(this.core._backgroundAppSettingsChangedId);
+            this.disconnectToken(this.core._backgroundAppSettingsChangedId);
             this.core._backgroundAppSettingsChangedId = 0;
         }
         if (this.core._backgroundAppEnabledChangedId) {
-            this.core._settings.disconnectObject(this.core._backgroundAppEnabledChangedId);
+            this.disconnectToken(this.core._backgroundAppEnabledChangedId);
             this.core._backgroundAppEnabledChangedId = 0;
         }
         this.core._mutterSettings = null;

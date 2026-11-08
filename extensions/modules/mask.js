@@ -256,7 +256,7 @@ export class Masks extends PlaidSubsystem {
             // target nested borders and grew them each pass.
             let child = actor.get_first_child();
             while (child) {
-                if (!child._plaidSig && !child._plaidBorder && !child._plaidRing)
+                if (!child._plaidOwned)
                     return child;
                 child = child.get_next_sibling();
             }
@@ -398,7 +398,7 @@ export class Masks extends PlaidSubsystem {
 
     connectTextureWatch(win, actor, effect) {
         if (effect._textureWatchId) {
-            effect._watchTexture.disconnectObject(effect._textureWatchId);
+            this.disconnectToken(effect._textureWatchId);
             effect._textureWatchId = 0;
         }
         let texture = null;
@@ -600,11 +600,11 @@ export class Masks extends PlaidSubsystem {
         }
         effect._metaWin = null;
         if (effect._sizeWatchId) {
-            effect._watchActor.disconnectObject(effect._sizeWatchId);
+            this.disconnectToken(effect._sizeWatchId);
             effect._sizeWatchId = 0;
         }
         if (effect._textureWatchId) {
-            effect._watchTexture.disconnectObject(effect._textureWatchId);
+            this.disconnectToken(effect._textureWatchId);
             effect._textureWatchId = 0;
         }
         effect._watchActor = null;
