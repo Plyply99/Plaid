@@ -45,53 +45,49 @@ export class Keybindings extends PlaidSubsystem {
         // customized key. Each pass runs once (flag); a failed run retries safely.
         // Edge: an install with zero user-layer writes is indistinguishable from
         // fresh and picks up the new defaults (see the v51.17 notes).
-        try {
-            // Pass 1 — scratchpad moved to GNOME-compatible combos.
-            if (!this.core._settings.get_boolean('keybind-migration-done')) {
-                const pinned = this.pinOldKeybinds({
-                    'scratchpad-add': ['<Super><Shift>Escape'],
-                    'scratchpad-toggle': ['<Super>Escape'],
-                });
-                if (pinned === null)
-                    this.core.debugLog('[plaid] keybind migration: fresh install — new scratchpad defaults active');
-                else
-                    this.core.debugLog('[plaid] keybind migration: existing install — kept old scratchpad defaults' +
-                        (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
-                this.core._settings.set_boolean('keybind-migration-done', true);
-            }
-            // Pass 2 — navigation moved off bare Super+H/Super+L (GNOME's minimize and
-            // lock) and toggle-float off Super+Shift+Space (GNOME's
-            // switch-input-source-backward), so a fresh install never clashes.
-            if (!this.core._settings.get_boolean('keybind-migration-2-done')) {
-                const pinned = this.pinOldKeybinds({
-                    'move-focus-left': ['<Super>h'],
-                    'move-focus-right': ['<Super>l'],
-                    'move-focus-up': ['<Super>k'],
-                    'move-focus-down': ['<Super>j'],
-                    'toggle-float': ['<Super><Shift>space'],
-                });
-                if (pinned === null)
-                    this.core.debugLog('[plaid] keybind migration: fresh install — conflict-free navigation defaults active');
-                else
-                    this.core.debugLog('[plaid] keybind migration: existing install — kept old navigation defaults' +
-                        (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
-                this.core._settings.set_boolean('keybind-migration-2-done', true);
-            }
-            // Pass 3 — cycle-layout moved off Super+Shift+grave, which is
-            // GNOME's hidden switch-group-backward binding on US layouts.
-            if (!this.core._settings.get_boolean('keybind-migration-3-done')) {
-                const pinned = this.pinOldKeybinds({
-                    'cycle-layout': ['<Super><Shift>grave'],
-                });
-                if (pinned === null)
-                    this.core.debugLog('keybind migration: fresh install — new conflict-free cycle-layout default active');
-                else
-                    this.core.debugLog('keybind migration: existing install — kept old cycle-layout default' +
-                        (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (key already customized)'));
-                this.core._settings.set_boolean('keybind-migration-3-done', true);
-            }
-        } catch (e) {
-            this.core.debugLog(`keybind migration failed: ${e.message}`);
+        // Pass 1 — scratchpad moved to GNOME-compatible combos.
+        if (!this.core._settings.get_boolean('keybind-migration-done')) {
+            const pinned = this.pinOldKeybinds({
+                'scratchpad-add': ['<Super><Shift>Escape'],
+                'scratchpad-toggle': ['<Super>Escape'],
+            });
+            if (pinned === null)
+                this.core.debugLog('[plaid] keybind migration: fresh install — new scratchpad defaults active');
+            else
+                this.core.debugLog('[plaid] keybind migration: existing install — kept old scratchpad defaults' +
+                    (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
+            this.core._settings.set_boolean('keybind-migration-done', true);
+        }
+        // Pass 2 — navigation moved off bare Super+H/Super+L (GNOME's minimize and
+        // lock) and toggle-float off Super+Shift+Space (GNOME's
+        // switch-input-source-backward), so a fresh install never clashes.
+        if (!this.core._settings.get_boolean('keybind-migration-2-done')) {
+            const pinned = this.pinOldKeybinds({
+                'move-focus-left': ['<Super>h'],
+                'move-focus-right': ['<Super>l'],
+                'move-focus-up': ['<Super>k'],
+                'move-focus-down': ['<Super>j'],
+                'toggle-float': ['<Super><Shift>space'],
+            });
+            if (pinned === null)
+                this.core.debugLog('[plaid] keybind migration: fresh install — conflict-free navigation defaults active');
+            else
+                this.core.debugLog('[plaid] keybind migration: existing install — kept old navigation defaults' +
+                    (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (keys already customized)'));
+            this.core._settings.set_boolean('keybind-migration-2-done', true);
+        }
+        // Pass 3 — cycle-layout moved off Super+Shift+grave, which is
+        // GNOME's hidden switch-group-backward binding on US layouts.
+        if (!this.core._settings.get_boolean('keybind-migration-3-done')) {
+            const pinned = this.pinOldKeybinds({
+                'cycle-layout': ['<Super><Shift>grave'],
+            });
+            if (pinned === null)
+                this.core.debugLog('keybind migration: fresh install — new conflict-free cycle-layout default active');
+            else
+                this.core.debugLog('keybind migration: existing install — kept old cycle-layout default' +
+                    (pinned.length ? ` (pinned: ${pinned.join(', ')})` : ' (key already customized)'));
+            this.core._settings.set_boolean('keybind-migration-3-done', true);
         }
     }
 

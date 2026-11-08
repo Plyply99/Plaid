@@ -288,10 +288,13 @@ test('GObject.registerClass is not inside a class method', () => {
 
 test('try/catch budget and no wrappers around standard calls', () => {
   const budgets = new Map([
-    ['blur.js', 6],
+    ['blur.js', 5],
     ['mask.js', 3],
-    ['background-app.js', 8],
+    ['background-app.js', 5],
     ['updater.js', 3],
+    ['persistence.js', 0],
+    ['bsp.js', 0],
+    ['keybindings.js', 1],
   ]);
   const denied = 'disconnectObject|destroy|get_compositor_private|get_frame_rect|' +
     'get_buffer_rect|get_workspace|minimize|maximize|unminimize|delete|' +
@@ -306,5 +309,5 @@ test('try/catch budget and no wrappers around standard calls', () => {
     assert.ok(count <= allowed, `${file} has ${count} try blocks (max ${allowed})`);
     assert.ok(!wrapped.test(src), `${file} wraps a standard call in try/catch`);
   }
-  assert.ok(total <= 38, `shell code has ${total} try blocks (max 38)`);
+  assert.ok(total <= 28, `shell code has ${total} try blocks (max 28)`);
 });

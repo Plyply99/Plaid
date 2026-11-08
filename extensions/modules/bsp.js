@@ -513,12 +513,8 @@ export class Bsp {
             i++;
             return { type: 'split', direction: dir, ratio, first, second };
         };
-        try {
-            const node = parseNode();
-            return node && i === str.length ? node : null;
-        } catch (_e) {
-            return null;
-        }
+        const node = parseNode();
+        return node && i === str.length ? node : null;
     }
 
     reconcileTreeRatios(saved, live) {

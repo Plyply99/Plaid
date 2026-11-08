@@ -682,30 +682,26 @@ export class Blur extends PlaidSubsystem {
         // computed offset would stick after settle. Leaving the last-good offsets
         // is correct — the suppression keeps the sibling unpainted until at rest.
         if (!this.core._windowBlurs || !blur || !blur._sibling) return;
-        try {
-            const buffer = win.get_buffer_rect();
-            const frame = win.get_frame_rect();
-            const src = blur._sourceActor || blur.get_actor();
-            if (!src) return;
-            if (Math.abs(src.x - buffer.x) > 1 || Math.abs(src.y - buffer.y) > 1)
-                return;
-            const ix = Math.max(frame.x, buffer.x);
-            const iy = Math.max(frame.y, buffer.y);
-            const iw = Math.min(frame.x + frame.width, buffer.x + buffer.width) - ix;
-            const ih = Math.min(frame.y + frame.height, buffer.y + buffer.height) - iy;
-            // Offsets are relative to the constraint source (the actor stored on
-            // the effect), not necessarily the actor passed in.
-            const offsets = iw > 0 && ih > 0
-                ? [ix - src.x, iy - src.y, iw - src.width, ih - src.height]
-                : [0, 0, 0, 0];
-            const constraints = blur._sibling.get_constraints();
-            constraints.forEach((c, i) => {
-                if (c instanceof Clutter.BindConstraint)
-                    c.offset = offsets[i];
-            });
-        } catch (e) {
-            // Best-effort: the actor/effect may be disposed or GL may reject.
-        }
+        const buffer = win.get_buffer_rect();
+        const frame = win.get_frame_rect();
+        const src = blur._sourceActor || blur.get_actor();
+        if (!src) return;
+        if (Math.abs(src.x - buffer.x) > 1 || Math.abs(src.y - buffer.y) > 1)
+            return;
+        const ix = Math.max(frame.x, buffer.x);
+        const iy = Math.max(frame.y, buffer.y);
+        const iw = Math.min(frame.x + frame.width, buffer.x + buffer.width) - ix;
+        const ih = Math.min(frame.y + frame.height, buffer.y + buffer.height) - iy;
+        // Offsets are relative to the constraint source (the actor stored on
+        // the effect), not necessarily the actor passed in.
+        const offsets = iw > 0 && ih > 0
+            ? [ix - src.x, iy - src.y, iw - src.width, ih - src.height]
+            : [0, 0, 0, 0];
+        const constraints = blur._sibling.get_constraints();
+        constraints.forEach((c, i) => {
+            if (c instanceof Clutter.BindConstraint)
+                c.offset = offsets[i];
+        });
     }
 
     syncBlurStacking() {

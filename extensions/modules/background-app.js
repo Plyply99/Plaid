@@ -115,113 +115,104 @@ export class BackgroundApp extends PlaidSubsystem {
         // visibility, so a hidden trailing card leaves a gap in the middle of
         // the overview row. A leading blank is acceptable.
         if (!this.core._settings || this.core._backgroundAppParkingWs) return;
-        try {
-            let parking = this.adoptExistingParking();
-            if (parking && this.workspaceIndex(parking) !== 0 &&
-                !this.placeParkingAtFront(parking)) {
-                // Not usable as a front parking (contains user windows, or the
-                // reorder failed). Reserve a fresh one.
-                sessionState.parkingWorkspace = null;
-                parking = null;
-            }
-            if (parking) {
-                this.core._backgroundAppParkingFront = true;
-                this.core.debugLog(`background app: adopted existing parking (index=${this.workspaceIndex(parking)})`);
+        let parking = this.adoptExistingParking();
+        if (parking && this.workspaceIndex(parking) !== 0 &&
+            !this.placeParkingAtFront(parking)) {
+            // Not usable as a front parking (contains user windows, or the
+            // reorder failed). Reserve a fresh one.
+            sessionState.parkingWorkspace = null;
+            parking = null;
+        }
+        if (parking) {
+            this.core._backgroundAppParkingFront = true;
+            this.core.debugLog(`background app: adopted existing parking (index=${this.workspaceIndex(parking)})`);
+        } else {
+            const first = global.workspace_manager.get_workspace_by_index(0);
+            if (!first) return;
+            if (!this.workspaceHasUserWindows(first)) {
+                parking = first;
+                this.core.debugLog('background app: reserved ws0 parking (index=0)');
             } else {
-                const first = global.workspace_manager.get_workspace_by_index(0);
-                if (!first) return;
-                if (!this.workspaceHasUserWindows(first)) {
-                    parking = first;
-                    this.core.debugLog('background app: reserved ws0 parking (index=0)');
-                } else {
-                    // ws0 holds user content. Insert a fresh EMPTY parking at
-                    // the front instead of claiming ws0 (which would move and
-                    // merge user windows) or appending a trailing parking
-                    // (whose hidden card leaves a mid-row gap). Reordering an
-                    // empty workspace shifts indices only — no window moves.
-                    parking = global.workspace_manager.append_new_workspace(false, this.core.currentTime());
-                    if (!parking) return;
-                    // Pin it before the reorder queues a dynamic-workspace check.
-                    Main.wm.keepWorkspaceAlive(parking, 12 * 60 * 60 * 1000);
-                    this.placeParkingAtFront(parking);
-                    this.core.debugLog(`background app: inserted front parking (index=${this.workspaceIndex(parking)})`);
-                }
-                this.core._backgroundAppParkingFront = true;
+                // ws0 holds user content. Insert a fresh EMPTY parking at
+                // the front instead of claiming ws0 (which would move and
+                // merge user windows) or appending a trailing parking
+                // (whose hidden card leaves a mid-row gap). Reordering an
+                // empty workspace shifts indices only — no window moves.
+                parking = global.workspace_manager.append_new_workspace(false, this.core.currentTime());
+                if (!parking) return;
+                // Pin it before the reorder queues a dynamic-workspace check.
+                Main.wm.keepWorkspaceAlive(parking, 12 * 60 * 60 * 1000);
+                this.placeParkingAtFront(parking);
+                this.core.debugLog(`background app: inserted front parking (index=${this.workspaceIndex(parking)})`);
             }
-            if (!parking) return;
-            this.core._backgroundAppParkingWs = parking;
-            sessionState.parkingWorkspace = parking;
-            sessionState.parkingFront = this.core._backgroundAppParkingFront;
-            // Keep the parking alive: the shell's dynamic-workspace check
-            // removes empty inactive workspaces — the reservation must be
-            // armed before the append below queues that check.
-            Main.wm.keepWorkspaceAlive(parking, 12 * 60 * 60 * 1000);
-            this.startBackgroundAppKeepAlive();
-            // append_new_workspace(true) activates before n-workspaces is emitted, so
-            // append inert and activate after the shell rebuilds its card list.
-            {
-                if (global.workspace_manager.get_active_workspace() === parking) {
-                    global.workspace_manager.append_new_workspace(false, this.core.currentTime());
-                    this.core.signals.addTimeout(150, () => {
-                        if (!this.core._settings) return GLib.SOURCE_REMOVE;
-                        {
-                            const next = global.workspace_manager.get_workspace_by_index(1);
-                            if (next) {
-                                next.activate(this.core.currentTime());
-                                // Keep the real workspace alive through the login
-                                // restore window. Parking the BGAPP empties this
-                                // workspace; without the keep-alive dynamic
-                                // workspaces can drop it and leave the active
-                                // workspace on the hidden parking slot, so the
-                                // session-restored user windows land on ws0.
-                                {
-                                    Main.wm.keepWorkspaceAlive(next, 5 * 60 * 1000);
-                                }
-                            }
-                            this.core.debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
-                            this.hideParkingCard();
-                        }
-                        return GLib.SOURCE_REMOVE;
-                    });
-                } else {
-                    this.core.debugLog(`background app: active already at index=${global.workspace_manager.get_active_workspace_index()}`);
-                }
-            }
-            this.applyBackgroundAppHiding();
-            this.core.workspacePill.scheduleWorkspacePillUpdate();
-            if (!this.core._backgroundAppNWorkspacesId) {
-                this.core._backgroundAppNWorkspacesId =
-                    this.connectObject(global.workspace_manager, 'notify::n-workspaces', () => {
-                        if (!this.core._settings) return;
-                        this.core.signals.addTimeout(50, () => {
-                            if (!this.core._settings) return GLib.SOURCE_REMOVE;
-                            this.hideParkingCard();
-                            return GLib.SOURCE_REMOVE;
-                        });
-                    });
-            }
-            this.core.signals.addTimeout(100, () => {
-                if (!this.core._settings) return GLib.SOURCE_REMOVE;
-                this.hideParkingCard();
-                return GLib.SOURCE_REMOVE;
-            });
-            // Login restore can map user windows several seconds after the
-            // reservation. A few delayed passes catch anything that lands on the
-            // parking before the per-window notify::workspace handler is armed.
-            for (const delay of [500, 1500, 3000, 6000, 10000]) {
-                this.core.signals.addTimeout(delay, () => {
+            this.core._backgroundAppParkingFront = true;
+        }
+        if (!parking) return;
+        this.core._backgroundAppParkingWs = parking;
+        sessionState.parkingWorkspace = parking;
+        sessionState.parkingFront = this.core._backgroundAppParkingFront;
+        // Keep the parking alive: the shell's dynamic-workspace check
+        // removes empty inactive workspaces — the reservation must be
+        // armed before the append below queues that check.
+        Main.wm.keepWorkspaceAlive(parking, 12 * 60 * 60 * 1000);
+        this.startBackgroundAppKeepAlive();
+        // append_new_workspace(true) activates before n-workspaces is emitted, so
+        // append inert and activate after the shell rebuilds its card list.
+        {
+            if (global.workspace_manager.get_active_workspace() === parking) {
+                global.workspace_manager.append_new_workspace(false, this.core.currentTime());
+                this.core.signals.addTimeout(150, () => {
                     if (!this.core._settings) return GLib.SOURCE_REMOVE;
-                    this.evacuateParkingWorkspace();
+                    {
+                        const next = global.workspace_manager.get_workspace_by_index(1);
+                        if (next) {
+                            next.activate(this.core.currentTime());
+                            // Keep the real workspace alive through the login
+                            // restore window. Parking the BGAPP empties this
+                            // workspace; without the keep-alive dynamic
+                            // workspaces can drop it and leave the active
+                            // workspace on the hidden parking slot, so the
+                            // session-restored user windows land on ws0.
+                            {
+                                Main.wm.keepWorkspaceAlive(next, 5 * 60 * 1000);
+                            }
+                        }
+                        this.core.debugLog(`background app: active moved to index=${global.workspace_manager.get_active_workspace_index()}`);
+                        this.hideParkingCard();
+                    }
                     return GLib.SOURCE_REMOVE;
                 });
+            } else {
+                this.core.debugLog(`background app: active already at index=${global.workspace_manager.get_active_workspace_index()}`);
             }
-        } catch (e) {
-            this.core._backgroundAppParkingWs = null;
-            this.core._backgroundAppReservationScheduled = false;
-            this.core._backgroundAppParkingFront = false;
-            this.core._backgroundAppKeepAliveId = 0;
-            this.core._backgroundAppNWorkspacesId = 0;
-            this.core.debugLog(`background app: reservation failed: ${e.message}`);
+        }
+        this.applyBackgroundAppHiding();
+        this.core.workspacePill.scheduleWorkspacePillUpdate();
+        if (!this.core._backgroundAppNWorkspacesId) {
+            this.core._backgroundAppNWorkspacesId =
+                this.connectObject(global.workspace_manager, 'notify::n-workspaces', () => {
+                    if (!this.core._settings) return;
+                    this.core.signals.addTimeout(50, () => {
+                        if (!this.core._settings) return GLib.SOURCE_REMOVE;
+                        this.hideParkingCard();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                });
+        }
+        this.core.signals.addTimeout(100, () => {
+            if (!this.core._settings) return GLib.SOURCE_REMOVE;
+            this.hideParkingCard();
+            return GLib.SOURCE_REMOVE;
+        });
+        // Login restore can map user windows several seconds after the
+        // reservation. A few delayed passes catch anything that lands on the
+        // parking before the per-window notify::workspace handler is armed.
+        for (const delay of [500, 1500, 3000, 6000, 10000]) {
+            this.core.signals.addTimeout(delay, () => {
+                if (!this.core._settings) return GLib.SOURCE_REMOVE;
+                this.evacuateParkingWorkspace();
+                return GLib.SOURCE_REMOVE;
+            });
         }
     }
 
@@ -559,29 +550,24 @@ export class BackgroundApp extends PlaidSubsystem {
     }
 
     adoptFoundWindow(win) {
-        try {
-            if (this.core._windowWorkspaces.has(win)) {
-                this.core.debugLog('background app: de-registering window from tiler');
-                this.core.windows.removeWindow(win);
-            }
-            this.core.masks.removeMask(win);
-            this.core.blur.removeBlur(win);
-            this.core.borders.removeBorder(win);
-            this.core._backgroundAppWin = win;
-            sessionState.bgAppWindow = win;
-            this.core._backgroundAppSpawnRetries = 0;
-            this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
-                this.core.debugLog(`background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
-                if (this.core._backgroundAppWin === win)
-                    this.core._backgroundAppWin = null;
-                if (sessionState.bgAppWindow === win)
-                    sessionState.bgAppWindow = null;
-            });
-            this.configureBackgroundApp(win);
-        } catch (e) {
-            this.core.debugLog(`background app: adopt failed: ${e.message}`);
-            return false;
+        if (this.core._windowWorkspaces.has(win)) {
+            this.core.debugLog('background app: de-registering window from tiler');
+            this.core.windows.removeWindow(win);
         }
+        this.core.masks.removeMask(win);
+        this.core.blur.removeBlur(win);
+        this.core.borders.removeBorder(win);
+        this.core._backgroundAppWin = win;
+        sessionState.bgAppWindow = win;
+        this.core._backgroundAppSpawnRetries = 0;
+        this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
+            this.core.debugLog(`background app: bg window unmanaged ${win.get_wm_class_instance() || '?'}`);
+            if (this.core._backgroundAppWin === win)
+                this.core._backgroundAppWin = null;
+            if (sessionState.bgAppWindow === win)
+                sessionState.bgAppWindow = null;
+        });
+        this.configureBackgroundApp(win);
         this.core.debugLog(`adopt: found ${win.get_wm_class_instance() || '?'}`);
         this.core.debugLog('background app: resumed surviving window (lock cycle)');
         return true;
@@ -1393,20 +1379,14 @@ export class BackgroundApp extends PlaidSubsystem {
                 this.core.debugLog('background app: clone skipped (no background group)');
                 return;
             }
-            try {
-                this.core._backgroundAppClone = new Clutter.Clone({ source: actor });
-                bg.add_child(this.core._backgroundAppClone);
-                if (!this.core._backgroundAppGroupAddedId) {
-                    this.core._backgroundAppGroupAddedId = this.connectObject(bg, 'child-added', () => {
-                        this.raiseBackgroundAppClone();
-                    });
-                }
-                this.core.debugLog('background app: clone created');
-            } catch (e) {
-                this.core.debugLog(`background app clone failed: ${e.message}`);
-                this.core._backgroundAppClone = null;
-                return;
+            this.core._backgroundAppClone = new Clutter.Clone({ source: actor });
+            bg.add_child(this.core._backgroundAppClone);
+            if (!this.core._backgroundAppGroupAddedId) {
+                this.core._backgroundAppGroupAddedId = this.connectObject(bg, 'child-added', () => {
+                    this.raiseBackgroundAppClone();
+                });
             }
+            this.core.debugLog('background app: clone created');
         }
         this.positionBackgroundAppClone();
     }
