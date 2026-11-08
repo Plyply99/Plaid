@@ -7,6 +7,21 @@ import { LEGACY_METHODS } from './legacy-methods.mjs';
 
 export { normalizeAccel, maskSdfRect } from '../extensions/modules/helpers.js';
 
+export function oneMonitor(extra = {}) {
+  return {
+    get_primary_monitor: () => 0,
+    get_n_monitors: () => 1,
+    get_current_monitor: () => 0,
+    get_monitor_geometry: () => ({ x: 0, y: 0, width: 2560, height: 1440 }),
+    get_monitor_index_for_rect: () => 0,
+    focus_window: null,
+    ...extra,
+  };
+}
+
+if (!globalThis.global) globalThis.global = {};
+if (!globalThis.global.display) globalThis.global.display = oneMonitor();
+
 export function fakeSettings(values = {}) {
   return {
     get_int: (k) => (k in values ? values[k] : 0),

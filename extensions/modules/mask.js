@@ -344,7 +344,7 @@ export class Masks extends PlaidSubsystem {
         return effect;
     }
 
-    ensureWindowMask(win, actor, radius) {
+    ensureWindowMask(win, actor, radius, settings = this.core._settings) {
         if (!this.core._windowMasks || !actor || !actor.add_effect_with_name) return;
         // Mask self-heal quarantine: a texture swap rendered the offscreen capture
         // empty, so the mask was dropped and must NOT be re-created or content goes
@@ -392,7 +392,7 @@ export class Masks extends PlaidSubsystem {
             });
             this.connectTextureWatch(win, actor, effect);
         }
-        this.updateMaskBounds(win, actor, effect, radius);
+        this.updateMaskBounds(win, actor, effect, radius, settings);
         target.queue_redraw();
     }
 
@@ -451,7 +451,7 @@ export class Masks extends PlaidSubsystem {
         global.stage.queue_redraw();
     }
 
-    updateMaskBounds(win, actor, effect, radius) {
+    updateMaskBounds(win, actor, effect, radius, settings = this.core._settings) {
         // Mask self-heal: X11 foreign-texture surfaces (Chromium/electron) can swap
         // their texture on workspace round-trips, making the offscreen capture empty.
         // Drop the mask (square corners) rather than render invisible; a
@@ -491,8 +491,8 @@ export class Masks extends PlaidSubsystem {
             const widthKey = isFocused ? 'active-border-width' : 'inactive-border-width';
             borderWidth = (this.core._grabWindow === win)
                 ? 0
-                : (this.core._settings.get_boolean('borders-enabled')
-                    ? this.core._settings.get_int(widthKey)
+                : (settings.get_boolean('borders-enabled')
+                    ? settings.get_int(widthKey)
                     : 0);
         }
 
@@ -512,6 +512,7 @@ export class Masks extends PlaidSubsystem {
 
         if (!this.core._settings) {
             effect.updateMask(x1, y1, x2, y2, radius, borderWidth, [0.5, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], 0, 0, 0, 0, [0, 0, 0, 0]);
+            effect._plaidThetaStep = Infinity;
             return;
         }
 
@@ -522,32 +523,32 @@ export class Masks extends PlaidSubsystem {
             const c = this.core.borderMath.hexToRgb(hex);
             return [c.r, c.g, c.b, 1];
         };
-        const color1Hex = (this.core._settings.get_strv(color1Key) || [])[0] ||
+        const color1Hex = (settings.get_strv(color1Key) || [])[0] ||
             (isFocused ? '#bd93f9' : '#1e1f29');
-        const color2Hex = (this.core._settings.get_strv(color2Key) || [])[0] ||
+        const color2Hex = (settings.get_strv(color2Key) || [])[0] ||
             (isFocused ? '#50fa7b' : '#282a36');
         const color1 = toRgba(color1Hex);
         const color2 = toRgba(color2Hex);
 
         let mode = 0;
         let theta = 0;
-        const speed = this.core._settings.get_int('border-animation-speed');
+        const speed = settings.get_int('border-animation-speed');
         const period = this.core.borderMath.borderRotationMs(speed);
-        if (period > 0 && this.core._settings.get_boolean('gradient-borders')) {
+        if (period > 0 && settings.get_boolean('gradient-borders')) {
             mode = 3;
             // Rotation follows border-animation-speed alone (see _repaintBorder).
             theta = ((Date.now() / period) % 1) * Math.PI * 2;
         } else {
-            const dir = this.core._settings.get_string('gradient-direction');
+            const dir = settings.get_string('gradient-direction');
             if (dir === 'horizontal')
                 mode = 1;
             else if (dir === 'diagonal')
                 mode = 2;
         }
 
-        const blurEnabled = this.core._settings.get_boolean('window-blur');
+        const blurEnabled = settings.get_boolean('window-blur');
         let opacity = blurEnabled
-            ? this.core._settings.get_int('window-blur-opacity') / 100
+            ? settings.get_int('window-blur-opacity') / 100
             : 1;
         // A window hidden for its spawn choreography (actor opacity is ignored
         // by the offscreen mask) must stay invisible through the shader
@@ -558,9 +559,9 @@ export class Masks extends PlaidSubsystem {
         const scratchWin = !!(this.core._scratchpadWindows && this.core._scratchpadWindows.has(win));
         let ringWidth = 0;
         let ringColor = [0, 0, 0, 0];
-        if (scratchWin && this.core._settings.get_boolean('borders-enabled')) {
-            ringWidth = Math.max(2, this.core._settings.get_int('active-border-width'));
-            const ringHex = (this.core._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
+        if (scratchWin && settings.get_boolean('borders-enabled')) {
+            ringWidth = Math.max(2, settings.get_int('active-border-width'));
+            const ringHex = (settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
             ringColor = toRgba(ringHex);
             if (!effect._ringLogged) {
                 effect._ringLogged = true;
@@ -582,6 +583,14 @@ export class Masks extends PlaidSubsystem {
             this.core.debugLog(`mask uniforms: ${win.get_wm_class_instance() || '?'} ring=${ringWidth} bw=${borderWidth} eff=${effect.get_actor() ? 'attached' : 'DETACHED'}`);
         }
         effect.updateMask(x1, y1, x2, y2, radius, borderWidth, color1, color2, mode, theta, opacity, ringWidth, ringColor);
+        // Uniform refreshes also run outside the borders pass (mask redraw kick,
+        // kickMaskNow): re-arm a tick stopped because nothing animated.
+        effect._plaidTheta = theta;
+        effect._plaidThetaStep = (mode === 3 && borderWidth > 0.5)
+            ? this.core.borderMath.gradientThetaStep(this.core.borderMath.hexToRgb(color1Hex), this.core.borderMath.hexToRgb(color2Hex))
+            : Infinity;
+        if (effect._plaidThetaStep < Infinity && !this.core._borderAnimId)
+            this.core.borders.startBorderAnimation();
     }
 
     teardownMaskEffect(win, effect) {

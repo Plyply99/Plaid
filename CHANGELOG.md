@@ -20,6 +20,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Background App failures now show a popup.** A transient "Background App Failed"
   message reports whether the command could not start or started without opening a
   window; it appears once per launch attempt.
+- **Animated borders use less idle CPU.** Gradient borders and masks redraw only
+  while visible and only once the rotation visibly changes colour; the animation
+  timer stops entirely when nothing can animate.
 
 ## v51.27 — 2026-11-04
 

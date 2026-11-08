@@ -179,7 +179,8 @@ export class Grab extends PlaidSubsystem {
         this.core._grabOp = null;
         this.core._grabWindow = null;
         this.core._grabInitialStackRatios = null;
-        this.core.borders.startBorderAnimation();
+        // Sync, not start: no 30fps tick when nothing animates.
+        this.core.borders.syncBorderAnimation();
     }
 
     isResizeGrab(grabOp) {

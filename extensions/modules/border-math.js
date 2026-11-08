@@ -114,4 +114,21 @@ export class BorderMath {
         return 22000 - speed * 2000;
     }
 
+    // Rotation after which the gradient's colour moves by one 8-bit level: the
+    // position is a triangle wave of slope 1/pi, so the widest channel difference
+    // d changes a level every pi / d. Infinity for equal colours.
+    gradientThetaStep(c1, c2) {
+        const d = Math.max(Math.abs(c2.r - c1.r), Math.abs(c2.g - c1.g), Math.abs(c2.b - c1.b)) * 255;
+        return d >= 1 ? Math.PI / d : Infinity;
+    }
+
+    // True when a gradient last drawn at angle `drawn` is at least `step`
+    // behind `theta`, the wrap at 2*pi included.
+    gradientStale(drawn, theta, step) {
+        if (!(step < Infinity)) return false;
+        if (drawn === undefined) return true;
+        const d = Math.abs(theta - drawn) % (Math.PI * 2);
+        return Math.min(d, Math.PI * 2 - d) >= step;
+    }
+
 }

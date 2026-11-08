@@ -7,6 +7,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import St from 'gi://St';
 import cairo from 'gi://cairo';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { PlaidSubsystem } from './subsystem.js';
 
 export class Borders extends PlaidSubsystem {
@@ -14,7 +15,7 @@ export class Borders extends PlaidSubsystem {
         super(core);
     }
 
-    ensureWindowBorder(win, actor, frame, isFocused) {
+    ensureWindowBorder(win, actor, frame, isFocused, settings = this.core._settings) {
         if (!frame || frame.width === 0 || frame.height === 0) return false;
         // Exactly-one-border (client-type rule). Wayland: the mask attaches to the
         // actor, so this widget is captured/clipped and can never render — the SDF is
@@ -24,16 +25,16 @@ export class Borders extends PlaidSubsystem {
         // electron windows (stroke outside → double SDF), and use a placeholder for a
         // childless window until the surface arrives. Teardown is border-only
         // (_removeWidgetBorder), never destroying the mask.
-        if (this.core._settings.get_boolean('rounded-corners') &&
-            this.core._settings.get_int('border-radius') > 0) {
+        if (settings.get_boolean('rounded-corners') &&
+            settings.get_int('border-radius') > 0) {
             if (win.get_client_type() !== Meta.WindowClientType.X11) {
                 this.removeWidgetBorder(win);
                 return false;
             }
             if (this.core.masks.unwrapMaskActor(actor, win)) {
                 const effWidth = isFocused
-                    ? this.core._settings.get_int('active-border-width')
-                    : this.core._settings.get_int('inactive-border-width');
+                    ? settings.get_int('active-border-width')
+                    : settings.get_int('inactive-border-width');
                 const buffer = win.get_buffer_rect();
                 if ((frame.x - buffer.x) < effWidth ||
                     (frame.y - buffer.y) < effWidth) {
@@ -43,15 +44,15 @@ export class Borders extends PlaidSubsystem {
             }
             // childless → fall through: create the placeholder widget
         }
-        const activeWidth = this.core._settings.get_int('active-border-width');
-        const activeColor = (this.core._settings.get_strv('active-border-color') || [])[0] || '#bd93f9';
-        const activeColor2 = (this.core._settings.get_strv('active-border-color-2') || [])[0] || '#50fa7b';
-        const inactiveWidth = this.core._settings.get_int('inactive-border-width');
-        const inactiveColor = (this.core._settings.get_strv('inactive-border-color') || [])[0] || '#1e1f29';
-        const inactiveColor2 = (this.core._settings.get_strv('inactive-border-color-2') || [])[0] || '#282a36';
-        const borderRadius = this.core._settings.get_int('border-radius');
-        const gradient = this.core._settings.get_boolean('gradient-borders');
-        const gradientDir = this.core._settings.get_string('gradient-direction');
+        const activeWidth = settings.get_int('active-border-width');
+        const activeColor = (settings.get_strv('active-border-color') || [])[0] || '#bd93f9';
+        const activeColor2 = (settings.get_strv('active-border-color-2') || [])[0] || '#50fa7b';
+        const inactiveWidth = settings.get_int('inactive-border-width');
+        const inactiveColor = (settings.get_strv('inactive-border-color') || [])[0] || '#1e1f29';
+        const inactiveColor2 = (settings.get_strv('inactive-border-color-2') || [])[0] || '#282a36';
+        const borderRadius = settings.get_int('border-radius');
+        const gradient = settings.get_boolean('gradient-borders');
+        const gradientDir = settings.get_string('gradient-direction');
 
         let borderWidth = isFocused ? activeWidth : inactiveWidth;
         let color1 = isFocused ? activeColor : inactiveColor;
@@ -103,12 +104,15 @@ export class Borders extends PlaidSubsystem {
                 reactive: false,
                 visible: true,
             });
+            const c1 = this.core.borderMath.hexToRgb(color1);
+            const c2 = this.core.borderMath.hexToRgb(color2);
             border._plaidBorder = {
-                color1: this.core.borderMath.hexToRgb(color1),
-                color2: this.core.borderMath.hexToRgb(color2),
+                color1: c1,
+                color2: c2,
                 width: borderWidth,
                 radius: borderRadius,
                 direction: gradientDir,
+                thetaStep: this.core.borderMath.gradientThetaStep(c1, c2),
             };
             this.connectObject(border, 'repaint', () => this.repaintBorder(border));
         } else {
@@ -135,7 +139,7 @@ export class Borders extends PlaidSubsystem {
             {
                 const ringWidth = Math.max(2, activeWidth);
                 const scratchColor =
-                    (this.core._settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
+                    (settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
                 const ring = new St.Widget({
                     name: 'tiling-border',
                     x: borderX - ringWidth,
@@ -218,18 +222,45 @@ export class Borders extends PlaidSubsystem {
                 // slow_down_factor is an accessibility lever for placement, not rotation.
                 theta = ((Date.now() / period) % 1) * Math.PI * 2;
             }
+            border._plaidTheta = theta;
 
             const cr = border.get_context();
             cr.setLineWidth(bw);
             cr.setLineCap(cairo.LineCap.ROUND);
+            // One path per run of same-colour segments (a stroke each is hundreds of
+            // GI calls per repaint); round joins match separate round caps.
+            cr.setLineJoin(cairo.LineJoin.ROUND);
 
+            let runKey = -1;
+            let endX = 0, endY = 0, dirX = 0, dirY = 0;
             for (const seg of segs) {
                 const p = { x: (seg.x0 + seg.x1) / 2, y: (seg.y0 + seg.y1) / 2 };
                 const gpos = this.core.borderMath.borderGradientPos(w, h, p, info.direction, animated, theta, cx, cy);
                 const c = this.core.borderMath.lerpRgb(info.color1, info.color2, gpos);
-                cr.setSourceRGB(c.r, c.g, c.b);
-                cr.moveTo(seg.x0, seg.y0);
-                cr.lineTo(seg.x1, seg.y1);
+                const key = (Math.round(c.r * 255) << 16) | (Math.round(c.g * 255) << 8) | Math.round(c.b * 255);
+                const sx = seg.x1 - seg.x0;
+                const sy = seg.y1 - seg.y0;
+                if (key !== runKey) {
+                    if (runKey >= 0) {
+                        cr.lineTo(endX, endY);
+                        cr.stroke();
+                    }
+                    runKey = key;
+                    cr.setSourceRGB(c.r, c.g, c.b);
+                    cr.moveTo(seg.x0, seg.y0);
+                    dirX = sx;
+                    dirY = sy;
+                } else if (Math.abs(sx * dirY - sy * dirX) > 1e-6 * (sx * sx + sy * sy) ||
+                           sx * dirX + sy * dirY <= 0) {
+                    cr.lineTo(endX, endY);
+                    dirX = sx;
+                    dirY = sy;
+                }
+                endX = seg.x1;
+                endY = seg.y1;
+            }
+            if (runKey >= 0) {
+                cr.lineTo(endX, endY);
                 cr.stroke();
             }
         } catch (e) {
@@ -238,12 +269,12 @@ export class Borders extends PlaidSubsystem {
     }
 
     startBorderAnimation() {
-        if (this.core._borderAnimId) return;
+        if (this.core._borderAnimId || this.core._shuttingDown) return;
 
         if (!this.core._settings.get_boolean('gradient-borders')) return;
         if (this.core._settings.get_int('border-animation-speed') <= 0) return;
 
-        this.core.debugLog('border animation: start');
+        this.core.debugLog(`border animation: start (borders=${this.core._windowBorders.size} masks=${this.core._windowMasks.size})`);
         this.core._borderAnimId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
             if (!this.core._settings ||
                 !this.core._settings.get_boolean('gradient-borders') ||
@@ -255,20 +286,51 @@ export class Borders extends PlaidSubsystem {
             if (this.core._grabOp) {
                 return GLib.SOURCE_CONTINUE;
             }
+            if (!this.borderAnimationNeeded()) {
+                this.core.debugLog(`border animation: stop (idle) (borders=${this.core._windowBorders.size} masks=${this.core._windowMasks.size})`);
+                this.stopBorderAnimation();
+                return GLib.SOURCE_REMOVE;
+            }
 
             // Rotation follows border-animation-speed alone (see _repaintBorder).
             const period = this.core.borderMath.borderRotationMs(this.core._settings.get_int('border-animation-speed'));
             const theta = period > 0 ? ((Date.now() / period) % 1) * Math.PI * 2 : 0;
-            for (const effect of this.core._windowMasks.values())
+            // Re-render only while visible (mapped or in the overview) and once the
+            // colour moved a level (gradientThetaStep).
+            const math = this.core.borderMath;
+            const overview = Main.overview.visible;
+            for (const effect of this.core._windowMasks.values()) {
+                if (!math.gradientStale(effect._plaidTheta, theta, effect._plaidThetaStep)) continue;
+                const target = effect.get_actor();
+                if (!target || !(overview || target.mapped)) continue;
+                effect._plaidTheta = theta;
                 effect.setTheta(theta);
+            }
             for (const border of this.core._windowBorders.values()) {
+                const info = border._plaidBorder;
+                if (!info || !(overview || border.mapped)) continue;
+                if (!math.gradientStale(border._plaidTheta, theta, info.thetaStep)) continue;
                 // St.DrawingArea only runs the cairo handler on ITS queue_repaint
                 // (Clutter's queue_redraw repaints the cached texture), so the gradient
-                // only rotates via queue_repaint. Plain St.Widgets have no queue_repaint.
-                if (border.queue_repaint) border.queue_repaint();
+                // only rotates via queue_repaint. Plain St.Widgets (no _plaidBorder)
+                // have nothing to animate.
+                border._plaidTheta = theta;
+                border.queue_repaint();
             }
             return GLib.SOURCE_CONTINUE;
         });
+    }
+
+    // A gradient whose rotation is visible: a two-colour cairo border, or a mask
+    // drawing its SDF border (borderless masks only round corners).
+    borderAnimationNeeded() {
+        for (const border of this.core._windowBorders.values()) {
+            if (border._plaidBorder && border._plaidBorder.thetaStep < Infinity) return true;
+        }
+        for (const effect of this.core._windowMasks.values()) {
+            if (effect._plaidThetaStep < Infinity) return true;
+        }
+        return false;
     }
 
     stopBorderAnimation() {
@@ -282,11 +344,29 @@ export class Borders extends PlaidSubsystem {
         if (!this.core._settings) return;
         const wantAnim = this.core._settings.get_boolean('gradient-borders') &&
             this.core._settings.get_int('border-animation-speed') > 0 &&
-            (this.core._windowBorders.size > 0 || this.core._windowMasks.size > 0);
+            this.borderAnimationNeeded();
         if (wantAnim)
             this.startBorderAnimation();
         else
             this.stopBorderAnimation();
+    }
+
+    // Memo of the settings for one borders pass (it runs after every commit and
+    // re-reads ~12 keys per window). Keys cannot change mid-pass.
+    settingsMemo() {
+        const settings = this.core._settings;
+        const memo = new Map();
+        const read = (getter, key) => {
+            const k = `${getter}:${key}`;
+            if (!memo.has(k)) memo.set(k, settings[getter](key));
+            return memo.get(k);
+        };
+        return {
+            get_boolean: key => read('get_boolean', key),
+            get_int: key => read('get_int', key),
+            get_string: key => read('get_string', key),
+            get_strv: key => read('get_strv', key),
+        };
     }
 
     updateBordersDuringGrab() {
@@ -388,10 +468,22 @@ export class Borders extends PlaidSubsystem {
 
         const focusWindow = global.display.focus_window;
 
-        const borderRadius = this.core._settings.get_int('border-radius');
-        const roundedCorners = this.core._settings.get_boolean('rounded-corners');
-        const bordersEnabled = this.core._settings.get_boolean('borders-enabled');
-        const blurEnabled = this.core._settings.get_boolean('window-blur');
+        const settings = this.settingsMemo();
+        const borderRadius = settings.get_int('border-radius');
+        const roundedCorners = settings.get_boolean('rounded-corners');
+        const bordersEnabled = settings.get_boolean('borders-enabled');
+        const blurEnabled = settings.get_boolean('window-blur');
+
+        // No Flair: skip the per-window walk, which runs after every commit.
+        if (!bordersEnabled && !(roundedCorners && borderRadius > 0) && !blurEnabled) {
+            this.removeAllBorders();
+            this.core.masks.removeAllMasks();
+            this.core.blur.removeAllBlurs();
+            if (this.core._dropdownWin)
+                this.applyDropdownEffects(this.core._dropdownWin);
+            this.syncBorderAnimation();
+            return;
+        }
 
         // Only sweep ALL borders when the feature turned off — otherwise
         // _ensureWindowBorder's per-window signature gate skips unchanged
@@ -458,15 +550,15 @@ export class Borders extends PlaidSubsystem {
                 // Widget before mask (same ordering rule as the floating
                 // loop) for the scratch fall-through.
                 if (scratch && bordersEnabled)
-                    this.ensureWindowBorder(win, actor, frame, isFocused);
-                this.core.masks.ensureWindowMask(win, actor, borderRadius + 1);
+                    this.ensureWindowBorder(win, actor, frame, isFocused, settings);
+                this.core.masks.ensureWindowMask(win, actor, borderRadius + 1, settings);
                 // Scratch windows fall through to their special border even
                 // with rounded corners (normal windows stay mask-only).
                 if (!scratch)
                     continue;
             }
 
-            if (bordersEnabled) this.ensureWindowBorder(win, actor, frame, isFocused);
+            if (bordersEnabled) this.ensureWindowBorder(win, actor, frame, isFocused, settings);
         }
 
         // Floating windows are not in _windowWSIndices (they skip _addWindow),
@@ -490,9 +582,9 @@ export class Borders extends PlaidSubsystem {
             // _updateMaskBounds zeroes the SDF border when a renderable
             // widget exists, so creating the widget first avoids a
             // first-pass (or transition-pass) transient double border.
-            if (bordersEnabled) this.ensureWindowBorder(win, actor, frame, isFocused);
+            if (bordersEnabled) this.ensureWindowBorder(win, actor, frame, isFocused, settings);
             if (roundedCorners && borderRadius > 0)
-                this.core.masks.ensureWindowMask(win, actor, borderRadius + 1);
+                this.core.masks.ensureWindowMask(win, actor, borderRadius + 1, settings);
         }
 
         // The border animation is armed by _syncBorderAnimation() below with the
