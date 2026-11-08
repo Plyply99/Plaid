@@ -160,3 +160,51 @@ test('placeParkingAtFront: refuses to reorder a workspace with user windows', ()
   assert.equal(ok, false);
   assert.equal(reordered, false);
 });
+
+test('releaseBackgroundAppReservation: keeps a front reservation hidden', () => {
+  resetSessionState();
+  const parking = { list_windows: () => [] };
+  const core = makeSelf({}, {
+    _backgroundAppParkingWs: parking,
+    _backgroundAppParkingFront: true,
+  });
+  sessionState.parkingWorkspace = parking;
+  sessionState.parkingFront = true;
+  let restored = false;
+  core.bgApp.restoreBackgroundAppHiding = () => { restored = true; };
+
+  core.bgApp.releaseBackgroundAppReservation();
+
+  assert.equal(core._backgroundAppParkingWs, parking);
+  assert.equal(core._backgroundAppParkingFront, true);
+  assert.equal(sessionState.parkingWorkspace, parking);
+  assert.equal(restored, false, 'front reservation must not restore overview hides');
+  resetSessionState();
+});
+
+test('notifyBackgroundAppFailure: one transient popup per launch', () => {
+  resetSessionState();
+  const calls = [];
+  const core = makeSelf({}, { _backgroundAppFailureNotified: false });
+  core.workspaces.showPopup = (title, subtitle, duration) =>
+    calls.push({ title, subtitle, duration });
+
+  core.bgApp.notifyBackgroundAppFailure('flatpak run org.example.Missing', 'Could not start');
+  core.bgApp.notifyBackgroundAppFailure('flatpak run org.example.Missing', 'No window appeared');
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].title, 'Background App Failed');
+  assert.match(calls[0].subtitle, /Could not start/);
+  assert.match(calls[0].subtitle, /flatpak run org\.example\.Missing/);
+  assert.equal(calls[0].duration, 5000);
+  resetSessionState();
+});
+
+test('launchBackgroundApp: a new launch clears the failure-notified flag', () => {
+  const core = makeSelf({ 'background-app-enabled': false },
+    { _backgroundAppFailureNotified: true });
+
+  core.bgApp.launchBackgroundApp(true);
+
+  assert.equal(core._backgroundAppFailureNotified, false);
+});

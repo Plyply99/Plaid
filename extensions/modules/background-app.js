@@ -49,6 +49,8 @@ export class BackgroundApp extends PlaidSubsystem {
             this.core._backgroundAppReleaseId = 0;
             if (!this.core._settings) return GLib.SOURCE_REMOVE;
             if (this.core._backgroundAppWin || !this.core._backgroundAppPending) return GLib.SOURCE_REMOVE;
+            const command = this.core._settings.get_string('background-app');
+            this.notifyBackgroundAppFailure(command, 'No window appeared');
             this.releaseBackgroundAppReservation();
             return GLib.SOURCE_REMOVE;
         });
@@ -56,6 +58,14 @@ export class BackgroundApp extends PlaidSubsystem {
 
     releaseBackgroundAppReservation() {
         if (!this.core._settings || !this.core._backgroundAppParkingWs) return;
+        // Reservations are the shell's own front ws0. Removing it would shift
+        // every user workspace and its index-keyed layout, so "releasing" a
+        // front reservation only exposes an empty "Workspace 1". Keep it and
+        // its overview/cycling hides alive instead.
+        if (this.core._backgroundAppParkingFront) {
+            this.core.debugLog('background app: keeping front reservation hidden (no window after 20s)');
+            return;
+        }
         this.core.debugLog('background app: release reservation (no window after 20s)');
         if (this.core._backgroundAppNWorkspacesId) {
             global.workspace_manager.disconnectObject(this.core._backgroundAppNWorkspacesId);
@@ -71,6 +81,14 @@ export class BackgroundApp extends PlaidSubsystem {
         sessionState.parkingFront = false;
         { this.restoreBackgroundAppHiding(); }
         this.core.workspacePill.scheduleWorkspacePillUpdate();
+    }
+
+    notifyBackgroundAppFailure(command, detail) {
+        if (!this.core._settings || this.core._backgroundAppFailureNotified || !command) return;
+        this.core._backgroundAppFailureNotified = true;
+        const shown = command.length > 80 ? `${command.slice(0, 77)}...` : command;
+        this.core.debugLog(`background app: failure popup (${detail})`);
+        this.core.workspaces.showPopup('Background App Failed', `${detail}: ${shown}`, 5000);
     }
 
     scheduleBackgroundAppReservation() {
@@ -333,6 +351,7 @@ export class BackgroundApp extends PlaidSubsystem {
 
     launchBackgroundApp(force = false) {
         if (!this.core._settings) return;
+        this.core._backgroundAppFailureNotified = false;
         if (!this.core._settings.get_boolean('background-app-enabled')) return;
         const command = this.core._settings.get_string('background-app');
         if (!command) return;
@@ -417,6 +436,7 @@ export class BackgroundApp extends PlaidSubsystem {
         if (!this.core._backgroundAppPending) return; // claim/timeout already resolved
         if (this.core._backgroundAppSpawnRetries >= 2) {
             this.core.debugLog('background app: spawn retries exhausted');
+            this.notifyBackgroundAppFailure(command, 'Could not start');
             return;
         }
         this.core._backgroundAppSpawnRetries++;

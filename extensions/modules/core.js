@@ -202,6 +202,7 @@ export class PlaidCore {
         this._maximizeToggleRects = new Map();
         this._backgroundAppPending = false;
         this._backgroundAppSpawnRetries = 0;
+        this._backgroundAppFailureNotified = false;
         this._markerSweepPending = false;
         this._bgAppRecheckPending = false;
         this._bgAppRecheckId = 0;
