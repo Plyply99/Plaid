@@ -255,6 +255,7 @@ export function fakeWin(opts = {}) {
   const buffer = opts.buffer ?? frame;
   return {
     _testId: opts.id ?? ++_winId,
+    get_id: () => opts.id ?? 0,
     get_frame_rect: () => ({ ...frame }),
     get_buffer_rect: () => ({ ...buffer }),
     get_wm_class_instance: () => opts.instance ?? null,

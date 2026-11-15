@@ -41,6 +41,11 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Explicit minimum sizes win again.** A learned size floor can no longer
   override a `min-window-sizes` entry, so a window with an override stays
   resizable instead of being pinned at its first observed size.
+- **Reopened windows no longer pop out or overlap.** A window that is still
+  restoring its own geometry after opening (at login or when reopened) is not
+  counted as a failed placement. If it refuses to shrink below its own minimum,
+  the split makes room straight away, so the window stays tiled instead of
+  floating or sitting on top of its neighbour.
 
 ## v51.27 — 2026-11-04
 

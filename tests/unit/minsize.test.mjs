@@ -210,6 +210,21 @@ test('_getWindowMinSize: an explicit min-size override still wins while settling
   assert.deepEqual(self._getWindowMinSize(w), { w: 800, h: 600 });
 });
 
+test('_getWindowMinSize: uses the temporary settle floor while settling', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map(),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'org.gnome.TextEditor', minSize: [0, 0] });
+  w._plaidSettleUntil = Date.now() + 6000;
+  w._plaidSettleMin = { w: 360, h: 0 };
+  assert.deepEqual(self._getWindowMinSize(w), { w: 360, h: 0 });
+
+  // The temporary floor dies with the settle window.
+  w._plaidSettleUntil = 0;
+  assert.deepEqual(self._getWindowMinSize(w), { w: 0, h: 0 });
+});
+
 test('_clampTreeToMinSizes: a settling client cannot walk the split ratio (regression)', () => {
   // Reproduces the first Emacs/XWayland open: the client restores 1936x1185
   // and reports a matching minimum; each retile used to move the v-split by

@@ -189,8 +189,10 @@ export class Placement {
                 }
                 if (!w._plaidSettleUntil || Date.now() > w._plaidSettleUntil) {
                     w._plaidSettlePollId = 0;
+                    this.core.placement.finalizeSettleMin(w);
                     return GLib.SOURCE_REMOVE;
                 }
+                { this.noteSettleFrame(w); }
                 { this.core.grab.maybeReassertSlot(w, 4, 'direct'); }
                 if (w._plaidHoldReveal && heldSlotOk()) revealHeld();
                 return GLib.SOURCE_CONTINUE;
@@ -489,6 +491,9 @@ export class Placement {
                 // Wait out the settle window; stable clients still bend and
                 // float through the normal retry path afterwards.
                 const settling = !!(win._plaidSettleUntil && win._plaidSettleUntil > Date.now());
+                if (settling && stable && refusesShrink &&
+                    this.applySettleFloor(win, { w: s.targetW, h: s.targetH }, f))
+                    return true;
                 if (!settling && stable && refusesShrink) {
                     // The client has stopped changing at a size larger than
                     // its slot: it is honouring a real minimum. Record it and
@@ -566,11 +571,17 @@ export class Placement {
         // An explicit override is the authority; never learn a floor that
         // would silently beat it (and linger after the override is removed).
         if (this.core.bsp.hasMinSizeOverride(win)) return;
+        this.setObservedMin(win,
+            frame.width > target.w + 16 ? frame.width : 0,
+            frame.height > target.h + 16 ? frame.height : 0);
+    }
+
+    setObservedMin(win, w, h) {
+        if (!this.core._observedMinSizes || !win) return;
+        if (this.core.bsp.hasMinSizeOverride(win)) return;
         const cur = this.core._observedMinSizes.get(win) || { w: 0, h: 0 };
-        let w = cur.w;
-        let h = cur.h;
-        if (frame.width > target.w + 16) w = Math.max(w, Math.round(frame.width));
-        if (frame.height > target.h + 16) h = Math.max(h, Math.round(frame.height));
+        w = Math.max(cur.w, Math.round(w || 0));
+        h = Math.max(cur.h, Math.round(h || 0));
         // Cap at half the work area: a single window can never need more than
         // that as a minimum, and it stops one bogus sample (a resize mutter
         // ignored) from starving the window for the rest of the session.
@@ -585,6 +596,162 @@ export class Placement {
         if (w === cur.w && h === cur.h) return;
         this.core._observedMinSizes.set(win, { w, h });
         this.core.debugLog(`min-learned: ${w}x${h} for ${win.get_wm_class_instance() || '?'}`);
+    }
+
+    applySettleFloor(win, target, f) {
+        // Install the frame as a temporary minimum for the rest of the settle
+        // window and retile so the neighbour makes room. Only the axes that
+        // exceed the slot become floors. The floor is never learned here: a
+        // transient remembered frame (XWayland Emacs) must not persist;
+        // finalizeSettleMin() promotes or reverts it when settle ends.
+        const tw = f.width > target.w + 16 ? Math.round(f.width) : 0;
+        const th = f.height > target.h + 16 ? Math.round(f.height) : 0;
+        if (!tw && !th) return false;
+        const cur = win._plaidSettleMin;
+        if (cur && cur.w === tw && cur.h === th) return true;
+        if (!win._plaidSettleSnap)
+            win._plaidSettleSnap = this.settleSnapshotLayout(win);
+        win._plaidSettleMin = { w: tw, h: th };
+        this.core.debugLog(`anim: settle floor ${tw}x${th} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} ` +
+            `frame=(${Math.round(f.x)},${Math.round(f.y)},${Math.round(f.width)},${Math.round(f.height)}) ` +
+            `target=${Math.round(target.w)}x${Math.round(target.h)}`);
+        this.landingAccepted(win);
+        const ws = win.get_workspace();
+        if (ws) {
+            this.core.signals.addTimeout(100, () => {
+                if (!this.core._settings) return GLib.SOURCE_REMOVE;
+                this.core.layouts.retileWorkspace(ws);
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+        return true;
+    }
+
+    noteSettleFrame(win) {
+        // Settle poll hook: detect a client that has stopped at a size larger
+        // than its slot. Two consecutive 400ms ticks with the same frame is a
+        // real refusal; a frame that keeps moving is still restoring and is
+        // left to the settle-end retile.
+        if (!this.core._settings || !win || this.core._grabOp) return false;
+        if (!win._plaidSettleUntil || win._plaidSettleUntil <= Date.now()) return false;
+        if (this.core._animWindows && this.core._animWindows.has(win)) return false;
+        if (win._plaidSettleMin) return true;
+        const ws = win.get_workspace();
+        if (!ws) return false;
+        const layout = this.core.windows.getWorkspaceLayout(ws);
+        if (layout === 'floating') return false;
+        const gap = this.core._settings.get_int('inside-gap');
+        const workArea = ws.get_work_area_for_monitor(global.display.get_primary_monitor());
+        if (!workArea || !workArea.width) return false;
+        const slot = this.core.grab.windowSlotRect(win, ws, layout, workArea, gap);
+        if (!slot) return false;
+        const f = win.get_frame_rect();
+        if (f.width <= slot.w + 16 && f.height <= slot.h + 16) {
+            win._plaidSettleFrameRef = null;
+            return false;
+        }
+        const ref = win._plaidSettleFrameRef;
+        if (!ref || Math.abs(ref.w - f.width) > 2 || Math.abs(ref.h - f.height) > 2) {
+            win._plaidSettleFrameRef = { w: f.width, h: f.height };
+            return false;
+        }
+        return this.applySettleFloor(win, { w: slot.w, h: slot.h }, f);
+    }
+
+    settleSnapshotLayout(win) {
+        // A temporary settle floor bends the live split (the partition only
+        // honours minimums by moving ratios). Snapshot the pre-bend layout so
+        // finalizeSettleMin() can put it back if the client shrinks once it
+        // has finished restoring.
+        const ws = win.get_workspace();
+        if (!ws) return null;
+        const layout = this.core.windows.getWorkspaceLayout(ws);
+        if (layout === 'dwindle') {
+            const tree = this.core.bsp.bspGetTree(ws);
+            if (!tree) return null;
+            const parsed = this.core.bsp.dwindleShapeFromString(
+                this.core.bsp.dwindleShapeToString(tree));
+            return parsed ? { layout, dwindle: parsed } : null;
+        }
+        if (layout === 'master-stack' || layout === 'centered-master-stack') {
+            const stack = this.core.layouts.getStackRatios(ws);
+            return {
+                layout,
+                master: this.core.layouts.getMasterRatio(ws),
+                stack: new Map(stack),
+            };
+        }
+        return null;
+    }
+
+    restoreSettleLayout(win, snap) {
+        if (!snap) return;
+        const ws = win.get_workspace();
+        if (!ws) return;
+        if (this.core.windows.getWorkspaceLayout(ws) !== snap.layout) return;
+        if (snap.dwindle) {
+            const tree = this.core.bsp.bspGetTree(ws);
+            if (tree && this.core.bsp.reconcileTreeRatios(snap.dwindle, tree))
+                this.core.debugLog(`settle: restored split ratios for ${win.get_wm_class_instance() || '?'}`);
+        } else if (snap.stack) {
+            this.core._masterRatios.set(this.core.geometry.wsIndex(ws), snap.master);
+            const stack = this.core.layouts.getStackRatios(ws);
+            stack.clear();
+            for (const [k, v] of snap.stack) stack.set(k, v);
+        }
+        this.core.persistence.scheduleSaveLayouts();
+    }
+
+    finalizeSettleMin(win) {
+        // Called when the settle window closes (poll or the deferred retry).
+        // A temporary floor exists only to keep the neighbour out of the way
+        // while the client restores. Promote it to a learned floor ONLY when
+        // the client cannot tell us its own minimum: a reported hint is
+        // authoritative after settle, and learning a restored frame over it
+        // would pin the window at its remembered size (the Emacs walk).
+        // Otherwise clear the floor and restore the layout it displaced.
+        if (!win) return false;
+        const temp = win._plaidSettleMin;
+        const snap = win._plaidSettleSnap;
+        win._plaidSettleMin = null;
+        win._plaidSettleSnap = null;
+        if (win._plaidSettleRetryId) {
+            GLib.source_remove(win._plaidSettleRetryId);
+            this.core.signals.untrackSource(win._plaidSettleRetryId);
+            win._plaidSettleRetryId = 0;
+        }
+        win._plaidSettleFrameRef = null;
+        if (!temp) return false;
+        if (!win.get_compositor_private()) return true;
+        const ws = win.get_workspace();
+        if (!ws || this.core.windows.isFloating(win)) {
+            this.restoreSettleLayout(win, snap);
+            return true;
+        }
+        const f = win.get_frame_rect();
+        const kept = (temp.w === 0 || f.width >= temp.w - 8) &&
+            (temp.h === 0 || f.height >= temp.h - 8);
+        let [hw, hh] = [0, 0];
+        {
+            const ms = win.get_min_size();
+            hw = Number.isFinite(ms[0]) ? ms[0] : 0;
+            hh = Number.isFinite(ms[1]) ? ms[1] : 0;
+        }
+        const learnW = kept && temp.w > 0 && !(hw > 0) ? temp.w : 0;
+        const learnH = kept && temp.h > 0 && !(hh > 0) ? temp.h : 0;
+        {
+            if (kept) {
+                this.core.debugLog(`settle: kept floor ${temp.w}x${temp.h} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} ` +
+                    `hint=${hw}x${hh} learned=${learnW}x${learnH}`);
+            } else {
+                this.core.debugLog(`settle: dropped temporary floor ${temp.w}x${temp.h} for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} ` +
+                    `frame=${Math.round(f.width)}x${Math.round(f.height)}`);
+            }
+        }
+        if (learnW || learnH) this.setObservedMin(win, learnW, learnH);
+        if (!kept) this.restoreSettleLayout(win, snap);
+        this.core.layouts.retileWorkspace(ws);
+        return true;
     }
 
     releaseMinLimitedWindow(win) {
@@ -614,6 +781,30 @@ export class Placement {
         if (!this.core._landingRetries || !this.core._landingGivenUp || !this.core._settings || !win) return;
         if (!win.get_compositor_private()) {
             this.core.debugLog(`anim: landing retry skipped (window gone) id=${win.get_id()}`);
+            return;
+        }
+        // A freshly placed client can still be restoring its own geometry.
+        // Retrying and floating it during that window ejects windows that
+        // would have settled at a valid size. Defer the retry until the
+        // settle window ends, then run one fresh retile.
+        const settleUntil = win._plaidSettleUntil || 0;
+        if (settleUntil > Date.now()) {
+            if (!win._plaidSettleRetryId) {
+                const delay = Math.max(50, settleUntil - Date.now() + 50);
+                win._plaidSettleRetryId = this.core.signals.addTimeout(delay, () => {
+                    win._plaidSettleRetryId = 0;
+                    if (!this.core._settings || !this.core._windowWorkspaces?.has(win))
+                        return GLib.SOURCE_REMOVE;
+                    // finalizeSettleMin() retiles itself when it had a
+                    // temporary floor to promote or drop.
+                    if (!this.finalizeSettleMin(win)) {
+                        const ws = win.get_workspace();
+                        if (ws) this.core.layouts.retileWorkspace(ws);
+                    }
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+            this.core.debugLog(`anim: landing deferred until settle end for id=${win.get_id()}`);
             return;
         }
         const n = (this.core._landingRetries.get(win) || 0) + 1;

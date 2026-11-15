@@ -392,6 +392,14 @@ export class Windows extends PlaidSubsystem {
             win._plaidSettlePollId = 0;
         }
         win._plaidSettleUntil = 0;
+        if (win._plaidSettleRetryId) {
+            GLib.source_remove(win._plaidSettleRetryId);
+            this.core.signals.untrackSource(win._plaidSettleRetryId);
+            win._plaidSettleRetryId = 0;
+        }
+        win._plaidSettleMin = null;
+        win._plaidSettleSnap = null;
+        win._plaidSettleFrameRef = null;
         win._plaidSurfaceStrikes = 0;
         win._plaidHoldReveal = false;
         if (this.core._maximizeToggleRects) this.core._maximizeToggleRects.delete(win);

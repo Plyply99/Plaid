@@ -322,11 +322,15 @@ export class Bsp {
             // placement and reports a matching minimum for a few seconds. Using
             // that as a partition floor walked the dwindle split by one title
             // bar per retile (1048 -> 1008 -> 969 -> 929 -> 889) and persisted
-            // the bent ratio. Ignore transient floors until the settle window
-            // closes; the first retile after settle re-clamps with the stable
-            // hints. An explicit min-size override still wins (checked above).
-            if (win._plaidSettleUntil && win._plaidSettleUntil > Date.now())
+            // the bent ratio. Ignore transient hints until the settle window
+            // closes; a temporary frame-based floor keeps the layout from
+            // overlapping the neighbour in the meantime. An explicit
+            // min-size override still wins (checked above).
+            if (win._plaidSettleUntil && win._plaidSettleUntil > Date.now()) {
+                const temp = win._plaidSettleMin;
+                if (temp) return { w: Math.max(0, temp.w), h: Math.max(0, temp.h) };
                 return { w: 0, h: 0 };
+            }
             {
                 const [mw, mh] = win.get_min_size();
                 w = Number.isFinite(mw) ? mw : 0;
