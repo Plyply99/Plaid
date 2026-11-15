@@ -101,7 +101,10 @@ export class PlaidCore {
     debugLog(...args) {
         if (!this._settings) return;
         if (!this._settings.get_boolean('debug')) return;
-        console.debug(`[plaid] ${args.join(' ')}`);
+        // console.debug is dropped by GNOME Shell's console bridge and never
+        // reaches the journal; console.log is both EGO-safe (console.*, not
+        // the shell's log()) and visible in journalctl behind the debug gate.
+        console.log(`[plaid] ${args.join(' ')}`);
     }
 
     currentTime() {
