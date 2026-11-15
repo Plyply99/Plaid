@@ -478,6 +478,9 @@ export class Placement {
                 }
                 const prev = this.core._mismatchFrames.get(win);
                 this.core._mismatchFrames.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
+                const stable = !!(prev &&
+                    Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
+                    Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1);
                 const refusesShrink = f.width > s.targetW + 16 || f.height > s.targetH + 16;
                 // A settling client can re-apply its remembered geometry
                 // after placement (XWayland Emacs: 1936x1185). That is not a
@@ -486,40 +489,55 @@ export class Placement {
                 // Wait out the settle window; stable clients still bend and
                 // float through the normal retry path afterwards.
                 const settling = !!(win._plaidSettleUntil && win._plaidSettleUntil > Date.now());
-                if (!settling && prev && refusesShrink &&
-                    Math.abs(f.x - prev.x) <= 1 && Math.abs(f.y - prev.y) <= 1 &&
-                    Math.abs(f.width - prev.w) <= 1 && Math.abs(f.height - prev.h) <= 1) {
+                if (!settling && stable && refusesShrink) {
                     this.recordObservedMin(win, f, { w: s.targetW, h: s.targetH });
                     this.adjustPinnedTree(win, win.get_workspace());
+                }
+                // A client that is stable inside its slot but smaller (or a
+                // few pixels in) has honoured its own size hints; retrying or
+                // floating only re-divides the layout around a hole. Accept
+                // it as landed after the slot has been observed twice.
+                const contained = f.x >= s.targetX - 1 && f.y >= s.targetY - 1 &&
+                    f.x + f.width <= s.targetX + s.targetW + tol &&
+                    f.y + f.height <= s.targetY + s.targetH + tol;
+                if (!pure && !settling && stable && !refusesShrink && contained) {
+                    this.core.debugLog(`anim: landing accepted stable deviation for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} ` +
+                        `frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                    this.landingAccepted(win);
+                    return true;
                 }
                 this.retryLanding(win);
             }
             return false;
         } else {
-            if (this.core._landingRetries) this.core._landingRetries.delete(win);
-            if (this.core._landingGivenUp) this.core._landingGivenUp.delete(win);
-            if (this.core._mismatchFrames) this.core._mismatchFrames.delete(win);
-            if (this.core._pendingWarp && this.core._pendingWarp.has(win)) {
-                this.core._pendingWarp.delete(win);
-                this.core.windows.moveCursorToWindow(win);
-                // The window has landed — cancel the 2.5s backstop reveal
-                // (it must not force-reveal a window that later moves to
-                // an inactive workspace) and re-attach flair that the
-                // pending-warp state skipped.
-                //
-                // The settle poll is deliberately NOT cancelled here:
-                // this function also runs on the 'tiled' verify path of
-                // every animated retile, where killing an armed settle
-                // poll would silently skip the client-resize correction
-                // for give-up windows. The poll self-expires at 6s.
-                if (win._plaidInvisibleTimer) {
-                    GLib.source_remove(win._plaidInvisibleTimer);
-                    win._plaidInvisibleTimer = 0;
-                }
-                this.core.signals.scheduleBorders();
-                this.core.borders.updateBorders();
-            }
+            this.landingAccepted(win);
             return true;
+        }
+    }
+
+    landingAccepted(win) {
+        if (this.core._landingRetries) this.core._landingRetries.delete(win);
+        if (this.core._landingGivenUp) this.core._landingGivenUp.delete(win);
+        if (this.core._mismatchFrames) this.core._mismatchFrames.delete(win);
+        if (this.core._pendingWarp && this.core._pendingWarp.has(win)) {
+            this.core._pendingWarp.delete(win);
+            this.core.windows.moveCursorToWindow(win);
+            // The window has landed — cancel the 2.5s backstop reveal
+            // (it must not force-reveal a window that later moves to
+            // an inactive workspace) and re-attach flair that the
+            // pending-warp state skipped.
+            //
+            // The settle poll is deliberately NOT cancelled here:
+            // this function also runs on the 'tiled' verify path of
+            // every animated retile, where killing an armed settle
+            // poll would silently skip the client-resize correction
+            // for give-up windows. The poll self-expires at 6s.
+            if (win._plaidInvisibleTimer) {
+                GLib.source_remove(win._plaidInvisibleTimer);
+                win._plaidInvisibleTimer = 0;
+            }
+            this.core.signals.scheduleBorders();
+            this.core.borders.updateBorders();
         }
     }
 
@@ -559,13 +577,18 @@ export class Placement {
     }
 
     releaseMinLimitedWindows() {
-        // Let windows auto-floated for the size minimum rejoin: their learned
-        // minimums now let the partition allocate a fitting slot.
-        if (!this.core._minLimitedWindows || this.core._minLimitedWindows.size === 0) return;
-        const wins = [...this.core._minLimitedWindows];
+        // Let windows auto-floated for the size minimum or a give-up landing
+        // rejoin: their learned minimums now let the partition allocate a
+        // fitting slot.
+        if (!this.core._minLimitedWindows) return;
+        const wins = new Set([
+            ...this.core._minLimitedWindows,
+            ...(this.core._landingGivenUp ?? []),
+        ]);
+        if (wins.size === 0) return;
         for (const win of wins)
             this.releaseMinLimitedWindow(win);
-        this.core.debugLog(`min-limited: released ${wins.length} window(s)`);
+        this.core.debugLog(`min-limited: released ${wins.size} window(s)`);
     }
 
     retryLanding(win) {

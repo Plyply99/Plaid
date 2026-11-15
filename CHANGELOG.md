@@ -29,6 +29,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Desktop icons are not tiled.** A desktop-icons window (such as Desktop Icons
   NG) is ignored by Plaid instead of becoming a full-screen tile with borders and
   blur.
+- **Windows that settle slightly off their slot stay tiled.** A window that honours
+  its own size hints is no longer floated after the landing retries, so the
+  surrounding layout no longer re-divides around a hole.
 
 ## v51.27 — 2026-11-04
 

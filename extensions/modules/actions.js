@@ -195,10 +195,11 @@ export class Actions extends PlaidSubsystem {
         const focused = this.getActiveWindow();
         if (!focused) return;
 
-        // A min-limited window (auto-floated because no slot met its minimum)
-        // was never user-floated — toggling releases it back to tiling instead
-        // of marking it floated.
-        if (this.core._minLimitedWindows && this.core._minLimitedWindows.has(focused)) {
+        // A min-limited or give-up-landing window (auto-floated, never
+        // user-floated) is released back to tiling instead of being marked
+        // floated a second time.
+        if ((this.core._minLimitedWindows && this.core._minLimitedWindows.has(focused)) ||
+            (this.core._landingGivenUp && this.core._landingGivenUp.has(focused))) {
             this.core.placement.releaseMinLimitedWindow(focused);
             const ws = focused.get_workspace();
             if (ws) {
