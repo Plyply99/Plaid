@@ -26,6 +26,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Lighter gradient borders.** Each border is drawn as four thin edge strips
   instead of a full-window surface, using far less memory and redrawing only what
   changed while a window is moved or resized. Static gradients are smoother.
+- **Desktop icons are not tiled.** A desktop-icons window (such as Desktop Icons
+  NG) is ignored by Plaid instead of becoming a full-screen tile with borders and
+  blur.
 
 ## v51.27 — 2026-11-04
 
