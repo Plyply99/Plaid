@@ -1,5 +1,5 @@
-// Pointer focus ("focus on hover") — focus the window under the pointer as the
-// mouse moves, across the active workspace. The Chromium family is excluded:
+// Pointer focus ("focus on hover") — focus the window the pointer enters, across
+// the active workspace. The Chromium family is excluded:
 // their app-managed focus closes web-rendered menus when focus is called.
 //
 // Methods live on this subsystem class.
@@ -40,6 +40,8 @@ export class PointerFocus extends PlaidSubsystem {
     }
 
     teardownPointerFocus() {
+        // Re-enabled, the first move focuses the window under the pointer.
+        this.core._pointerFocusHover = null;
         if (this.core._pointerFocusId) {
             GLib.source_remove(this.core._pointerFocusId);
             this.core._pointerFocusId = 0;
@@ -58,8 +60,14 @@ export class PointerFocus extends PlaidSubsystem {
     applyPointerFocus(px, py) {
         if (Main.overview.visible) return;
         if (Main.modalCount > 0) return;
+        // Focus moves when the pointer ENTERS a window, never on a move over
+        // the one it is already in: a menu that took focus from its window
+        // (Zoom's "More", a frameless toplevel) stays open while the pointer
+        // travels to it across that window.
         const target = this.resolveWindowByScan(px, py);
-        if (!target) return;
+        const entered = target !== this.core._pointerFocusHover;
+        this.core._pointerFocusHover = target;
+        if (!target || !entered) return;
         if (!this.canPointerFocusWindow(target)) return;
         if (target === global.display.focus_window) return;
         if (target === this.core._backgroundAppWin) return;
@@ -159,9 +167,11 @@ export class PointerFocus extends PlaidSubsystem {
             this.core._chromiumProcessCache.set(pid, verdict);
             if (!verdict) {
                 // Force the next tick to re-evaluate this position; the tick
-                // otherwise short-circuits when the pointer has not moved.
+                // otherwise short-circuits when the pointer has not moved, and
+                // focuses only a window the pointer entered.
                 this.core._pointerFocusLastX = -1;
                 this.core._pointerFocusLastY = -1;
+                this.core._pointerFocusHover = null;
             }
         };
         const cachedCmd = this.core.procInfo.procCmdlineCached(pid);

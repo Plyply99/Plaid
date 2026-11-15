@@ -215,6 +215,7 @@ export class PlaidCore {
         this._pointerFocusId = 0;
         this._pointerFocusLastX = -1;
         this._pointerFocusLastY = -1;
+        this._pointerFocusHover = null;
         this._pointerFocusCandSig = '';
         this._chromiumProcessCache = new Map();
         this._backgroundAppProc = null;

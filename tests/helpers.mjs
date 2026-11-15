@@ -160,6 +160,7 @@ function resetCoreState(core, settings) {
   core._pointerFocusId = 0;
   core._pointerFocusLastX = -1;
   core._pointerFocusLastY = -1;
+  core._pointerFocusHover = null;
   core._pointerFocusCandSig = '';
   core._chromiumProcessCache = new Map();
   core._backgroundAppProc = null;
