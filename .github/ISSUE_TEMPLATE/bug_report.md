@@ -32,6 +32,7 @@ journalctl -b -o cat | grep '\[plaid\]'
 
 ## Notes
 
+- This tracker is for bugs; feature requests belong in Discussions → Ideas.
 - Multi-monitor setups are especially valuable to test — Plaid's per-monitor
   tiling is the known gap we're actively working on.
 - Anything else that might help: the apps involved, the layout in use, what

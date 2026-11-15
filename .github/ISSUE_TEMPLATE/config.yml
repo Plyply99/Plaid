@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Feature request or idea
+    url: https://github.com/Plyply99/Plaid/discussions/new?category=ideas
+    about: Feature requests live in Discussions so the issue tracker stays focused on bugs.
+  - name: Question or help
+    url: https://github.com/Plyply99/Plaid/discussions/new?category=q-a
+    about: Ask questions and get help from other users.
