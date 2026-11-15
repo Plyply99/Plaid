@@ -20,27 +20,14 @@ export class Borders extends PlaidSubsystem {
         // Exactly-one-border (client-type rule). Wayland: the mask attaches to the
         // actor, so this widget is captured/clipped and can never render — the SDF is
         // the sole border. X11: the mask attaches to the surface child, so the widget
-        // (on the actor) escapes the capture — use it as the border only when its
-        // stroke fits the allocation (shadowed windows), refuse it for zero-shadow
-        // electron windows (stroke outside → double SDF), and use a placeholder for a
-        // childless window until the surface arrives. Teardown is border-only
-        // (_removeWidgetBorder), never destroying the mask.
+        // (on the actor) escapes the capture; borderBox keeps its stroke inside the
+        // buffer, and a childless window uses a placeholder until the surface arrives.
+        // Teardown is border-only (_removeWidgetBorder), never destroying the mask.
         if (settings.get_boolean('rounded-corners') &&
             settings.get_int('border-radius') > 0) {
             if (win.get_client_type() !== Meta.WindowClientType.X11) {
                 this.removeWidgetBorder(win);
                 return false;
-            }
-            if (this.core.masks.unwrapMaskActor(actor, win)) {
-                const effWidth = isFocused
-                    ? settings.get_int('active-border-width')
-                    : settings.get_int('inactive-border-width');
-                const buffer = win.get_buffer_rect();
-                if ((frame.x - buffer.x) < effWidth ||
-                    (frame.y - buffer.y) < effWidth) {
-                    this.removeWidgetBorder(win);
-                    return false;
-                }
             }
             // childless → fall through: create the placeholder widget
         }
@@ -71,10 +58,8 @@ export class Borders extends PlaidSubsystem {
         // workspace round-trips for some clients (Steam), so attaching there nested
         // and sank borders. The mask cuts the corners; the border stays square.
         const buffer = win.get_buffer_rect();
-        const borderX = (frame.x - buffer.x) - borderWidth;
-        const borderY = (frame.y - buffer.y) - borderWidth;
-        const borderW = frame.width + borderWidth * 2;
-        const borderH = frame.height + borderWidth * 2;
+        const [borderX, borderY, borderW, borderH] =
+            this.borderBox(win, frame, buffer, borderWidth);
 
         const old = this.core._windowBorders.get(win);
         // Scratch membership is part of the style: the outer ring lives on
@@ -145,12 +130,14 @@ export class Borders extends PlaidSubsystem {
                 const ringWidth = Math.max(2, activeWidth);
                 const scratchColor =
                     (settings.get_strv('scratchpad-border-color') || [])[0] || '#f5c211';
+                const [ringX, ringY, ringW, ringH] =
+                    this.borderBox(win, frame, win.get_buffer_rect(), borderWidth + ringWidth);
                 const ring = new St.Widget({
                     name: 'tiling-border',
-                    x: borderX - ringWidth,
-                    y: borderY - ringWidth,
-                    width: borderW + ringWidth * 2,
-                    height: borderH + ringWidth * 2,
+                    x: ringX,
+                    y: ringY,
+                    width: ringW,
+                    height: ringH,
                     style: `border: ${ringWidth}px solid ${scratchColor}; ` +
                         `border-radius: ${borderRadius + borderWidth + ringWidth}px; box-sizing: border-box;`,
                     reactive: false,
@@ -207,6 +194,23 @@ export class Borders extends PlaidSubsystem {
             direction,
             thetaStep: this.core.borderMath.gradientThetaStep(c1, c2),
         };
+    }
+
+    // The border's box in the window actor: `width` around the frame. An X11
+    // window actor repaints only its surface and shadow (mutter's paint volume
+    // leaves Plaid's children out), so on X11 the box stays inside the buffer:
+    // past its edge (a frameless window with no shadow) the border would leave
+    // trails as the window moves.
+    borderBox(win, frame, buffer, width) {
+        let x = frame.x - buffer.x - width, y = frame.y - buffer.y - width;
+        let x2 = x + frame.width + width * 2, y2 = y + frame.height + width * 2;
+        if (win.get_client_type() === Meta.WindowClientType.X11) {
+            x = Math.max(0, x);
+            y = Math.max(0, y);
+            x2 = Math.min(buffer.width, x2);
+            y2 = Math.min(buffer.height, y2);
+        }
+        return [x, y, x2 - x, y2 - y];
     }
 
     // Moves and sizes a border to its window; a border already there is left
@@ -592,9 +596,7 @@ export class Borders extends PlaidSubsystem {
             const buffer = win.get_buffer_rect();
             // A scratch border is laid out with its ring, on the pass after.
             if (border._plaidScratch) continue;
-            const bw = border._plaidWidth ?? 0;
-            this.placeBorder(border, (frame.x - buffer.x) - bw, (frame.y - buffer.y) - bw,
-                frame.width + bw * 2, frame.height + bw * 2);
+            this.placeBorder(border, ...this.borderBox(win, frame, buffer, border._plaidWidth ?? 0));
         }
     }
 

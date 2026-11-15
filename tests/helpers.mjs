@@ -262,6 +262,7 @@ export function fakeWin(opts = {}) {
     get_gtk_application_id: () => opts.appId ?? null,
     get_title: () => opts.title ?? '',
     get_min_size: () => opts.minSize ?? [0, 0],
+    get_client_type: () => opts.clientType ?? 0,
     get_window_type: () => opts.type ?? 0,
     get_pid: () => opts.pid ?? 0,
     get_compositor_private: () => opts.actor ?? null,
