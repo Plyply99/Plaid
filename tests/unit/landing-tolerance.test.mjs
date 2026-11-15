@@ -55,6 +55,19 @@ test('landing: a stable larger frame is accepted, records the minimum, and retil
   assert.equal(scheduled.delay, 100);
 });
 
+test('recordObservedMin: an explicit min-size override is never learned', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map([['org.gnome.texteditor', { w: 300, h: 300 }]]),
+    _observedMinSizes: new Map(),
+  });
+  const win = fakeWin({ instance: 'org.gnome.TextEditor', minSize: [1175, 936] });
+  win.get_workspace = () => null;
+
+  self.placement.recordObservedMin(win, { width: 1175, height: 936 }, { w: 800, h: 800 });
+
+  assert.equal(self._observedMinSizes.has(win), false);
+});
+
 test('releaseMinLimitedWindows: also releases give-up landings', () => {
   const self = makeSelf({});
   const win = fakeWin({ id: 2 });

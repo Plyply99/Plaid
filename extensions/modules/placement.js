@@ -563,6 +563,9 @@ export class Placement {
         // will actually take (apps such as ghostty report no min width, so
         // get_min_size() can't tell us).
         if (!this.core._observedMinSizes || !win) return;
+        // An explicit override is the authority; never learn a floor that
+        // would silently beat it (and linger after the override is removed).
+        if (this.core.bsp.hasMinSizeOverride(win)) return;
         const cur = this.core._observedMinSizes.get(win) || { w: 0, h: 0 };
         let w = cur.w;
         let h = cur.h;

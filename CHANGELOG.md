@@ -38,6 +38,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
   toolbars.
 - **X11 borders stay inside the window buffer.** Frameless X11 windows no longer
   leave border trails behind while they are dragged.
+- **Explicit minimum sizes win again.** A learned size floor can no longer
+  override a `min-window-sizes` entry, so a window with an override stays
+  resizable instead of being pinned at its first observed size.
 
 ## v51.27 — 2026-11-04
 

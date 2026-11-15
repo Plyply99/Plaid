@@ -296,16 +296,20 @@ export class Bsp {
         return map;
     }
 
-    getWindowMinSize(win) {
-        let entry = null;
+    minSizeOverride(win) {
         for (const c of this.core.winClassCandidates(win)) {
-            entry = this.core._minSizeOverrides.get(c);
-            if (entry) break;
+            const entry = this.core._minSizeOverrides.get(c);
+            if (entry) return entry;
         }
-        if (!entry) {
-            const title = (win.get_title() || '').toLowerCase();
-            entry = this.core._minSizeOverrides.get(title);
-        }
+        return this.core._minSizeOverrides.get((win.get_title() || '').toLowerCase()) || null;
+    }
+
+    hasMinSizeOverride(win) {
+        return !!this.minSizeOverride(win);
+    }
+
+    getWindowMinSize(win) {
+        const entry = this.minSizeOverride(win);
         let w = 0;
         let h = 0;
         if (entry) {
@@ -330,9 +334,11 @@ export class Bsp {
             }
         }
         // Some apps (ghostty) report no minimum, so raise the floor with the size
-        // this window was seen to refuse to shrink below.
+        // this window was seen to refuse to shrink below. An explicit
+        // min-window-sizes override is the authority and must never be
+        // overridden by a learned floor.
         const obs = this.core._observedMinSizes.get(win);
-        if (obs) {
+        if (obs && !entry) {
             w = Math.max(w, obs.w);
             h = Math.max(h, obs.h);
         }

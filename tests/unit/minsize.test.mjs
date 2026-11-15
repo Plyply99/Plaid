@@ -147,6 +147,17 @@ test('_getWindowMinSize: raises the floor with an observed (refused) size', () =
   assert.deepEqual(self._getWindowMinSize(w), { w: 250, h: 300 });
 });
 
+test('_getWindowMinSize: an explicit override beats a learned floor', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map([['org.gnome.texteditor', { w: 300, h: 300 }]]),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'org.gnome.TextEditor', minSize: [1175, 936] });
+  self._observedMinSizes.set(w, { w: 1175, h: 936 });
+  assert.equal(self._hasMinSizeOverride(w), true);
+  assert.deepEqual(self._getWindowMinSize(w), { w: 300, h: 300 });
+});
+
 test('_treeMinSizes: reserves one gap per split so nested minimums include it (regression)', () => {
   const self = minSelf();
   const mk = () => withMin({ w: 100, h: 50 });
