@@ -490,8 +490,24 @@ export class Placement {
                 // float through the normal retry path afterwards.
                 const settling = !!(win._plaidSettleUntil && win._plaidSettleUntil > Date.now());
                 if (!settling && stable && refusesShrink) {
+                    // The client has stopped changing at a size larger than
+                    // its slot: it is honouring a real minimum. Record it and
+                    // bend the split, then accept this frame instead of
+                    // floating. One retile lets the adjusted tree fit it.
                     this.recordObservedMin(win, f, { w: s.targetW, h: s.targetH });
                     this.adjustPinnedTree(win, win.get_workspace());
+                    this.core.debugLog(`anim: landing accepted stable size refusal for ${win.get_wm_class_instance() || '?'} id=${win.get_id()} ` +
+                        `frame=(${f.x},${f.y},${f.width},${f.height}) target=(${s.targetX},${s.targetY},${s.targetW},${s.targetH})`);
+                    this.landingAccepted(win);
+                    const ws = win.get_workspace();
+                    if (ws) {
+                        this.core.signals.addTimeout(100, () => {
+                            if (!this.core._settings) return GLib.SOURCE_REMOVE;
+                            this.core.layouts.retileWorkspace(ws);
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    }
+                    return true;
                 }
                 // A client that is stable inside its slot but smaller (or a
                 // few pixels in) has honoured its own size hints; retrying or

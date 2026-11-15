@@ -36,13 +36,23 @@ test('landing: a stable frame outside its slot still retries', () => {
   assert.equal(retried, 1);
 });
 
-test('landing: a stable larger frame is still treated as a size refusal', () => {
+test('landing: a stable larger frame is accepted, records the minimum, and retiles once', () => {
   const { self, win, s } = landing({ width: 1200 });
   let retried = 0;
+  let scheduled = null;
   self.placement.retryLanding = () => retried++;
+  self.placement.recordObservedMin = () => {};
+  self.placement.adjustPinnedTree = () => {};
+  win.get_workspace = () => ({});
+  self.signals.addTimeout = (delay, cb) => {
+    scheduled = { delay, cb };
+    return 1;
+  };
 
-  assert.equal(self.placement.verifyAnimationLanding(s, 'tiled'), false);
-  assert.equal(retried, 1);
+  assert.equal(self.placement.verifyAnimationLanding(s, 'tiled'), true);
+  assert.equal(retried, 0);
+  assert.equal(self._landingGivenUp.has(win), false);
+  assert.equal(scheduled.delay, 100);
 });
 
 test('releaseMinLimitedWindows: also releases give-up landings', () => {
