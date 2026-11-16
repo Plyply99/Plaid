@@ -45,6 +45,10 @@ Releases older than v50.43 predate this changelog; see the git history and the
   compositor's size hints in the wrong shape on GNOME 50, so a window's minimum
   width was ignored and its minimum height was wrong. Tiled windows now respect
   their real minimums, and fixed-size windows are detected correctly again.
+- **The float picker toggles.** Hitting the float-picker shortcut on a window
+  that is already on the float list now offers to remove it instead of offering
+  to add it again. Rules are removed by whichever entry matches — class, title,
+  or process name.
 - **Reopened windows no longer pop out or overlap.** A window that is still
   restoring its own geometry after opening (at login or when reopened) is not
   counted as a failed placement. If it refuses to shrink below its own minimum,

@@ -56,7 +56,8 @@ export function fakeSettings(values = {}) {
     get_double: (k) => (k in values ? values[k] : 0.5),
     get_boolean: (k) => (k in values ? values[k] : false),
     get_string: (k) => (k in values ? values[k] : ''),
-    get_strv: (k) => (k in values ? values[k] : []),
+    get_strv: (k) => (k in values ? [...values[k]] : []),
+    set_strv: (k, v) => { values[k] = [...v]; },
     get_default_value: (k) => (k in values ? { deep_unpack: () => values[k] } : null),
     get_user_value: (k) => (k in values ? { deep_unpack: () => values[k] } : null),
     settings_schema: { list_keys: () => Object.keys(values) },
@@ -202,6 +203,7 @@ function resetCoreState(core, settings) {
   core._resumeMonitorsMoved = false;
   core._regroupId = 0;
   core._grabbedWindow = null;
+  core._grabFromMon = -1;
   core._grabDropped = false;
   core._mutterSettings = null;
   core._signals = [];
