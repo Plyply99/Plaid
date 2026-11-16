@@ -343,6 +343,78 @@ test('Monitors: a single monitor never prompts', () => {
   });
 });
 
+test('Monitors: rekeyMap swaps the bare index with the new primary connector', () => {
+  const m = new Monitors({});
+  const map = new Map([
+    [2, 'dwindle'],
+    ['2@eDP-1', 'stale-bare-copy'],
+    ['2@DP-1', 'master-stack'],
+    ['2@HDMI-1', 'floating'],
+  ]);
+
+  m.rekeyMap(map, 'eDP-1', 'DP-1');
+
+  assert.equal(map.get(2), 'master-stack');
+  assert.equal(map.get('2@eDP-1'), 'dwindle', 'live bare state wins over a stale copy');
+  assert.equal(map.get('2@HDMI-1'), 'floating');
+  assert.equal(map.has('2@DP-1'), false);
+});
+
+test('Monitors: a primary change moves trees and ratios to the new keying', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({});
+    self.geometry.wsIndex = () => 2;
+    self._keyedPrimary = 'eDP-1';
+    const ws = {};
+    const bare = split('h', 0.5, leaf(fakeWin({ id: 1 })), leaf(fakeWin({ id: 2 })));
+    const newPrimaryGroup = self.monitors.groupObjFor(ws, 'DP-1');
+    const dpTree = split('v', 0.4, leaf(fakeWin({ id: 3 })), leaf(fakeWin({ id: 4 })));
+    self._bspTrees.set(ws, bare);
+    self._bspTrees.set(newPrimaryGroup, dpTree);
+    self._workspaceLayouts.set(2, 'dwindle');
+    self._workspaceLayouts.set('2@DP-1', 'master-stack');
+    self.layouts.retileAll = () => {};
+    self.persistence.scheduleSaveLayouts = () => {};
+
+    self.monitors.syncKeyedPrimary('DP-1');
+
+    assert.equal(self._keyedPrimary, 'DP-1');
+    assert.equal(self._bspTrees.get(ws), dpTree);
+    const oldGroup = self.monitors.groupObjFor(ws, 'eDP-1');
+    assert.equal(self._bspTrees.get(oldGroup), bare);
+    assert.equal(self._workspaceLayouts.get(2), 'master-stack');
+    assert.equal(self._workspaceLayouts.get('2@eDP-1'), 'dwindle');
+    assert.equal(self._workspaceLayouts.has('2@DP-1'), false);
+  });
+});
+
+test('Monitors: monitors-changed rekeys when the runtime primary changes', () => {
+  withMonitors(1, () => {
+    const self = makeSelf({});
+    self._keyedPrimary = 'eDP-1';
+    self.geometry.wsIndex = () => 2;
+    let retiles = 0;
+    self.layouts.retileAll = () => retiles++;
+    self.persistence.scheduleSaveLayouts = () => {};
+
+    self.monitors.onMonitorsChanged();
+
+    assert.equal(self._keyedPrimary, 'DP-1');
+    assert.equal(retiles, 1);
+  });
+});
+
+test('Monitors: fallback connectors are renamed once resolved', () => {
+  withMonitors(0, () => {
+    const core = { _windowMonitors: new Map(), _monitorConnCache: null };
+    const m = new Monitors(core);
+    const win = {};
+    core._windowMonitors.set(win, '#1');
+    m.syncFallbackConnectors(m.connectors());
+    assert.equal(core._windowMonitors.get(win), 'DP-1');
+  });
+});
+
 test('layouts: master and stack ratios are kept per monitor group', () => {
   withMonitors(0, () => {
     const self = makeSelf({});

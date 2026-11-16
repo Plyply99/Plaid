@@ -427,6 +427,15 @@ export class PlaidCore {
         this._workspaceOrders = s.workspaceOrders;
         this._windowWorkspaces = s.windowWorkspaces;
         this._windowWSIndices = s.windowWSIndices;
+        if (s.windowMonitors) {
+            for (const [win] of s.windowMonitors) {
+                if (!alive(win)) s.windowMonitors.delete(win);
+            }
+            this._windowMonitors = s.windowMonitors;
+        }
+        if (s.groupObjs) this._groupObjs = s.groupObjs;
+        if (s.keyedPrimary !== undefined) this._keyedPrimary = s.keyedPrimary;
+        this._monitorConnCache = null;
         this._lastFocusedPerWorkspace = s.lastFocusedPerWorkspace;
         if (s.lastRealFocusedWindow && alive(s.lastRealFocusedWindow))
             this._lastRealFocusedWindow = s.lastRealFocusedWindow;
@@ -487,6 +496,9 @@ export class PlaidCore {
                 workspaceOrders: this._workspaceOrders,
                 windowWorkspaces: this._windowWorkspaces,
                 windowWSIndices: this._windowWSIndices,
+                windowMonitors: this._windowMonitors,
+                groupObjs: this._groupObjs,
+                keyedPrimary: this._keyedPrimary,
                 lastFocusedPerWorkspace: this._lastFocusedPerWorkspace,
                 lastRealFocusedWindow: this._lastRealFocusedWindow,
                 scratchpadWindows: this._scratchpadWindows,

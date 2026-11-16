@@ -168,6 +168,14 @@ export class Signals extends PlaidSubsystem {
                     this.core._masterRatios.delete(this.core.geometry.wsIndex(workspace));
                     this.core._stackRatios.delete(this.core.geometry.wsIndex(workspace));
                     this.core._bspTrees.delete(workspace);
+                    const groups = this.core._groupObjs?.get(workspace);
+                    if (groups) {
+                        for (const group of groups.values()) {
+                            this.core._bspTrees.delete(group);
+                            this.core._dwindleLeafSigs.delete(group);
+                        }
+                        this.core._groupObjs.delete(workspace);
+                    }
                     this.core._workspaceLayouts.delete(this.core.geometry.wsIndex(workspace));
                     this.core._lastFocusedPerWorkspace.delete(workspace);
                     // Workspace-keyed, workspace-object key — a retained

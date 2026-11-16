@@ -84,7 +84,21 @@ export class Monitors extends PlaidSubsystem {
             }
         }
         this.core._monitorConnCache = conns;
+        if (conns.some(Boolean)) this.syncFallbackConnectors(conns);
         return conns;
+    }
+
+    // A window added before the connectors resolved is keyed "#N"; rewrite it
+    // to the connector as soon as one is known.
+    syncFallbackConnectors(conns) {
+        const map = this.core._windowMonitors;
+        if (!map) return;
+        for (const [win, conn] of map) {
+            if (!conn || conn[0] !== '#') continue;
+            const mon = parseInt(conn.substring(1), 10);
+            const resolved = conns[mon];
+            if (resolved) map.set(win, resolved);
+        }
     }
 
     invalidate() {
@@ -199,26 +213,31 @@ export class Monitors extends PlaidSubsystem {
             .filter(w => this.windowMonitor(w) === connector);
     }
 
-    groupObj(ws, mon) {
-        if (!ws || !this.core._groupObjs) return null;
-        if (this.isKeyedPrimary(mon)) return ws;
+    groupObjFor(ws, connector) {
+        if (!ws || !this.core._groupObjs) return ws;
         let byConnector = this.core._groupObjs.get(ws);
         if (!byConnector) {
             byConnector = new Map();
             this.core._groupObjs.set(ws, byConnector);
         }
-        const connector = this.connectorOrFallback(mon);
         let group = byConnector.get(connector);
         if (!group) {
             group = {
+                plaidGroup: true,
                 workspace: ws,
-                monitor: mon,
                 connector,
-                key: this.groupKeyFor(this.core.geometry.wsIndex(ws), mon),
+                monitor: this.monitorForConnector(connector),
+                key: `${this.core.geometry.wsIndex(ws)}@${connector}`,
             };
             byConnector.set(connector, group);
         }
         return group;
+    }
+
+    groupObj(ws, mon) {
+        if (!ws) return null;
+        if (this.isKeyedPrimary(mon)) return ws;
+        return this.groupObjFor(ws, this.connectorOrFallback(mon));
     }
 
     // True when this monitor's group owns the bare workspace index (the
@@ -238,6 +257,69 @@ export class Monitors extends PlaidSubsystem {
         const idx = parseInt(wsIndex, 10);
         if (this.isKeyedPrimary(mon)) return idx;
         return groupKey(idx, this.connectorOrFallback(mon));
+    }
+
+    // Move per-index map state from one keyed primary to the new one:
+    // bare index <-> "index@connector", other connectors untouched.
+    rekeyMap(map, oldConn, newConn) {
+        if (!map || !oldConn || !newConn || oldConn === newConn) return;
+        const moved = new Map();
+        for (const [key, value] of map) {
+            if (typeof key === 'string' && !key.endsWith(`@${newConn}`))
+                moved.set(key, value);
+        }
+        for (const [key, value] of map) {
+            if (typeof key === 'number')
+                moved.set(`${key}@${oldConn}`, value);
+        }
+        for (const [key, value] of map) {
+            if (typeof key === 'string' && key.endsWith(`@${newConn}`))
+                moved.set(parseInt(key, 10), value);
+        }
+        map.clear();
+        for (const [key, value] of moved) map.set(key, value);
+    }
+
+    // The runtime primary changed: the new primary takes the bare keys, the
+    // old one keeps its arrangement under its connector.
+    syncKeyedPrimary(newConn) {
+        const oldConn = this.core._keyedPrimary;
+        if (!newConn || newConn === oldConn) return;
+        this.core._keyedPrimary = newConn;
+        if (!oldConn) return;
+        for (const map of [
+            this.core._workspaceLayouts,
+            this.core._masterRatios,
+            this.core._stackRatios,
+            this.core._persistedLayoutByIndex,
+            this.core._persistedMasterByIndex,
+            this.core._persistedStackByIndex,
+            this.core._persistedDwindleByIndex,
+            this.core._persistedDwindleRaw,
+        ]) {
+            this.rekeyMap(map, oldConn, newConn);
+        }
+        const moveTree = (map) => {
+            if (!map) return;
+            for (const [key, value] of [...map]) {
+                if (!key) continue;
+                if (key.plaidGroup) {
+                    if (key.connector !== newConn) continue;
+                    map.delete(key);
+                    map.set(key.workspace, value);
+                    const byConnector = this.core._groupObjs?.get(key.workspace);
+                    if (byConnector) byConnector.delete(newConn);
+                } else {
+                    map.delete(key);
+                    map.set(this.groupObjFor(key, oldConn), value);
+                }
+            }
+        };
+        moveTree(this.core._bspTrees);
+        moveTree(this.core._dwindleLeafSigs);
+        this.core.persistence.scheduleSaveLayouts();
+        this.core.layouts.retileAll();
+        this.core.debugLog(`primary monitor: ${oldConn} -> ${newConn} (keys rekeyed)`);
     }
 
     connectSignals() {
@@ -303,12 +385,34 @@ export class Monitors extends PlaidSubsystem {
     onMonitorsChanged() {
         this.invalidate();
         this.scheduleWorkspacesPrompt();
+        let moved = false;
         const map = this.core._windowMonitors;
-        if (!map) return;
-        for (const win of map.keys()) {
-            if (!win.get_compositor_private()) continue;
-            this.setWindowMonitor(win, win.get_monitor());
+        if (map) {
+            for (const win of [...map.keys()]) {
+                if (!win.get_compositor_private()) continue;
+                const mon = win.get_monitor();
+                if (!Number.isInteger(mon) || mon < 0) continue;
+                const prev = map.get(win);
+                const next = this.connectorOrFallback(mon);
+                if (prev === next) continue;
+                map.set(win, next);
+                const prevMon = this.monitorForConnector(prev);
+                const ws = win.get_workspace();
+                if (ws && prevMon !== mon) {
+                    this.regroupWindow(win, ws, prevMon, mon);
+                    moved = true;
+                }
+            }
         }
+        const livePrimary = this.connectorForMonitor(this.primaryMonitorIndex());
+        if (livePrimary) {
+            if (!this.core._keyedPrimary)
+                this.core._keyedPrimary = livePrimary;
+            else if (livePrimary !== this.core._keyedPrimary)
+                this.syncKeyedPrimary(livePrimary);
+        }
+        if (moved && livePrimary === this.core._keyedPrimary)
+            this.core.layouts.retileAll();
     }
 
     destroy() {
