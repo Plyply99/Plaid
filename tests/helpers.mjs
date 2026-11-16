@@ -55,6 +55,10 @@ export function fakeSettings(values = {}) {
     get_int: (k) => (k in values ? values[k] : 0),
     get_double: (k) => (k in values ? values[k] : 0.5),
     get_boolean: (k) => (k in values ? values[k] : false),
+    set_boolean: (k, v) => { values[k] = !!v; },
+    set_int: (k, v) => { values[k] = v; },
+    set_double: (k, v) => { values[k] = v; },
+    set_string: (k, v) => { values[k] = v; },
     get_string: (k) => (k in values ? values[k] : ''),
     get_strv: (k) => (k in values ? [...values[k]] : []),
     set_strv: (k, v) => { values[k] = [...v]; },
@@ -205,6 +209,9 @@ function resetCoreState(core, settings) {
   core._grabbedWindow = null;
   core._grabFromMon = -1;
   core._grabDropped = false;
+  core._wsPromptCheckId = 0;
+  core._wsPromptRetries = 0;
+  core._wsPromptDialog = null;
   core._mutterSettings = null;
   core._signals = [];
   core._windowSignals = new Map();

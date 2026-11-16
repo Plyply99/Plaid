@@ -8,6 +8,9 @@
 // Connectors come from Mutter (DP-1, HDMI-1, eDP-1). A "#N" index stand-in is
 // used only while a connector is unresolved and is NEVER persisted.
 
+import GLib from 'gi://GLib';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
 import { PlaidSubsystem } from './subsystem.js';
 
 export function groupKey(index, connector) {
@@ -247,17 +250,73 @@ export class Monitors extends PlaidSubsystem {
             (_display, mon, win) => this.onWindowEnteredMonitor(win, mon));
         if (this.core._mutterSettings) {
             this.connectObject(this.core._mutterSettings,
-                'changed::workspaces-only-on-primary', () => this.onMonitorsChanged());
+                'changed::workspaces-only-on-primary', () => {
+                    this.invalidate();
+                    // Toggling the setting changes which monitors tile: apply
+                    // it now instead of waiting for the next layout event.
+                    this.core.layouts.retileAll();
+                });
         }
+        this.scheduleWorkspacesPrompt(4000);
+    }
+
+    // 'skip'  - nothing to do (one monitor, or already offered)
+    // 'mark'  - multiple monitors but workspaces already span displays
+    // 'ask'   - multiple monitors and workspaces are primary-only
+    workspacesPromptAction() {
+        if (!this.core._settings) return 'skip';
+        if (this.nMonitors() <= 1) return 'skip';
+        if (this.core._settings.get_boolean('monitor-workspaces-prompted')) return 'skip';
+        const primaryOnly = !!(this.core._mutterSettings &&
+            this.core._mutterSettings.get_boolean('workspaces-only-on-primary'));
+        return primaryOnly ? 'ask' : 'mark';
+    }
+
+    scheduleWorkspacesPrompt(delay = 3000) {
+        if (!this.core._settings || this.core._wsPromptCheckId) return;
+        this.core._wsPromptCheckId = this.core.signals.addTimeout(delay, () => {
+            this.core._wsPromptCheckId = 0;
+            this.runWorkspacesPromptCheck();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    runWorkspacesPromptCheck() {
+        const action = this.workspacesPromptAction();
+        if (action === 'skip') return;
+        // The prompt would sit behind the lock screen; retry for a while and
+        // leave the marker unset so a later login can still offer it.
+        if (Main.sessionMode.isLocked) {
+            if (this.core._wsPromptRetries < 10) {
+                this.core._wsPromptRetries++;
+                this.scheduleWorkspacesPrompt(3000);
+            }
+            return;
+        }
+        this.core._wsPromptRetries = 0;
+        // One time only: mark it as offered before showing the dialog.
+        this.core._settings.set_boolean('monitor-workspaces-prompted', true);
+        if (action === 'mark') return;
+        this.core.actions.showWorkspacesOnAllDisplaysPrompt();
     }
 
     onMonitorsChanged() {
         this.invalidate();
+        this.scheduleWorkspacesPrompt();
         const map = this.core._windowMonitors;
         if (!map) return;
         for (const win of map.keys()) {
             if (!win.get_compositor_private()) continue;
             this.setWindowMonitor(win, win.get_monitor());
         }
+    }
+
+    destroy() {
+        if (this.core._wsPromptCheckId) {
+            GLib.source_remove(this.core._wsPromptCheckId);
+            this.core.signals.untrackSource(this.core._wsPromptCheckId);
+            this.core._wsPromptCheckId = 0;
+        }
+        super.destroy();
     }
 }

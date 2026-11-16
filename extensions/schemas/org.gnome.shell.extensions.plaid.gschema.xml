@@ -228,6 +228,12 @@
       <description>Monitor connector name (e.g. DP-1) whose layouts and ratios are stored in the workspace-layouts, workspace-master-ratios, workspace-stack-ratios and workspace-dwindle-trees keys. Empty means no monitor information has been recorded yet</description>
     </key>
 
+    <key name="monitor-workspaces-prompted" type="b">
+      <default>false</default>
+      <summary>Whether Plaid has offered to span workspaces across displays</summary>
+      <description>Set after the one-time prompt about GNOME's "workspaces on the primary display only" setting, whether the user enabled it, declined, or it was already off. Plaid never asks again once this is true</description>
+    </key>
+
     <key name="monitor-workspace-layouts" type="as">
       <default><![CDATA[[]]]></default>
       <summary>Remembered layouts per (workspace, monitor) group</summary>

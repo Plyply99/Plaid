@@ -298,6 +298,51 @@ test('windows: closing a window clears its leaf from every group tree', () => {
   });
 });
 
+test('Monitors: the workspaces prompt is decided once and only for primary-only workspaces', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({ 'monitor-workspaces-prompted': false });
+    self._mutterSettings = { get_boolean: () => true };
+    assert.equal(self.monitors.workspacesPromptAction(), 'ask');
+
+    self._settings.set_boolean('monitor-workspaces-prompted', true);
+    assert.equal(self.monitors.workspacesPromptAction(), 'skip');
+
+    self._settings.set_boolean('monitor-workspaces-prompted', false);
+    self._mutterSettings = { get_boolean: () => false };
+    assert.equal(self.monitors.workspacesPromptAction(), 'mark');
+  });
+});
+
+test('Monitors: the workspaces prompt marks itself as offered before showing', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({ 'monitor-workspaces-prompted': false });
+    self._mutterSettings = { get_boolean: () => true };
+    let asked = 0;
+    self.actions.showWorkspacesOnAllDisplaysPrompt = () => asked++;
+
+    self.monitors.runWorkspacesPromptCheck();
+    assert.equal(asked, 1);
+    assert.equal(self._settings.get_boolean('monitor-workspaces-prompted'), true);
+
+    self.monitors.runWorkspacesPromptCheck();
+    assert.equal(asked, 1, 'never asks twice');
+  });
+});
+
+test('Monitors: a single monitor never prompts', () => {
+  withMonitors(0, () => {
+    const oldCount = globalThis.global.display.get_n_monitors;
+    globalThis.global.display.get_n_monitors = () => 1;
+    try {
+      const self = makeSelf({ 'monitor-workspaces-prompted': false });
+      self._mutterSettings = { get_boolean: () => true };
+      assert.equal(self.monitors.workspacesPromptAction(), 'skip');
+    } finally {
+      globalThis.global.display.get_n_monitors = oldCount;
+    }
+  });
+});
+
 test('layouts: master and stack ratios are kept per monitor group', () => {
   withMonitors(0, () => {
     const self = makeSelf({});
