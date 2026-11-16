@@ -16,6 +16,48 @@ function minSelf(settings = {}) {
   });
 }
 
+test('unpackSizeHint: reads both the GNOME 50 [ok, w, h] and GNOME 51 [w, h] shapes', () => {
+  const self = makeSelf({});
+  assert.deepEqual(self.bsp.unpackSizeHint([true, 360, 200]), [true, 360, 200]);
+  assert.deepEqual(self.bsp.unpackSizeHint([false, 0, 0]), [false, 0, 0]);
+  assert.deepEqual(self.bsp.unpackSizeHint([360, 200]), [true, 360, 200]);
+  assert.deepEqual(self.bsp.unpackSizeHint(undefined), [false, 0, 0]);
+  assert.deepEqual(self.bsp.unpackSizeHint([true, NaN, 200]), [true, 0, 200]);
+});
+
+test('windowMinSizeHint: converts a client hint to a frame size', () => {
+  const self = makeSelf({});
+  const w = fakeWin({ minHint: [true, 360, 200], frameDW: 2, frameDH: 37 });
+  assert.deepEqual(self.bsp.windowMinSizeHint(w), { w: 362, h: 237 });
+});
+
+test('_getWindowMinSize: honours a GNOME 50 [ok, w, h] hint', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map(),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'org.gnome.nautilus', minHint: [true, 360, 200] });
+  assert.deepEqual(self._getWindowMinSize(w), { w: 360, h: 200 });
+});
+
+test('_getWindowMinSize: a GNOME 51 [w, h] hint still reads correctly', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map(),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'org.gnome.nautilus', minSize: [360, 200] });
+  assert.deepEqual(self._getWindowMinSize(w), { w: 360, h: 200 });
+});
+
+test('_isFixedSizeWindow: needs min===max in BOTH dimensions', () => {
+  const self = makeSelf({});
+  const fixed = fakeWin({ minHint: [true, 400, 300], maxHint: [true, 400, 300] });
+  assert.equal(self._isFixedSizeWindow(fixed), true);
+  const widthOnly = fakeWin({ minHint: [true, 400, 300], maxHint: [true, 400, 900] });
+  assert.equal(self._isFixedSizeWindow(widthOnly), false,
+    'the shifted tuple compared only widths and floated these');
+});
+
 test('_treeMinSizes: h-split adds widths, takes max height', () => {
   const self = minSelf();
   const a = withMin({ w: 100, h: 50 });

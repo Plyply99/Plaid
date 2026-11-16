@@ -112,6 +112,19 @@ test('finalizeSettleMin: a client with its own minimum hint is not learned', () 
     'an authoritative hint must not be shadowed by a learned frame');
 });
 
+test('finalizeSettleMin: a GNOME 50 [ok, w, h] hint still blocks learning', () => {
+  const self = makeSelf({});
+  const win = fakeWin({ id: 12, frame: { x: 0, y: 0, width: 360, height: 800 }, minHint: [true, 360, 0] });
+  win.get_compositor_private = () => ({});
+  win.get_workspace = () => ({ get_work_area_for_monitor: () => ({ width: 2560, height: 1440 }) });
+  win._plaidSettleMin = { w: 360, h: 0 };
+  self.layouts.retileWorkspace = () => {};
+  self.windows.isFloating = () => false;
+
+  assert.equal(self.placement.finalizeSettleMin(win), true);
+  assert.equal(self._observedMinSizes.has(win), false);
+});
+
 test('finalizeSettleMin: drops the floor when the client shrank back', () => {
   const self = makeSelf({});
   const win = fakeWin({ id: 6, frame: { x: 0, y: 0, width: 400, height: 800 } });

@@ -731,12 +731,9 @@ export class Placement {
         const f = win.get_frame_rect();
         const kept = (temp.w === 0 || f.width >= temp.w - 8) &&
             (temp.h === 0 || f.height >= temp.h - 8);
-        let [hw, hh] = [0, 0];
-        {
-            const ms = win.get_min_size();
-            hw = Number.isFinite(ms[0]) ? ms[0] : 0;
-            hh = Number.isFinite(ms[1]) ? ms[1] : 0;
-        }
+        const hint = this.core.bsp.unpackSizeHint(win.get_min_size());
+        const hw = hint[0] ? hint[1] : 0;
+        const hh = hint[0] ? hint[2] : 0;
         const learnW = kept && temp.w > 0 && !(hw > 0) ? temp.w : 0;
         const learnH = kept && temp.h > 0 && !(hh > 0) ? temp.h : 0;
         {

@@ -162,10 +162,11 @@ export class Windows extends PlaidSubsystem {
         // Non-resizable windows: Mutter refuses atomic move_resize_frame
         // placements, so tiling them only buys a ~2s retry dance before the
         // give-up float. A min===max hint is the cheap, reliable signal —
-        // float such windows up front instead.
-        const [mw, mh] = win.get_min_size();
-        const [xw, xh] = win.get_max_size();
-        return mw > 0 && xw > 0 && mw === xw && mh === xh;
+        // float such windows up front instead. Raw client hints compare equal
+        // (the frame delta cancels).
+        const [minOk, mw, mh] = this.core.bsp.unpackSizeHint(win.get_min_size());
+        const [maxOk, xw, xh] = this.core.bsp.unpackSizeHint(win.get_max_size());
+        return minOk && maxOk && mw > 0 && xw > 0 && mw === xw && mh === xh;
     }
 
     getWorkspaceOrder(workspace) {

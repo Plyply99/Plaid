@@ -41,6 +41,10 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Explicit minimum sizes win again.** A learned size floor can no longer
   override a `min-window-sizes` entry, so a window with an override stays
   resizable instead of being pinned at its first observed size.
+- **Minimum window sizes are honoured on GNOME 50.** Plaid read the
+  compositor's size hints in the wrong shape on GNOME 50, so a window's minimum
+  width was ignored and its minimum height was wrong. Tiled windows now respect
+  their real minimums, and fixed-size windows are detected correctly again.
 - **Reopened windows no longer pop out or overlap.** A window that is still
   restoring its own geometry after opening (at login or when reopened) is not
   counted as a failed placement. If it refuses to shrink below its own minimum,
