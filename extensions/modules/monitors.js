@@ -112,6 +112,13 @@ export class Monitors extends PlaidSubsystem {
     }
 
     monitorForConnector(connector) {
+        if (typeof connector === 'string') {
+            const fallback = /^#(\d+)$/.exec(connector);
+            if (fallback) {
+                const n = parseInt(fallback[1], 10);
+                return n < this.nMonitors() ? n : -1;
+            }
+        }
         const wanted = persistableConnector(connector);
         if (!wanted) return -1;
         return this.connectors().indexOf(wanted);
@@ -146,6 +153,41 @@ export class Monitors extends PlaidSubsystem {
         if (!win || !this.core._windowMonitors) return;
         const idx = Number.isInteger(mon) && mon >= 0 ? mon : this.primaryMonitorIndex();
         this.core._windowMonitors.set(win, this.connectorOrFallback(idx));
+    }
+
+    // Move a window's tree membership from one monitor group to another.
+    regroupWindow(win, ws, fromMon, toMon) {
+        if (!win || !ws) return;
+        const from = this.groupObj(ws, fromMon);
+        const to = this.groupObj(ws, toMon);
+        if (from === to) return;
+        const tree = this.core.bsp.bspGetTree(from);
+        if (tree) this.core._bspTrees.set(from, this.core.bsp.bspRemove(tree, win));
+        // The destination's leaf signature changes; drop it so the next retile
+        // reads the rebuilt set instead of restoring a stale shape.
+        if (this.core._dwindleLeafSigs) this.core._dwindleLeafSigs.delete(to);
+        if (this.monitorTiled(toMon) &&
+            this.core.windows.getWorkspaceLayout(ws, toMon) === 'dwindle')
+            this.core.bsp.bspInsertForWorkspace(ws, win, toMon);
+    }
+
+    onWindowEnteredMonitor(win, mon) {
+        if (!win || !this.core._windowMonitors) return;
+        if (!this.core._windowWorkspaces.has(win)) {
+            this.setWindowMonitor(win, mon);
+            return;
+        }
+        const prevConn = this.core._windowMonitors.get(win);
+        this.setWindowMonitor(win, mon);
+        // A drag keeps its group until grab end; grab.js regroups then.
+        if (this.core._grabOp) return;
+        if (prevConn === undefined) return;
+        const prevMon = this.monitorForConnector(prevConn);
+        if (prevMon === mon) return;
+        const ws = win.get_workspace();
+        if (!ws) return;
+        this.regroupWindow(win, ws, prevMon, mon);
+        this.core.layouts.retileWorkspace(ws);
     }
 
     getWindowsForGroup(ws, mon) {
@@ -202,7 +244,7 @@ export class Monitors extends PlaidSubsystem {
                 () => this.onMonitorsChanged());
         }
         this.connectObject(global.display, 'window-entered-monitor',
-            (_display, mon, win) => this.setWindowMonitor(win, mon));
+            (_display, mon, win) => this.onWindowEnteredMonitor(win, mon));
         if (this.core._mutterSettings) {
             this.connectObject(this.core._mutterSettings,
                 'changed::workspaces-only-on-primary', () => this.onMonitorsChanged());

@@ -118,6 +118,22 @@ export class Windows extends PlaidSubsystem {
         return false;
     }
 
+    // float-windows entries that match this window's process command line.
+    // Covers rules whose token is not the window class (Steam-style entries).
+    matchingFloatTokens(win) {
+        const pid = win ? win.get_pid() : 0;
+        if (!pid) return [];
+        const cmd = this.core.procInfo.procCmdlineCached(pid);
+        if (!cmd) return [];
+        const lower = cmd.toLowerCase();
+        const out = new Set();
+        for (const token of this.core._floatingClasses || []) {
+            if (!token || token.length < 3) continue;
+            if (lower.includes(token.toLowerCase())) out.add(token);
+        }
+        return [...out];
+    }
+
     isFloatProcessWindow(win) {
         if (!win) return false;
         let pid = 0;
@@ -369,6 +385,19 @@ export class Windows extends PlaidSubsystem {
         }
     }
 
+    // Remove a window from every dwindle tree of its workspace. On close the
+    // window's monitor can already point elsewhere (or -1), and a leaf left
+    // behind would shape the next window's insertion split.
+    forgetWindowTree(ws, win) {
+        if (!ws || !win) return;
+        const groups = [ws, ...(this.core._groupObjs?.get(ws)?.values() ?? [])];
+        for (const group of groups) {
+            const tree = this.core.bsp.bspGetTree(group);
+            if (tree && this.core.bsp.bspCollectWindows(tree).includes(win))
+                this.core._bspTrees.set(group, this.core.bsp.bspRemove(tree, win));
+        }
+    }
+
     removeWindow(win) {
         const ws = this.core._windowWorkspaces.get(win) || win.get_workspace();
         const wmClass = win.get_wm_class_instance() || '?';
@@ -423,13 +452,7 @@ export class Windows extends PlaidSubsystem {
             const order = this.getWorkspaceOrder(ws);
             const idx = order.indexOf(win);
             if (idx !== -1) order.splice(idx, 1);
-            const mon = win.get_monitor();
-            const layout = this.getWorkspaceLayout(ws, mon);
-            if (layout === 'dwindle') {
-                const group = this.core.monitors.groupObj(ws, mon);
-                const tree = this.core.bsp.bspGetTree(group);
-                if (tree) this.core._bspTrees.set(group, this.core.bsp.bspRemove(tree, win));
-            }
+            this.forgetWindowTree(ws, win);
             this.core.layouts.retileWorkspace(ws);
         }
     }

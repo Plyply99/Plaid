@@ -67,6 +67,8 @@ export class Grab extends PlaidSubsystem {
         if (!frame || frame.width === 0 || frame.height === 0 || !buffer) return;
 
         this.core._grabOp = grabOp;
+        this.core._grabbedWindow = metaWindow;
+        this.core._grabFromMon = metaWindow.get_monitor();
 
         // Capture the pointer for every tracked grab — the move-grab path
         // (e.g. SSD titlebar clicks) must compare against the real click
@@ -131,6 +133,8 @@ export class Grab extends PlaidSubsystem {
         } else {
             this.core._grabOp = null;
             this.core._grabWindow = null;
+            this.core._grabbedWindow = null;
+            this.core._grabFromMon = -1;
         }
     }
 
@@ -152,6 +156,12 @@ export class Grab extends PlaidSubsystem {
                         if (Math.hypot(dx, dy) >= grace)
                             this.core.windows.repositionWindow(metaWindow, ws);
                     }
+                }
+                const toMon = metaWindow.get_monitor();
+                if (this.core._grabFromMon >= 0 && toMon !== this.core._grabFromMon) {
+                    this.core.monitors.setWindowMonitor(metaWindow, toMon);
+                    this.core.monitors.regroupWindow(metaWindow, ws,
+                        this.core._grabFromMon, toMon);
                 }
                 this.core.layouts.retileWorkspace(ws);
                 { metaWindow.raise(); }
@@ -178,6 +188,8 @@ export class Grab extends PlaidSubsystem {
         this.disconnectGrabBoundaryHooks();
         this.core._grabOp = null;
         this.core._grabWindow = null;
+        this.core._grabbedWindow = null;
+        this.core._grabFromMon = -1;
         this.core._grabInitialStackRatios = null;
         // Sync, not start: no 30fps tick when nothing animates.
         this.core.borders.syncBorderAnimation();
@@ -694,6 +706,8 @@ export class Grab extends PlaidSubsystem {
         this.disconnectGrabBoundaryHooks();
         this.core._grabOp = null;
         this.core._grabWindow = null;
+        this.core._grabbedWindow = null;
+        this.core._grabFromMon = -1;
         super.destroy();
     }
 }

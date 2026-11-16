@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeSelf, fakeWin } from '../helpers.mjs';
+import { makeSelf, fakeWin, leaf, split } from '../helpers.mjs';
 import {
   groupKey,
   parseGroupKey,
@@ -109,7 +109,8 @@ test('Monitors: maps monitors to connectors and back', () => {
     assert.equal(m.primaryConnector(), 'eDP-1');
     assert.equal(m.monitorForConnector('DP-1'), 1);
     assert.equal(m.monitorForConnector('VGA-1'), -1);
-    assert.equal(m.monitorForConnector('#0'), -1);
+    assert.equal(m.monitorForConnector('#0'), 0);
+    assert.equal(m.monitorForConnector('#9'), -1);
   });
 });
 
@@ -220,6 +221,81 @@ test('Monitors: unresolved connectors keep the primary bare and secondaries dist
     globalThis.global.backend = oldBackend;
     globalThis.global.display.get_primary_monitor = oldPrimary;
   }
+});
+
+test('Monitors: entering a monitor moves the window between group trees', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({ 'inside-gap': 8 });
+    self.geometry.wsIndex = () => 2;
+    const ws = {
+      get_work_area_for_monitor: (m) => ({ x: m * 1000, y: 0, width: 1000, height: 800 }),
+    };
+    const win = fakeWin({ id: 1, monitor: 1 });
+    win.get_workspace = () => ws;
+    self._windowWorkspaces.set(win, ws);
+    self.windows.getWorkspaceLayout = () => 'dwindle';
+    self.grab.safeMove = () => {};
+    const oldPointer = globalThis.global.get_pointer;
+    globalThis.global.get_pointer = () => [0, 0];
+    let retiles = 0;
+    self.layouts.retileWorkspace = () => retiles++;
+
+    const primary = self.monitors.groupObj(ws, 0);
+    const secondary = self.monitors.groupObj(ws, 1);
+    self._bspTrees.set(primary, { type: 'leaf', window: win });
+    self.monitors.setWindowMonitor(win, 0);
+
+    self.monitors.onWindowEnteredMonitor(win, 1);
+
+    assert.equal(self.monitors.windowMonitor(win), 'DP-1');
+    assert.equal(self.bsp.bspCollectWindows(self._bspTrees.get(primary)).length, 0);
+    assert.deepEqual(self.bsp.bspCollectWindows(self._bspTrees.get(secondary)), [win]);
+    assert.equal(retiles, 1);
+    globalThis.global.get_pointer = oldPointer;
+  });
+});
+
+test('bsp: inserting a window prunes a closed window from the tree first', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({ 'inside-gap': 8 });
+    self.geometry.wsIndex = () => 2;
+    const ws = { get_work_area_for_monitor: () => ({ x: 0, y: 0, width: 2000, height: 1000 }) };
+    const ghost = fakeWin({ id: 1, monitor: 0 });
+    const live = fakeWin({ id: 2, monitor: 0 });
+    const incoming = fakeWin({ id: 3, monitor: 0 });
+    self.windows.getWindowsForWorkspace = () => [live, incoming];
+    self.windows.isFloating = () => false;
+    self._bspTrees.set(ws, split('v', 0.5, leaf(ghost), leaf(live)));
+    const oldPointer = globalThis.global.get_pointer;
+    globalThis.global.get_pointer = () => [0, 0];
+    try {
+      self.bsp.bspInsertForWorkspace(ws, incoming, 0);
+    } finally {
+      globalThis.global.get_pointer = oldPointer;
+    }
+    const tree = self._bspTrees.get(ws);
+    const ids = self.bsp.bspCollectWindows(tree).map(w => w.get_id()).sort((a, b) => a - b);
+    assert.deepEqual(ids, [2, 3], 'ghost leaf is gone');
+    assert.equal(tree.direction, 'h', 'a single full-screen leaf splits side by side');
+  });
+});
+
+test('windows: closing a window clears its leaf from every group tree', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({});
+    self.geometry.wsIndex = () => 2;
+    const ws = {};
+    const win = fakeWin({ id: 1, monitor: 0 });
+    const primary = self.monitors.groupObj(ws, 0);
+    const secondary = self.monitors.groupObj(ws, 1);
+    self._bspTrees.set(primary, split('h', 0.5, leaf(win), leaf(fakeWin({ id: 3 }))));
+    self._bspTrees.set(secondary, split('h', 0.5, leaf(win), leaf(fakeWin({ id: 4, monitor: 1 }))));
+
+    self.windows.forgetWindowTree(ws, win);
+
+    assert.equal(self.bsp.bspCollectWindows(self._bspTrees.get(primary)).includes(win), false);
+    assert.equal(self.bsp.bspCollectWindows(self._bspTrees.get(secondary)).includes(win), false);
+  });
 });
 
 test('layouts: master and stack ratios are kept per monitor group', () => {

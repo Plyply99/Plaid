@@ -252,8 +252,17 @@ export class Bsp {
         let tree = this.bspGetTree(group);
 
         if (tree) {
-            const existing = this.bspCollectWindows(tree);
-            if (existing.includes(win)) return;
+            // Prune leaves whose window closed before this insert. Insertion
+            // runs before the retile's own prune, so a ghost leaf left from a
+            // just-closed window would otherwise shape the split (and put the
+            // new window somewhere unrelated to the pointer).
+            const live = this.core.windows.getWindowsForWorkspace(ws)
+                .filter(w => !this.core.windows.isFloating(w));
+            for (const tw of this.bspCollectWindows(tree)) {
+                if (!live.includes(tw)) tree = this.bspRemove(tree, tw);
+            }
+            if (tree.type === 'empty') tree = null;
+            if (tree && this.bspCollectWindows(tree).includes(win)) return;
         }
 
         const area = this.core.geometry.outsideArea(workArea);
@@ -284,6 +293,13 @@ export class Bsp {
             }
         } else {
             tree = this.bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
+        }
+        {
+            const [px, py] = global.get_pointer();
+            const wsIndex = this.core.geometry.wsIndex(ws);
+            this.core.debugLog(`insert: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} ws=${wsIndex} ` +
+                `key=${this.core.monitors.groupKeyFor(wsIndex, mon)} pointer=(${Math.round(px)},${Math.round(py)}) ` +
+                `shape=${this.dwindleShapeToString(tree)}`);
         }
         this.core._bspTrees.set(group, tree);
     }

@@ -260,6 +260,7 @@ export class PlaidCore {
         this._resumeMonitorsMoved = false;
         this._regroupId = 0;
         this._grabbedWindow = null;
+        this._grabFromMon = -1;
         this._grabDropped = false;
 
         const ctx = global.backend.get_context();
@@ -570,6 +571,7 @@ export class PlaidCore {
         this._resumeMonitorsMoved = false;
         this._regroupId = 0;
         this._grabbedWindow = null;
+        this._grabFromMon = -1;
         this._grabDropped = false;
     }
 }
