@@ -271,8 +271,7 @@ export function fakeWin(opts = {}) {
     get_wm_class: () => opts.wmClass ?? null,
     get_gtk_application_id: () => opts.appId ?? null,
     get_title: () => opts.title ?? '',
-    get_min_size: () => opts.minHint ?? (opts.minSize ? [...opts.minSize] : [0, 0]),
-    get_max_size: () => opts.maxHint ?? (opts.maxSize ? [...opts.maxSize] : [0, 0]),
+    get_min_size: () => opts.minHint ?? (opts.minSize ? [...opts.minSize] : [0, 0]),    get_max_size: () => opts.maxHint ?? (opts.maxSize ? [...opts.maxSize] : [0, 0]),
     // Fake client->frame mapping; tests pass frameDW/frameDH to simulate a
     // titlebar or shadow delta.
     client_rect_to_frame_rect: (r) => ({
@@ -283,6 +282,7 @@ export function fakeWin(opts = {}) {
     }),
     get_client_type: () => opts.clientType ?? 0,
     get_window_type: () => opts.type ?? 0,
+    get_monitor: () => opts.monitor ?? 0,
     get_pid: () => opts.pid ?? 0,
     get_compositor_private: () => opts.actor ?? null,
     _signals: {},

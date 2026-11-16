@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import '../helpers.mjs';
+import { makeSelf, fakeWin } from '../helpers.mjs';
 import {
   groupKey,
   parseGroupKey,
@@ -127,7 +127,7 @@ test('Monitors: the connector cache survives renames until invalidated', () => {
 test('Monitors: the primary keeps the bare index, others append the connector', () => {
   withMonitors(0, () => {
     const m = new Monitors({ _monitorConnCache: null });
-    assert.equal(m.groupKeyFor(2, 0), '2');
+    assert.equal(m.groupKeyFor(2, 0), 2);
     assert.equal(m.groupKeyFor(2, 1), '2@DP-1');
     assert.equal(m.groupKeyFor(2, 2), '2@HDMI-1');
   });
@@ -136,7 +136,7 @@ test('Monitors: the primary keeps the bare index, others append the connector', 
 test('Monitors: a keyed primary rekeys which monitor owns the bare index', () => {
   withMonitors(0, () => {
     const m = new Monitors({ _monitorConnCache: null, _keyedPrimary: 'DP-1' });
-    assert.equal(m.groupKeyFor(2, 1), '2');
+    assert.equal(m.groupKeyFor(2, 1), 2);
     assert.equal(m.groupKeyFor(2, 0), '2@eDP-1');
   });
 });
@@ -195,5 +195,83 @@ test('Monitors: group objects are cached per (workspace, connector)', () => {
     assert.equal(g1.connector, 'DP-1');
     assert.equal(m.groupObj(ws, 1), g1, 'same group object');
     assert.notEqual(m.groupObj(ws, 2), g1, 'different monitor, different group');
+  });
+});
+
+test('Monitors: unresolved connectors keep the primary bare and secondaries distinct', () => {
+  const oldBackend = globalThis.global.backend;
+  const oldPrimary = globalThis.global.display.get_primary_monitor;
+  globalThis.global.backend = undefined;
+  globalThis.global.display.get_primary_monitor = () => 0;
+  try {
+    const m = new Monitors({
+      _monitorConnCache: null,
+      _groupObjs: new Map(),
+      geometry: { wsIndex: () => 2 },
+    });
+    assert.equal(m.isKeyedPrimary(0), true);
+    assert.equal(m.isKeyedPrimary(1), false);
+    assert.equal(m.groupKeyFor(2, 0), 2);
+    assert.equal(m.groupKeyFor(2, 1), '2@#1');
+    const ws = {};
+    assert.equal(m.groupObj(ws, 0), ws, 'primary group is the workspace object');
+    assert.notEqual(m.groupObj(ws, 1), ws, 'secondary group is its own object');
+  } finally {
+    globalThis.global.backend = oldBackend;
+    globalThis.global.display.get_primary_monitor = oldPrimary;
+  }
+});
+
+test('layouts: master and stack ratios are kept per monitor group', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({});
+    self.geometry.wsIndex = () => 2;
+    const ws = {};
+    assert.equal(self.layouts.getMasterRatio(ws, 0), 0.5);
+    assert.equal(self.layouts.getMasterRatio(ws, 1), 0.5);
+    self._masterRatios.set(2, 0.7);
+    self._masterRatios.set('2@DP-1', 0.3);
+    assert.equal(self.layouts.getMasterRatio(ws, 0), 0.7);
+    assert.equal(self.layouts.getMasterRatio(ws, 1), 0.3);
+
+    const primaryStack = self.layouts.getStackRatios(ws, 0);
+    const secondaryStack = self.layouts.getStackRatios(ws, 1);
+    primaryStack.set(0, 2);
+    assert.equal(secondaryStack.has(0), false, 'one map per group');
+  });
+});
+
+test('layouts: dwindle keeps one tree per monitor and uses that monitor area', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({ 'inside-gap': 8 });
+    self.geometry.wsIndex = () => 2;
+    const areas = {
+      0: { x: 0, y: 0, width: 1000, height: 800 },
+      1: { x: 1000, y: 0, width: 1000, height: 800 },
+    };
+    const ws = { get_work_area_for_monitor: (m) => areas[m] };
+    const a1 = fakeWin({ id: 1, monitor: 0 });
+    const a2 = fakeWin({ id: 2, monitor: 0 });
+    const b1 = fakeWin({ id: 3, monitor: 1 });
+    const b2 = fakeWin({ id: 4, monitor: 1 });
+    const moves = [];
+    self.windows.moveWindow = (win, x, y, w, h) => moves.push({ win, x, y, w, h });
+    self.grab.safeMove = (win, x, y, w, h) => moves.push({ win, x, y, w, h });
+
+    self.layouts.retileDwindle(ws, [a1, a2], 0);
+    self.layouts.retileDwindle(ws, [b1, b2], 1);
+
+    const primaryGroup = self.monitors.groupObj(ws, 0);
+    const secondaryGroup = self.monitors.groupObj(ws, 1);
+    assert.equal(primaryGroup, ws);
+    assert.notEqual(secondaryGroup, ws);
+    assert.deepEqual(self.bsp.bspCollectWindows(self._bspTrees.get(primaryGroup)), [a1, a2]);
+    assert.deepEqual(self.bsp.bspCollectWindows(self._bspTrees.get(secondaryGroup)), [b1, b2]);
+    for (const m of moves) {
+      if (m.win === b1 || m.win === b2)
+        assert.ok(m.x >= 1000, `secondary window placed at x=${m.x}`);
+      else
+        assert.ok(m.x < 1000, `primary window placed at x=${m.x}`);
+    }
   });
 });

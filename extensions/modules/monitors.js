@@ -93,6 +93,10 @@ export class Monitors extends PlaidSubsystem {
         return this.connectors()[mon] || '';
     }
 
+    monitorTiled(mon) {
+        return this.tiledMonitors().includes(mon);
+    }
+
     // A stable in-memory stand-in while a connector is unresolved. Never
     // persisted (see persistableConnector()).
     connectorOrFallback(mon) {
@@ -152,6 +156,7 @@ export class Monitors extends PlaidSubsystem {
 
     groupObj(ws, mon) {
         if (!ws || !this.core._groupObjs) return null;
+        if (this.isKeyedPrimary(mon)) return ws;
         let byConnector = this.core._groupObjs.get(ws);
         if (!byConnector) {
             byConnector = new Map();
@@ -171,14 +176,23 @@ export class Monitors extends PlaidSubsystem {
         return group;
     }
 
+    // True when this monitor's group owns the bare workspace index (the
+    // pre-multi-monitor keys). An unresolved primary connector counts as the
+    // keyed primary; an unresolved secondary does not.
+    isKeyedPrimary(mon) {
+        if (mon === undefined || mon === null) return true;
+        const keyed = this.primaryConnector();
+        if (!keyed) return mon === this.primaryMonitorIndex();
+        return this.connectorForMonitor(mon) === keyed;
+    }
+
     // The group key for a workspace on a monitor: the keyed primary keeps the
     // bare index (the pre-multi-monitor keys), every other monitor appends its
     // connector.
     groupKeyFor(wsIndex, mon) {
-        const connector = this.connectorForMonitor(mon);
-        const keyedPrimary = this.core._keyedPrimary || this.primaryConnector();
-        if (!connector || connector === keyedPrimary) return groupKey(wsIndex, '');
-        return groupKey(wsIndex, connector);
+        const idx = parseInt(wsIndex, 10);
+        if (this.isKeyedPrimary(mon)) return idx;
+        return groupKey(idx, this.connectorOrFallback(mon));
     }
 
     connectSignals() {

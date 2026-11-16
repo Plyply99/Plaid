@@ -243,12 +243,13 @@ export class Bsp {
         }
     }
 
-    bspInsertForWorkspace(ws, win) {
+    bspInsertForWorkspace(ws, win, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const group = this.core.monitors.groupObj(ws, mon);
+        const workArea = ws.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return;
-        let tree = this.bspGetTree(ws);
+        let tree = this.bspGetTree(group);
 
         if (tree) {
             const existing = this.bspCollectWindows(tree);
@@ -284,7 +285,7 @@ export class Bsp {
         } else {
             tree = this.bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
         }
-        this.core._bspTrees.set(ws, tree);
+        this.core._bspTrees.set(group, tree);
     }
 
     parseMinSizeOverrides(entries) {

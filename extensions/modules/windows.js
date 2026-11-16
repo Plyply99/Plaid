@@ -175,17 +175,18 @@ export class Windows extends PlaidSubsystem {
         return this.core._workspaceOrders.get(workspace);
     }
 
-    getWorkspaceLayout(workspace) {
+    getWorkspaceLayout(workspace, mon) {
         // Live overrides, remembered slot rules, and the default all live in
-        // the SAME index space — the lookup is deterministic per workspace
-        // index, so a recreated workspace (dynamic-workspace churn) resolves
-        // identically every time. Object-keyed live entries caused layout
+        // the SAME key space — the group key is the workspace index for the
+        // keyed primary (the pre-multi-monitor keys) and "index@connector" for
+        // every other monitor. Object-keyed live entries caused layout
         // flip-flops when workspaces were removed and recreated.
         const idx = this.core.geometry.wsIndex(workspace);
-        const live = this.core._workspaceLayouts.get(idx);
+        const key = this.core.monitors.groupKeyFor(idx, mon);
+        const live = this.core._workspaceLayouts.get(key);
         if (live) return live;
         if (this.core._persistedLayoutByIndex && this.core._persistedLayoutByIndex.size > 0) {
-            const rule = this.core._persistedLayoutByIndex.get(idx);
+            const rule = this.core._persistedLayoutByIndex.get(key);
             if (rule) return rule;
         }
         return this.core._settings.get_string('layout');
@@ -311,7 +312,7 @@ export class Windows extends PlaidSubsystem {
             if (!this.isFloating(win)) {
                 const layout = this.getWorkspaceLayout(ws);
                 if (layout === 'dwindle')
-                    this.core.bsp.bspInsertForWorkspace(ws, win);
+                    this.core.bsp.bspInsertForWorkspace(ws, win, win.get_monitor());
             }
         }
         if (!resume && tilingEnabled) {
@@ -354,12 +355,15 @@ export class Windows extends PlaidSubsystem {
                 const idKnown = !!(win.get_wm_class_instance() ||
                     win.get_gtk_application_id());
                 if (wsNow && idKnown && !this.isFloating(win)) {
-                    const slot = this.core.grab.windowSlotRect(win, wsNow,
-                        this.getWorkspaceLayout(wsNow),
-                        wsNow.get_work_area_for_monitor(global.display.get_primary_monitor()),
-                        this.core._settings.get_int('inside-gap'));
-                    if (slot && win.get_compositor_private())
-                        win.move_resize_frame(true, slot.x, slot.y, slot.w, slot.h);
+                    const mon = win.get_monitor();
+                    if (this.core.monitors.monitorTiled(mon)) {
+                        const slot = this.core.grab.windowSlotRect(win, wsNow,
+                            this.getWorkspaceLayout(wsNow, mon),
+                            wsNow.get_work_area_for_monitor(mon),
+                            this.core._settings.get_int('inside-gap'));
+                        if (slot && win.get_compositor_private())
+                            win.move_resize_frame(true, slot.x, slot.y, slot.w, slot.h);
+                    }
                 }
             }
         }
@@ -419,10 +423,12 @@ export class Windows extends PlaidSubsystem {
             const order = this.getWorkspaceOrder(ws);
             const idx = order.indexOf(win);
             if (idx !== -1) order.splice(idx, 1);
-            const layout = this.getWorkspaceLayout(ws);
+            const mon = win.get_monitor();
+            const layout = this.getWorkspaceLayout(ws, mon);
             if (layout === 'dwindle') {
-                const tree = this.core.bsp.bspGetTree(ws);
-                if (tree) this.core._bspTrees.set(ws, this.core.bsp.bspRemove(tree, win));
+                const group = this.core.monitors.groupObj(ws, mon);
+                const tree = this.core.bsp.bspGetTree(group);
+                if (tree) this.core._bspTrees.set(group, this.core.bsp.bspRemove(tree, win));
             }
             this.core.layouts.retileWorkspace(ws);
         }

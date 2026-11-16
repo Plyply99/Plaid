@@ -204,7 +204,7 @@ export class Actions extends PlaidSubsystem {
             const ws = focused.get_workspace();
             if (ws) {
                 if (this.core.windows.getWorkspaceLayout(ws) === 'dwindle')
-                    this.core.bsp.bspInsertForWorkspace(ws, focused);
+                    this.core.bsp.bspInsertForWorkspace(ws, focused, focused.get_monitor());
                 this.core.layouts.retileWorkspace(ws);
             }
             return;
@@ -222,7 +222,7 @@ export class Actions extends PlaidSubsystem {
         if (wasFloating) {
             const layout = this.core.windows.getWorkspaceLayout(ws);
             if (layout === 'dwindle')
-                this.core.bsp.bspInsertForWorkspace(ws, focused);
+                this.core.bsp.bspInsertForWorkspace(ws, focused, focused.get_monitor());
         } else {
             const layout = this.core.windows.getWorkspaceLayout(ws);
             if (layout === 'dwindle') {

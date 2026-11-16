@@ -605,12 +605,13 @@ export class Grab extends PlaidSubsystem {
         if (this.core._slotReassertTimes) this.core._slotReassertTimes.set(win, now);
         const ws = win.get_workspace();
         if (!ws) return;
+        const mon = win.get_monitor();
+        if (!this.core.monitors.monitorTiled(mon)) return;
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
         let workArea = null;
-        { workArea = ws.get_work_area_for_monitor(monitor); }
+        { workArea = ws.get_work_area_for_monitor(mon); }
         if (!workArea || workArea.width === 0) return;
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
         if (layout === 'floating') return;
         const slot = this.windowSlotRect(win, ws, layout, workArea, gap);
         if (!slot) return;

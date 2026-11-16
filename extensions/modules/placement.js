@@ -160,10 +160,11 @@ export class Placement {
             const heldSlotOk = () => {
                 const ws = s.win.get_workspace();
                 if (!ws) return false;
-                const layout = this.core.windows.getWorkspaceLayout(ws);
+                const mon = s.win.get_monitor();
+                const layout = this.core.windows.getWorkspaceLayout(ws, mon);
                 if (layout === 'floating') return true;
                 const gap = this.core._settings.get_int('inside-gap');
-                const workArea = ws.get_work_area_for_monitor(global.display.get_primary_monitor());
+                const workArea = ws.get_work_area_for_monitor(mon);
                 if (!workArea || !workArea.width) return false;
                 const slot = this.core.grab.windowSlotRect(s.win, ws, layout, workArea, gap);
                 if (!slot) return false;
@@ -380,11 +381,11 @@ export class Placement {
         }
         try {
             if (!win || !ws) return;
-            const layout = this.core.windows.getWorkspaceLayout(ws);
+            const mon = win.get_monitor();
+            const layout = this.core.windows.getWorkspaceLayout(ws, mon);
             if (layout === 'floating') return;
             const gap = this.core._settings.get_int('inside-gap');
-            const monitor = global.display.get_primary_monitor();
-            const workArea = ws.get_work_area_for_monitor(monitor);
+            const workArea = ws.get_work_area_for_monitor(mon);
             if (!workArea || workArea.width === 0) return;
             const area = this.core.geometry.outsideArea(workArea);
             if (!area) return;
@@ -395,25 +396,29 @@ export class Placement {
             const minSrc = min.w > 0 || min.h > 0 ? `min=${min.w}x${min.h}` : 'min=none';
             let changed = false;
             if (layout === 'dwindle') {
-                const tree = this.core.bsp.bspGetTree(ws);
+                const tree = this.core.bsp.bspGetTree(this.core.monitors.groupObj(ws, mon));
                 if (!tree) return;
                 changed = this.core.bsp.adjustForConstraints(tree, null, true, area.x, area.y, areaW, areaH, gap, 0);
             } else if (layout === 'master-stack' || layout === 'centered-master-stack') {
-                const tiled = this.core.windows.getWindowsForWorkspace(ws).filter(w => !this.core.windows.isFloating(w));
+                const conn = this.core.monitors.connectorOrFallback(mon);
+                const tiled = this.core.windows.getWindowsForWorkspace(ws)
+                    .filter(w => !this.core.windows.isFloating(w) &&
+                        this.core.monitors.windowMonitor(w) === conn);
                 if (tiled.length < 2) return;
                 if (win === tiled[0]) {
                     const basis = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
                     if (basis > 0) {
-                        const ratio = this.core.layouts.getMasterRatio(ws);
+                        const ratio = this.core.layouts.getMasterRatio(ws, mon);
                         const nr = Math.min(0.95, Math.max(ratio, f.width / basis));
                         if (nr !== ratio) {
-                            this.core._masterRatios.set(this.core.geometry.wsIndex(ws), nr);
+                            this.core._masterRatios.set(
+                                this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), mon), nr);
                             changed = true;
                         }
                     }
                 } else {
                     const idx = tiled.indexOf(win) - 1;
-                    const stackRatios = this.core.layouts.getStackRatios(ws);
+                    const stackRatios = this.core.layouts.getStackRatios(ws, mon);
                     const numStack = tiled.length - 1;
                     const totalStackH = areaH - gap * (numStack - 1);
                     if (totalStackH > 0 && idx >= 0) {
@@ -665,19 +670,21 @@ export class Placement {
         // has finished restoring.
         const ws = win.get_workspace();
         if (!ws) return null;
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const mon = win.get_monitor();
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
         if (layout === 'dwindle') {
-            const tree = this.core.bsp.bspGetTree(ws);
+            const tree = this.core.bsp.bspGetTree(this.core.monitors.groupObj(ws, mon));
             if (!tree) return null;
             const parsed = this.core.bsp.dwindleShapeFromString(
                 this.core.bsp.dwindleShapeToString(tree));
-            return parsed ? { layout, dwindle: parsed } : null;
+            return parsed ? { layout, mon, dwindle: parsed } : null;
         }
         if (layout === 'master-stack' || layout === 'centered-master-stack') {
-            const stack = this.core.layouts.getStackRatios(ws);
+            const stack = this.core.layouts.getStackRatios(ws, mon);
             return {
                 layout,
-                master: this.core.layouts.getMasterRatio(ws),
+                mon,
+                master: this.core.layouts.getMasterRatio(ws, mon),
                 stack: new Map(stack),
             };
         }
@@ -688,14 +695,16 @@ export class Placement {
         if (!snap) return;
         const ws = win.get_workspace();
         if (!ws) return;
-        if (this.core.windows.getWorkspaceLayout(ws) !== snap.layout) return;
+        if (this.core.windows.getWorkspaceLayout(ws, snap.mon) !== snap.layout) return;
         if (snap.dwindle) {
-            const tree = this.core.bsp.bspGetTree(ws);
+            const group = this.core.monitors.groupObj(ws, snap.mon);
+            const tree = this.core.bsp.bspGetTree(group);
             if (tree && this.core.bsp.reconcileTreeRatios(snap.dwindle, tree))
                 this.core.debugLog(`settle: restored split ratios for ${win.get_wm_class_instance() || '?'}`);
         } else if (snap.stack) {
-            this.core._masterRatios.set(this.core.geometry.wsIndex(ws), snap.master);
-            const stack = this.core.layouts.getStackRatios(ws);
+            this.core._masterRatios.set(
+                this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), snap.mon), snap.master);
+            const stack = this.core.layouts.getStackRatios(ws, snap.mon);
             stack.clear();
             for (const [k, v] of snap.stack) stack.set(k, v);
         }
@@ -904,24 +913,31 @@ export class Placement {
 
         this.core._animTargets = new Map();
 
-        const layout = this.core.windows.getWorkspaceLayout(workspace);
-        if (layout === 'floating') {
-            // GNOME owns floating placement; the fade-in choreography just
-            // anchors at the window's current (GNOME-placed) position.
-            {
-                for (const win of tiledWindows) {
+        const layoutGroups = this.core.monitors.tiledMonitors();
+        for (const mon of layoutGroups) {
+            const conn = this.core.monitors.connectorOrFallback(mon);
+            const groupWins = tiledWindows.filter(w => this.core.monitors.windowMonitor(w) === conn);
+            if (groupWins.length === 0) continue;
+            if (!this.core.geometry.isValidWorkArea(workspace.get_work_area_for_monitor(mon)))
+                continue;
+            const layout = this.core.windows.getWorkspaceLayout(workspace, mon);
+            if (layout === 'floating') {
+                // GNOME owns floating placement; the fade-in choreography just
+                // anchors at the window's current (GNOME-placed) position.
+                for (const win of groupWins) {
                     if (!this.core._newWindowSet.has(win)) continue;
                     const f = win.get_frame_rect();
                     if (f.width > 0 && f.height > 0)
                         this.core._animTargets.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
                 }
+            } else if (layout === 'dwindle') {
+                this.core.layouts.retileDwindle(workspace, groupWins, mon);
+            } else if (layout === 'centered-master-stack') {
+                this.core.layouts.retileCenteredMasterStack(workspace, groupWins, null, mon);
+            } else {
+                this.core.layouts.retileMasterStack(workspace, groupWins, null, mon);
             }
-        } else if (layout === 'dwindle')
-            this.core.layouts.retileDwindle(workspace, tiledWindows);
-        else if (layout === 'centered-master-stack')
-            this.core.layouts.retileCenteredMasterStack(workspace, tiledWindows);
-        else
-            this.core.layouts.retileMasterStack(workspace, tiledWindows);
+        }
 
         if (this.core._animTargets.size === 0) {
             this.core.debugLog('anim: no targets (bail)');
