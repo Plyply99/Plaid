@@ -300,6 +300,7 @@ export class Windows extends PlaidSubsystem {
         const ws = win.get_workspace();
         this.core._windowWorkspaces.set(win, ws);
         this.core._windowWSIndices.set(win, this.core.geometry.wsIndex(ws));
+        this.core.monitors.setWindowMonitor(win, win.get_monitor());
         this.capturePosition(win);
         this.connectWindowSignals(win);
         if (ws) {
@@ -370,6 +371,7 @@ export class Windows extends PlaidSubsystem {
         this.core.debugLog(`REMOVE_WINDOW: ${wmClass} ws=${this.core.geometry.wsIndex(ws)}`);
         this.core._windowWorkspaces.delete(win);
         this.core._windowWSIndices.delete(win);
+        this.core._windowMonitors.delete(win);
         this.core._toggleFloatWindows.delete(win);
         this.core._observedMinSizes.delete(win);
         this.core._minLimitedWindows.delete(win);

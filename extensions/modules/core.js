@@ -24,6 +24,7 @@ import { Grab } from './grab.js';
 import { Windows } from './windows.js';
 import { Layouts } from './layouts.js';
 import { Persistence } from './persistence.js';
+import { Monitors } from './monitors.js';
 import { ProcInfo } from './proc-info.js';
 import { Signals } from './signals.js';
 import { Actions } from './actions.js';
@@ -52,6 +53,7 @@ export class PlaidCore {
         this.windows = new Windows(this);
         this.layouts = new Layouts(this);
         this.persistence = new Persistence(this);
+        this.monitors = new Monitors(this);
         this.procInfo = new ProcInfo(this);
         this.signals = new Signals(this);
         this.actions = new Actions(this);
@@ -251,6 +253,14 @@ export class PlaidCore {
         this._animTickId = 0;
         this._newWindowSet = new Set();
         this._floatHooks = new Map();
+        this._windowMonitors = new Map();
+        this._groupObjs = new Map();
+        this._monitorConnCache = null;
+        this._keyedPrimary = '';
+        this._resumeMonitorsMoved = false;
+        this._regroupId = 0;
+        this._grabbedWindow = null;
+        this._grabDropped = false;
 
         const ctx = global.backend.get_context();
         if (!ctx.get_wayland_compositor()) {
@@ -269,6 +279,7 @@ export class PlaidCore {
         this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
         this.dragPreview.init();
         this.signals.connectSignals();
+        this.monitors.connectSignals();
         this.keybindings.registerKeybindings();
         this.workspaces.suppressWorkspaceSwitcherPopup();
         this.dropdown.initDropdownTerminal();
@@ -489,6 +500,7 @@ export class PlaidCore {
         this.dropdown.destroy();
         this.bgApp.destroy();
         this.workspaces.destroy();
+        this.monitors.destroy();
         this.placement.destroy();
         this.grab.destroy();
         this.keybindings.destroy();
@@ -551,5 +563,13 @@ export class PlaidCore {
         this._maximizeToggleRects = null;
         this._scratchpadWindows = null;
         this._scratchpadVisible = false;
+        this._windowMonitors = null;
+        this._groupObjs = null;
+        this._monitorConnCache = null;
+        this._keyedPrimary = '';
+        this._resumeMonitorsMoved = false;
+        this._regroupId = 0;
+        this._grabbedWindow = null;
+        this._grabDropped = false;
     }
 }

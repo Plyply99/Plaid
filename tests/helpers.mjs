@@ -14,6 +14,7 @@ export function oneMonitor(extra = {}) {
     get_current_monitor: () => 0,
     get_monitor_geometry: () => ({ x: 0, y: 0, width: 2560, height: 1440 }),
     get_monitor_index_for_rect: () => 0,
+    get_n_monitors: () => 1,
     focus_window: null,
     ...extra,
   };
@@ -194,6 +195,14 @@ function resetCoreState(core, settings) {
   core._animTickId = 0;
   core._newWindowSet = new Set();
   core._floatHooks = new Map();
+  core._windowMonitors = new Map();
+  core._groupObjs = new Map();
+  core._monitorConnCache = null;
+  core._keyedPrimary = '';
+  core._resumeMonitorsMoved = false;
+  core._regroupId = 0;
+  core._grabbedWindow = null;
+  core._grabDropped = false;
   core._mutterSettings = null;
   core._signals = [];
   core._windowSignals = new Map();

@@ -219,6 +219,39 @@
       <description>Entries in the form "index:shape" where shape encodes the tree's split directions and ratios (e.g. 3:h0.8480(l,l)). Restored when a workspace's window set changes so resized arrangements survive logins</description>
     </key>
 
+    <!-- Multi-monitor: per-monitor workspace groups. The primary monitor keeps
+         the workspace-* keys above; every other monitor gets connector-prefixed
+         entries here. A group is (workspace index, monitor connector). -->
+    <key name="monitor-primary-connector" type="s">
+      <default>''</default>
+      <summary>Connector that owns the single-monitor workspace keys</summary>
+      <description>Monitor connector name (e.g. DP-1) whose layouts and ratios are stored in the workspace-layouts, workspace-master-ratios, workspace-stack-ratios and workspace-dwindle-trees keys. Empty means no monitor information has been recorded yet</description>
+    </key>
+
+    <key name="monitor-workspace-layouts" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered layouts per (workspace, monitor) group</summary>
+      <description>Entries of the form "CONNECTOR:INDEX:LAYOUT" for workspaces shown on non-primary monitors, e.g. "DP-2:1:master-stack". The primary monitor's layouts stay in workspace-layouts</description>
+    </key>
+
+    <key name="monitor-workspace-master-ratios" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered master ratios per (workspace, monitor) group</summary>
+      <description>Entries of the form "CONNECTOR:INDEX:RATIO" for workspaces shown on non-primary monitors. The primary monitor's ratios stay in workspace-master-ratios</description>
+    </key>
+
+    <key name="monitor-workspace-stack-ratios" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered stack ratios per (workspace, monitor) group</summary>
+      <description>Entries of the form "CONNECTOR:INDEX:SLOT:WEIGHT,SLOT:WEIGHT" for workspaces shown on non-primary monitors. The primary monitor's ratios stay in workspace-stack-ratios</description>
+    </key>
+
+    <key name="monitor-workspace-dwindle-trees" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Persisted dwindle arrangements per (workspace, monitor) group</summary>
+      <description>Entries of the form "CONNECTOR:INDEX:SHAPE" for workspaces shown on non-primary monitors. The primary monitor's trees stay in workspace-dwindle-trees</description>
+    </key>
+
     <!-- Keybindings: Window Movement -->
     <key name="move-focus-left" type="as">
       <default><![CDATA[['<Super><Alt>h']]]></default>
