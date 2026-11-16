@@ -166,7 +166,7 @@ export class Placement {
                 const gap = this.core._settings.get_int('inside-gap');
                 const workArea = ws.get_work_area_for_monitor(mon);
                 if (!workArea || !workArea.width) return false;
-                const slot = this.core.grab.windowSlotRect(s.win, ws, layout, workArea, gap);
+                const slot = this.core.grab.windowSlotRect(s.win, ws, layout, workArea, gap, mon);
                 if (!slot) return false;
                 const f = s.win.get_frame_rect();
                 return Math.abs(f.x - slot.x) <= 4 && Math.abs(f.y - slot.y) <= 4 &&
@@ -335,20 +335,27 @@ export class Placement {
     checkWorkspaceLandings(ws) {
         if (!this.core._settings || this.core._shuttingDown || !this.core._settings.get_boolean('enabled')) return;
         if (this.core._grabOp) return;
-        const layout = this.core.windows.getWorkspaceLayout(ws);
-        if (layout === 'floating') return;
         const tiled = this.core.windows.getWindowsForWorkspace(ws).filter(w => !this.core.windows.isFloating(w));
         if (tiled.length === 0) return;
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        let workArea = null;
-        { workArea = ws.get_work_area_for_monitor(monitor); }
+        for (const mon of this.core.monitors.tiledMonitors()) {
+            this.checkGroupLandings(ws, mon, tiled, gap);
+        }
+    }
+
+    checkGroupLandings(ws, mon, tiled, gap) {
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
+        if (layout === 'floating') return;
+        const conn = this.core.monitors.connectorOrFallback(mon);
+        const groupWins = tiled.filter(w => this.core.monitors.windowMonitor(w) === conn);
+        if (groupWins.length === 0) return;
+        const workArea = ws.get_work_area_for_monitor(mon);
         if (!workArea || workArea.width === 0) return;
         let off = 0;
-        for (const win of tiled) {
+        for (const win of groupWins) {
             if (win.minimized || win.is_fullscreen()) continue;
             if (this.core._landingGivenUp && this.core._landingGivenUp.has(win)) continue;
-            const slot = this.core.grab.windowSlotRect(win, ws, layout, workArea, gap);
+            const slot = this.core.grab.windowSlotRect(win, ws, layout, workArea, gap, mon);
             if (!slot) continue;
             const f = win.get_frame_rect();
             if (Math.abs(f.x - slot.x) > 16 || Math.abs(f.y - slot.y) > 16 ||
@@ -356,7 +363,7 @@ export class Placement {
                 off++;
         }
         if (off > 0) {
-            this.core.debugLog(`landing check: ws re-tiled (${off}/${tiled.length} windows off-slot)`);
+            this.core.debugLog(`landing check: ws re-tiled (${off}/${groupWins.length} windows off-slot)`);
             this.core.signals.scheduleRetile(ws);
         }
     }
@@ -643,12 +650,14 @@ export class Placement {
         if (win._plaidSettleMin) return true;
         const ws = win.get_workspace();
         if (!ws) return false;
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const mon = win.get_monitor();
+        if (!this.core.monitors.monitorTiled(mon)) return false;
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
         if (layout === 'floating') return false;
         const gap = this.core._settings.get_int('inside-gap');
-        const workArea = ws.get_work_area_for_monitor(global.display.get_primary_monitor());
+        const workArea = ws.get_work_area_for_monitor(mon);
         if (!workArea || !workArea.width) return false;
-        const slot = this.core.grab.windowSlotRect(win, ws, layout, workArea, gap);
+        const slot = this.core.grab.windowSlotRect(win, ws, layout, workArea, gap, mon);
         if (!slot) return false;
         const f = win.get_frame_rect();
         if (f.width <= slot.w + 16 && f.height <= slot.h + 16) {

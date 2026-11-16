@@ -415,6 +415,28 @@ test('Monitors: fallback connectors are renamed once resolved', () => {
   });
 });
 
+test('Monitors: monitorAt finds the monitor under a point', () => {
+  withMonitors(0, () => {
+    const oldGeometry = globalThis.global.display.get_monitor_geometry;
+    const areas = [
+      { x: 0, y: 0, width: 1000, height: 800 },
+      { x: 1000, y: 0, width: 1000, height: 800 },
+      { x: 2000, y: 0, width: 1000, height: 800 },
+    ];
+    globalThis.global.display.get_monitor_geometry = (i) => areas[i];
+    try {
+      const m = new Monitors({ _monitorConnCache: null });
+      assert.equal(m.monitorAt(50, 50), 0);
+      assert.equal(m.monitorAt(1500, 100), 1);
+      assert.equal(m.monitorAt(2500, 700), 2);
+      assert.equal(m.monitorAt(-5, 50), -1);
+      assert.equal(m.monitorAt(500, 900), -1);
+    } finally {
+      globalThis.global.display.get_monitor_geometry = oldGeometry;
+    }
+  });
+});
+
 test('layouts: master and stack ratios are kept per monitor group', () => {
   withMonitors(0, () => {
     const self = makeSelf({});

@@ -40,39 +40,46 @@ export class DragPreview {
             this.hideDropPreview();
             return;
         }
-        if (this.core.windows.getWorkspaceLayout(ws) === 'floating') {
+        const mon = this.core.monitors.monitorAt(px, py);
+        if (mon < 0 || !this.core.monitors.monitorTiled(mon)) {
+            this.hideDropPreview();
+            return;
+        }
+        if (this.core.windows.getWorkspaceLayout(ws, mon) === 'floating') {
             this.hideDropPreview();
             return;
         }
 
-        const tiledWindows = this.core.windows.getWindowsForWorkspace(ws).filter(w => !this.core.windows.isFloating(w));
+        const conn = this.core.monitors.connectorOrFallback(mon);
+        const tiledWindows = this.core.windows.getWindowsForWorkspace(ws)
+            .filter(w => !this.core.windows.isFloating(w) &&
+                this.core.monitors.windowMonitor(w) === conn);
         if (tiledWindows.length <= 1) {
             this.hideDropPreview();
             return;
         }
 
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
         if (layout === 'dwindle') {
-            const leaf = this.computeDwindleDropTarget(ws, px, py);
+            const leaf = this.computeDwindleDropTarget(ws, px, py, mon);
             if (leaf && leaf.type === 'leaf') {
                 this.showDropPreview(leaf._x, leaf._y, leaf._w, leaf._h);
             } else {
                 this.hideDropPreview();
             }
         } else {
-            const targetIdx = this.core.layouts.computeMasterStackDropTarget(ws, px, py);
+            const targetIdx = this.core.layouts.computeMasterStackDropTarget(ws, px, py, mon);
             if (targetIdx >= 0) {
-                this.showMasterStackPreview(ws, targetIdx);
+                this.showMasterStackPreview(ws, targetIdx, mon);
             } else {
                 this.hideDropPreview();
             }
         }
     }
 
-    showMasterStackPreview(ws, targetIdx) {
+    showMasterStackPreview(ws, targetIdx, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const workArea = ws.get_work_area_for_monitor(mon);
         if (!workArea) return;
 
         const area = this.core.geometry.outsideArea(workArea);
@@ -81,8 +88,8 @@ export class DragPreview {
         const areaY = area.y;
         const areaW = area.w;
         const areaH = area.h;
-        const masterRatio = this.core.layouts.getMasterRatio(ws);
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const masterRatio = this.core.layouts.getMasterRatio(ws, mon);
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
 
         let rx, ry;
         let rw, rh;
@@ -100,7 +107,8 @@ export class DragPreview {
             rh = areaH;
         } else {
             if (layout === 'centered-master-stack') {
-                const leftCount = Math.ceil((this.core.windows.getWindowsForWorkspace(ws).filter(w => !this.core.windows.isFloating(w)).length - 1) / 2);
+                const leftCount = Math.ceil((this.core.monitors.getWindowsForGroup(ws, mon)
+                    .filter(w => !this.core.windows.isFloating(w)).length - 1) / 2);
                 const masterW = Math.floor((areaW - gap * 2) * masterRatio);
                 const masterX = areaX + Math.floor((areaW - masterW) / 2);
                 if (targetIdx <= leftCount) {
@@ -122,13 +130,12 @@ export class DragPreview {
         this.showDropPreview(rx, ry, rw, rh);
     }
 
-    computeDwindleDropTarget(ws, px, py) {
-        const tree = this.core.bsp.bspGetTree(ws);
+    computeDwindleDropTarget(ws, px, py, mon) {
+        const tree = this.core.bsp.bspGetTree(this.core.monitors.groupObj(ws, mon));
         if (!tree) return null;
 
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const workArea = ws.get_work_area_for_monitor(mon);
         if (!workArea) return null;
 
         const area = this.core.geometry.outsideArea(workArea);

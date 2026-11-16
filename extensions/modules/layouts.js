@@ -442,10 +442,10 @@ export class Layouts {
         }
     }
 
-    computeMasterStackDropTarget(ws, px, py) {
+    computeMasterStackDropTarget(ws, px, py, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const workArea = ws.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return -1;
 
         const area = this.core.geometry.outsideArea(workArea);
@@ -467,8 +467,8 @@ export class Layouts {
 
         if (numStack === 0) return 0;
 
-        const masterRatio = this.getMasterRatio(ws);
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const masterRatio = this.getMasterRatio(ws, mon);
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
 
         if (layout === 'centered-master-stack') {
             const masterW = Math.floor((areaW - gap * 2) * masterRatio);
@@ -481,7 +481,7 @@ export class Layouts {
 
             const leftCount = Math.ceil(numStack / 2);
             const rightCount = numStack - leftCount;
-            const stackRatios = this.getStackRatios(ws);
+            const stackRatios = this.getStackRatios(ws, mon);
 
             if (px < masterX && leftStackW > 0 && leftCount > 0) {
                 const weights = [];
@@ -539,7 +539,7 @@ export class Layouts {
                 return 0;
 
             if (px >= stackX && px <= stackX + stackW) {
-                const stackRatios = this.getStackRatios(ws);
+                const stackRatios = this.getStackRatios(ws, mon);
                 const weights = [];
                 let totalWeight = 0;
                 for (let i = 0; i < numStack; i++) {

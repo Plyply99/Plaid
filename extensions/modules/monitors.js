@@ -124,6 +124,17 @@ export class Monitors extends PlaidSubsystem {
         return global.display.get_primary_monitor();
     }
 
+    // The monitor under a point, or -1. Used by drag/drop targeting.
+    monitorAt(px, py) {
+        const n = this.nMonitors();
+        for (let i = 0; i < n; i++) {
+            const g = global.display.get_monitor_geometry(i);
+            if (g && px >= g.x && px < g.x + g.width && py >= g.y && py < g.y + g.height)
+                return i;
+        }
+        return -1;
+    }
+
     primaryConnector() {
         return this.core._keyedPrimary || this.connectorForMonitor(this.primaryMonitorIndex());
     }

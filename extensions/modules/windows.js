@@ -376,7 +376,7 @@ export class Windows extends PlaidSubsystem {
                         const slot = this.core.grab.windowSlotRect(win, wsNow,
                             this.getWorkspaceLayout(wsNow, mon),
                             wsNow.get_work_area_for_monitor(mon),
-                            this.core._settings.get_int('inside-gap'));
+                            this.core._settings.get_int('inside-gap'), mon);
                         if (slot && win.get_compositor_private())
                             win.move_resize_frame(true, slot.x, slot.y, slot.w, slot.h);
                     }
@@ -988,17 +988,20 @@ export class Windows extends PlaidSubsystem {
 
     repositionWindow(window, ws) {
         if (!window || !ws || !this.core._settings) return;
-        if (this.getWorkspaceLayout(ws) === 'floating') return;
+        const mon = window.get_monitor();
+        if (this.getWorkspaceLayout(ws, mon) === 'floating') return;
         const [px, py] = global.get_pointer();
-        const tiled = this.getWindowsForWorkspace(ws).filter(w => !this.isFloating(w));
+        const conn = this.core.monitors.connectorOrFallback(mon);
+        const tiled = this.core.monitors.getWindowsForGroup(ws, mon).filter(w => !this.isFloating(w));
         if (tiled.length <= 1) return;
 
-        const layout = this.getWorkspaceLayout(ws);
+        const layout = this.getWorkspaceLayout(ws, mon);
         if (layout === 'dwindle') {
-            const targetLeaf = this.core.dragPreview.computeDwindleDropTarget(ws, px, py);
+            const targetLeaf = this.core.dragPreview.computeDwindleDropTarget(ws, px, py, mon);
             if (!targetLeaf || targetLeaf.type !== 'leaf') return;
 
-            const tree = this.core.bsp.bspGetTree(ws);
+            const group = this.core.monitors.groupObj(ws, mon);
+            const tree = this.core.bsp.bspGetTree(group);
             if (!tree) return;
 
             // Preserve the split ratio at the drop target so the re-insert
@@ -1020,21 +1023,21 @@ export class Windows extends PlaidSubsystem {
             // follow-up retile re-added it as the "newest" leaf — a silent
             // arrangement reshuffle (and the reshuffled shape got persisted).
             if (targetLeaf.window === window) {
-                this.core._bspTrees.set(ws, tree);
+                this.core._bspTrees.set(group, tree);
                 return;
             }
             let newTree = this.core.bsp.bspRemove(tree, window);
             if (newTree.type === 'empty') newTree = null;
             if (newTree && !this.core.bsp.bspFindLeaf(newTree, targetLeaf.window)) {
-                this.core._bspTrees.set(ws, tree);
+                this.core._bspTrees.set(group, tree);
                 return;
             }
             if (newTree) {
                 newTree = this.core.bsp.bspReplaceLeaf(newTree, targetLeaf, window, targetRatio);
             }
-            this.core._bspTrees.set(ws, newTree);
+            this.core._bspTrees.set(group, newTree);
         } else {
-            const targetIdx = this.core.layouts.computeMasterStackDropTarget(ws, px, py);
+            const targetIdx = this.core.layouts.computeMasterStackDropTarget(ws, px, py, mon);
             if (targetIdx < 0) return;
 
             const order = this.getWorkspaceOrder(ws);
@@ -1056,7 +1059,8 @@ export class Windows extends PlaidSubsystem {
             for (let i = 0; i < order.length; i++) {
                 const w = order[i];
                 if (this.isFloating(w) || w.minimized || w.is_skip_taskbar() ||
-                    w.get_window_type() !== Meta.WindowType.NORMAL) continue;
+                    w.get_window_type() !== Meta.WindowType.NORMAL ||
+                    this.core.monitors.windowMonitor(w) !== conn) continue;
                 if (tiledSeen === adjustedTarget) {
                     insertIdx = i;
                     break;
@@ -1064,16 +1068,16 @@ export class Windows extends PlaidSubsystem {
                 tiledSeen++;
             }
             order.splice(insertIdx, 0, window);
-            const tiledOnly = order.filter(w =>
+            const tiledOnly = this.core.monitors.getWindowsForGroup(ws, mon).filter(w =>
                 !this.isFloating(w) &&
                 w.get_window_type() === Meta.WindowType.NORMAL &&
                 !w.is_skip_taskbar() &&
                 !w.minimized
             );
             if (layout === 'centered-master-stack')
-                this.core.layouts.retileCenteredMasterStack(ws, tiledOnly);
+                this.core.layouts.retileCenteredMasterStack(ws, tiledOnly, null, mon);
             else
-                this.core.layouts.retileMasterStack(ws, tiledOnly);
+                this.core.layouts.retileMasterStack(ws, tiledOnly, null, mon);
         }
         // A drop-swap restructured the tree/order directly (not every path
         // here goes through _doRetileWorkspace) — persist the new
