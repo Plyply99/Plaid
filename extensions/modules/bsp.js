@@ -622,7 +622,6 @@ export class Bsp {
         let bestOverlap = 0;
         let bestDist = Infinity;
         let bestPerp = Infinity;
-        let bestHeight = -1;
 
         for (const w of windows) {
             if (w === win) continue;
@@ -660,18 +659,17 @@ export class Bsp {
             }
             if (overlap <= 0) continue;
 
-            const sameHeight = Math.abs(r.height - bestHeight) <= 5;
+            // Nearest edge wins. Overlap only breaks near-ties: ranking by
+            // overlap first made a tall window on another monitor beat the
+            // stack pane sitting right next to the seam.
             const overlapTie = Math.abs(overlap - bestOverlap) <= 5;
             const distTie = Math.abs(dist - bestDist) <= 5;
-            if (overlap > bestOverlap + 5 ||
-                (overlapTie && dist < bestDist - 5) ||
-                (overlapTie && distTie &&
-                 ((!sameHeight && r.height > bestHeight) ||
-                  (sameHeight && perp < bestPerp)))) {
+            if (dist < bestDist - 5 ||
+                (distTie && overlap > bestOverlap + 5) ||
+                (distTie && overlapTie && perp < bestPerp - 5)) {
                 bestOverlap = overlap;
                 bestDist = dist;
                 bestPerp = perp;
-                bestHeight = r.height;
                 best = w;
             }
         }

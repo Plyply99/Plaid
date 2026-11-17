@@ -74,6 +74,24 @@ test('_findDirectionalTarget prefers a neighbour on the same monitor', () => {
   assert.equal(self._findDirectionalTarget(focused, 'left', [focused, local, fartherTaller]), local);
 });
 
+test('_findDirectionalTarget prefers the nearest edge over a taller, farther window', () => {
+  const self = makeSelf();
+  const focused = fakeWin({ frame: { x: 100, y: 0, width: 100, height: 800 } });
+  const nearShort = fakeWin({ frame: { x: 0, y: 0, width: 100, height: 300 } });
+  const farTall = fakeWin({ frame: { x: -500, y: 0, width: 400, height: 800 } });
+  assert.equal(
+    self._findDirectionalTarget(focused, 'left', [focused, farTall, nearShort]),
+    nearShort);
+});
+
+test('_findDirectionalTarget crosses to the window touching the seam', () => {
+  const self = makeSelf();
+  const focused = fakeWin({ monitor: 1, frame: { x: 1000, y: 0, width: 100, height: 800 } });
+  const seam = fakeWin({ monitor: 0, frame: { x: 900, y: 0, width: 100, height: 300 } });
+  const farTall = fakeWin({ monitor: 0, frame: { x: 0, y: 0, width: 500, height: 800 } });
+  assert.equal(self._findDirectionalTarget(focused, 'left', [focused, farTall, seam]), seam);
+});
+
 test('_findDirectionalTarget crosses monitors when the local monitor has no neighbour', () => {
   const self = makeSelf();
   const focused = fakeWin({ monitor: 0, frame: { x: 0, y: 0, width: 500, height: 800 } });
