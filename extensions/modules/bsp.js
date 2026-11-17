@@ -243,16 +243,26 @@ export class Bsp {
         }
     }
 
-    bspInsertForWorkspace(ws, win) {
+    bspInsertForWorkspace(ws, win, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const group = this.core.monitors.groupObj(ws, mon);
+        const workArea = ws.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return;
-        let tree = this.bspGetTree(ws);
+        let tree = this.bspGetTree(group);
 
         if (tree) {
-            const existing = this.bspCollectWindows(tree);
-            if (existing.includes(win)) return;
+            // Prune leaves whose window closed before this insert. Insertion
+            // runs before the retile's own prune, so a ghost leaf left from a
+            // just-closed window would otherwise shape the split (and put the
+            // new window somewhere unrelated to the pointer).
+            const live = this.core.windows.getWindowsForWorkspace(ws)
+                .filter(w => !this.core.windows.isFloating(w));
+            for (const tw of this.bspCollectWindows(tree)) {
+                if (!live.includes(tw)) tree = this.bspRemove(tree, tw);
+            }
+            if (tree.type === 'empty') tree = null;
+            if (tree && this.bspCollectWindows(tree).includes(win)) return;
         }
 
         const area = this.core.geometry.outsideArea(workArea);
@@ -284,7 +294,14 @@ export class Bsp {
         } else {
             tree = this.bspInsert(tree, win, areaX, areaY, areaW, areaH, gap);
         }
-        this.core._bspTrees.set(ws, tree);
+        {
+            const [px, py] = global.get_pointer();
+            const wsIndex = this.core.geometry.wsIndex(ws);
+            this.core.debugLog(`insert: ${win.get_wm_class_instance() || '?'} id=${win.get_id()} ws=${wsIndex} ` +
+                `key=${this.core.monitors.groupKeyFor(wsIndex, mon)} pointer=(${Math.round(px)},${Math.round(py)}) ` +
+                `shape=${this.dwindleShapeToString(tree)}`);
+        }
+        this.core._bspTrees.set(group, tree);
     }
 
     parseMinSizeOverrides(entries) {
@@ -584,6 +601,17 @@ export class Bsp {
     }
 
     findDirectionalTarget(win, direction, windows) {
+        // Prefer a neighbour on the focused window's monitor. Overlap ranking
+        // alone can pick a taller window on the other display over the seam
+        // when the same-monitor neighbour is shorter (centred-master stacks).
+        const mon = win.get_monitor();
+        const sameMonitor = windows.filter(w => w !== win && w.get_monitor() === mon);
+        const local = this.findDirectionalIn(win, direction, sameMonitor);
+        if (local) return local;
+        return this.findDirectionalIn(win, direction, windows);
+    }
+
+    findDirectionalIn(win, direction, windows) {
         const f = win.get_frame_rect();
         let best = null;
         // bestOverlap starts at 0 (not -1): the acceptance test requires
@@ -594,7 +622,6 @@ export class Bsp {
         let bestOverlap = 0;
         let bestDist = Infinity;
         let bestPerp = Infinity;
-        let bestHeight = -1;
 
         for (const w of windows) {
             if (w === win) continue;
@@ -632,18 +659,17 @@ export class Bsp {
             }
             if (overlap <= 0) continue;
 
-            const sameHeight = Math.abs(r.height - bestHeight) <= 5;
+            // Nearest edge wins. Overlap only breaks near-ties: ranking by
+            // overlap first made a tall window on another monitor beat the
+            // stack pane sitting right next to the seam.
             const overlapTie = Math.abs(overlap - bestOverlap) <= 5;
             const distTie = Math.abs(dist - bestDist) <= 5;
-            if (overlap > bestOverlap + 5 ||
-                (overlapTie && dist < bestDist - 5) ||
-                (overlapTie && distTie &&
-                 ((!sameHeight && r.height > bestHeight) ||
-                  (sameHeight && perp < bestPerp)))) {
+            if (dist < bestDist - 5 ||
+                (distTie && overlap > bestOverlap + 5) ||
+                (distTie && overlapTie && perp < bestPerp - 5)) {
                 bestOverlap = overlap;
                 bestDist = dist;
                 bestPerp = perp;
-                bestHeight = r.height;
                 best = w;
             }
         }

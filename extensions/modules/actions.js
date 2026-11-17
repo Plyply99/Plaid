@@ -53,7 +53,12 @@ export class Actions extends PlaidSubsystem {
         }
         const ws = focused.get_workspace();
         if (!ws) return;
-        if (this.core.windows.getWorkspaceLayout(ws) === 'floating') {
+        const mon = focused.get_monitor();
+        if (!this.core.monitors.monitorTiled(mon)) {
+            this.moveFloating(focused, direction);
+            return;
+        }
+        if (this.core.windows.getWorkspaceLayout(ws, mon) === 'floating') {
             this.moveFloating(focused, direction);
             return;
         }
@@ -65,14 +70,24 @@ export class Actions extends PlaidSubsystem {
         const bestWindow = this.core.bsp.findDirectionalTarget(focused, direction, windows);
         if (!bestWindow) return;
 
-        const layout = this.core.windows.getWorkspaceLayout(ws);
-        if (layout === 'dwindle') {
-            const tree = this.core.bsp.bspGetTree(ws);
-            if (tree) {
-                this.core.bsp.bspSwapWindows(tree, focused, bestWindow);
-            }
+        const bestMon = bestWindow.get_monitor();
+        if (bestMon !== mon) {
+            // Swap across monitors: the two windows exchange groups, then the
+            // per-group retile puts each into a slot on the other monitor.
+            this.core.monitors.regroupWindow(focused, ws, mon, bestMon);
+            this.core.monitors.regroupWindow(bestWindow, ws, bestMon, mon);
+            this.core.monitors.setWindowMonitor(focused, bestMon);
+            this.core.monitors.setWindowMonitor(bestWindow, mon);
         } else {
-            this.core.layouts.swapMasterStackWindows(focused, bestWindow);
+            const layout = this.core.windows.getWorkspaceLayout(ws, mon);
+            if (layout === 'dwindle') {
+                const tree = this.core.bsp.bspGetTree(this.core.monitors.groupObj(ws, mon));
+                if (tree) {
+                    this.core.bsp.bspSwapWindows(tree, focused, bestWindow);
+                }
+            } else {
+                this.core.layouts.swapMasterStackWindows(focused, bestWindow);
+            }
         }
         this.core.layouts.retileWorkspace(ws);
         this.core._keyboardFocusChange = true;
@@ -99,7 +114,14 @@ export class Actions extends PlaidSubsystem {
 
         const ws = focused.get_workspace();
         if (!ws) return;
-        if (this.core.windows.getWorkspaceLayout(ws) === 'floating') {
+        const mon = focused.get_monitor();
+        // Untiled displays behave like floating for move/resize, without
+        // being marked floating (focus navigation still includes them).
+        if (!this.core.monitors.monitorTiled(mon)) {
+            this.resizeFloating(focused, axis, delta);
+            return;
+        }
+        if (this.core.windows.getWorkspaceLayout(ws, mon) === 'floating') {
             this.resizeFloating(focused, axis, delta);
             return;
         }
@@ -109,11 +131,11 @@ export class Actions extends PlaidSubsystem {
         const idx = tiledWindows.indexOf(focused);
         if (idx === -1 || tiledWindows.length <= 1) return;
 
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
         if (layout === 'dwindle')
-            this.resizeDwindle(focused, ws, axis, delta);
+            this.resizeDwindle(focused, ws, axis, delta, mon);
         else
-            this.core.layouts.resizeMasterStack(focused, ws, axis, delta);
+            this.core.layouts.resizeMasterStack(focused, ws, axis, delta, mon);
 
         this.core.layouts.retileWorkspace(ws);
         if (this.core._settings.get_boolean('follow-focus'))
@@ -153,8 +175,8 @@ export class Actions extends PlaidSubsystem {
         this.core.windows.moveCursorToWindow(win);
     }
 
-    resizeDwindle(focused, workspace, axis, delta) {
-        const tree = this.core.bsp.bspGetTree(workspace);
+    resizeDwindle(focused, workspace, axis, delta, mon) {
+        const tree = this.core.bsp.bspGetTree(this.core.monitors.groupObj(workspace, mon));
         if (!tree) return;
 
         const targetIsHorizontal = axis === 'width';
@@ -164,8 +186,8 @@ export class Actions extends PlaidSubsystem {
         for (let i = path.length - 1; i >= 0; i--) {
             const split = path[i];
             if ((split.direction === 'h') === targetIsHorizontal) {
-                const monitor = global.display.get_primary_monitor();
-                const workArea = workspace.get_work_area_for_monitor(monitor);
+                const workArea = workspace.get_work_area_for_monitor(
+                    mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
                 if (!workArea) return;
                 // Scale the delta by the split's OWN span (tagged by
                 // _bspTagGeometry during layout) so a deep-nested split
@@ -203,8 +225,9 @@ export class Actions extends PlaidSubsystem {
             this.core.placement.releaseMinLimitedWindow(focused);
             const ws = focused.get_workspace();
             if (ws) {
-                if (this.core.windows.getWorkspaceLayout(ws) === 'dwindle')
-                    this.core.bsp.bspInsertForWorkspace(ws, focused);
+                const mon = focused.get_monitor();
+                if (this.core.windows.getWorkspaceLayout(ws, mon) === 'dwindle')
+                    this.core.bsp.bspInsertForWorkspace(ws, focused, mon);
                 this.core.layouts.retileWorkspace(ws);
             }
             return;
@@ -218,17 +241,19 @@ export class Actions extends PlaidSubsystem {
         }
         const ws = focused.get_workspace();
         if (!ws) return;
+        const mon = focused.get_monitor();
 
         if (wasFloating) {
-            const layout = this.core.windows.getWorkspaceLayout(ws);
+            const layout = this.core.windows.getWorkspaceLayout(ws, mon);
             if (layout === 'dwindle')
-                this.core.bsp.bspInsertForWorkspace(ws, focused);
+                this.core.bsp.bspInsertForWorkspace(ws, focused, mon);
         } else {
-            const layout = this.core.windows.getWorkspaceLayout(ws);
+            const layout = this.core.windows.getWorkspaceLayout(ws, mon);
             if (layout === 'dwindle') {
-                const tree = this.core.bsp.bspGetTree(ws);
+                const group = this.core.monitors.groupObj(ws, mon);
+                const tree = this.core.bsp.bspGetTree(group);
                 if (tree)
-                    this.core._bspTrees.set(ws, this.core.bsp.bspRemove(tree, focused));
+                    this.core._bspTrees.set(group, this.core.bsp.bspRemove(tree, focused));
             }
         }
 
@@ -292,14 +317,16 @@ export class Actions extends PlaidSubsystem {
     centerWindow() {
         const win = this.getActiveWindow();
         if (!win) return;
-        if (!this.core.windows.isFloating(win)) return;
+        const mon = win.get_monitor();
+        // Tiled windows are laid out; floating windows and windows on untiled
+        // displays can be centred.
+        if (!this.core.windows.isFloating(win) && this.core.monitors.monitorTiled(mon)) return;
 
         const ws = win.get_workspace();
         if (!ws) return;
 
         const frame = win.get_frame_rect();
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const workArea = ws.get_work_area_for_monitor(mon);
         if (!workArea) return;
 
         const x = workArea.x + Math.floor((workArea.width - frame.width) / 2);
@@ -324,14 +351,30 @@ export class Actions extends PlaidSubsystem {
 
     cycleLayout() {
         const layouts = ['dwindle', 'master-stack', 'centered-master-stack', 'floating'];
-        const ws = global.workspace_manager.get_active_workspace();
+        const focused = this.getActiveWindow();
+        const ws = focused ? focused.get_workspace() : global.workspace_manager.get_active_workspace();
         if (!ws) return;
+        // The pointer selects the display: an empty display has no focused
+        // window, and layout is per-display state.
+        const currentMon = global.display.get_current_monitor();
+        const mon = Number.isInteger(currentMon) && currentMon >= 0
+            ? currentMon
+            : (focused ? focused.get_monitor() : this.core.monitors.primaryMonitorIndex());
+        // Untiled displays (workspaces on the primary only) have no slots to
+        // change. Say why instead of claiming a layout changed.
+        if (this.core.monitors && !this.core.monitors.monitorTiled(mon)) {
+            this.core.workspaces.showPopup(_('Display not tiled'),
+                _('Enable "Workspaces on all displays" in Settings → Multitasking to tile this monitor.'),
+                3000, null, mon);
+            return;
+        }
         this.core.placement.releaseMinLimitedWindows();
-        const current = this.core.windows.getWorkspaceLayout(ws);
+        const current = this.core.windows.getWorkspaceLayout(ws, mon);
         const idx = layouts.indexOf(current);
         const next = layouts[(idx + 1) % layouts.length];
         if (next !== current) {
-            this.core._workspaceLayouts.set(this.core.geometry.wsIndex(ws), next);
+            this.core._workspaceLayouts.set(
+                this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), mon), next);
             this.core.layouts.retileWorkspace(ws);
             this.core.workspaces.showPopup(`Layout: ${LAYOUT_NAMES[next] || next}`);
             this.core.persistence.scheduleSaveLayouts();
@@ -358,6 +401,23 @@ export class Actions extends PlaidSubsystem {
         });
     }
 
+    floatListMatches(win) {
+        const out = [];
+        const classes = new Set();
+        for (const c of this.core.winClassCandidates(win)) {
+            if (this.core._floatingClasses && this.core._floatingClasses.has(c))
+                classes.add(c);
+        }
+        for (const token of this.core.windows.matchingFloatTokens(win))
+            classes.add(token);
+        for (const value of classes)
+            out.push({ key: 'float-windows', value });
+        const title = win.get_title() || '';
+        if (title && this.core._floatingTitles && this.core._floatingTitles.has(title))
+            out.push({ key: 'float-titles', value: title });
+        return out;
+    }
+
     handlePickFloat() {
         const win = global.display.focus_window;
         if (!win) {
@@ -367,57 +427,76 @@ export class Actions extends PlaidSubsystem {
 
         const cls = this.core.winClassCandidates(win)[0] || '';
         const title = win.get_title() || '';
+        const matches = this.floatListMatches(win);
 
-        if (!cls && !title) {
+        if (!cls && !title && matches.length === 0) {
             Main.notify(_('Could not identify the focused window'));
             return;
         }
 
-        this.showFloatPickDialog(cls, title);
+        this.showFloatPickDialog(cls, title, matches);
     }
 
-    showFloatPickDialog(cls, title) {
+    showFloatPickDialog(cls, title, matches = []) {
         this.destroyFloatPickDialog();
         const dialog = new ModalDialog();
         this.core._pickDialog = dialog;
 
         const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style: 'spacing: 12px;' });
+        const removing = matches.length > 0;
 
         const header = new St.Label({
-            text: _('Add Floating Window'),
+            text: removing ? _('Remove from Float List') : _('Add Floating Window'),
             style: 'font-weight: bold; font-size: 14px;',
         });
         content.add_child(header);
 
         const subtitle = new St.Label({
-            text: _('How should this window be identified?'),
+            text: removing
+                ? _('This window is floating because of an entry in the float list.')
+                : _('How should this window be identified?'),
         });
         content.add_child(subtitle);
 
         dialog.contentLayout.add_child(content);
 
         const buttons = [];
+        const short = (value) => value.length > 40 ? value.substring(0, 37) + '...' : value;
 
-        if (cls) {
+        if (removing) {
+            let values = [...new Set(matches.map(m => m.value))];
+            if (values.length > 2)
+                values = [values[0], values[1], `+${values.length - 2}`];
             buttons.push({
-                label: _('By class: %s').replace('%s', cls),
+                label: _('Remove: %s').replace('%s', values.map(short).join(', ')),
                 action: () => {
-                    this.addFloatEntry('float-windows', cls.toLowerCase());
+                    this.removeFloatEntries(matches);
                     dialog.close();
                 },
-                key: Clutter.KEY_c,
+                key: Clutter.KEY_Return,
             });
-        }
+        } else {
+            if (cls) {
+                buttons.push({
+                    label: _('By class: %s').replace('%s', cls),
+                    action: () => {
+                        this.addFloatEntry('float-windows', cls.toLowerCase());
+                        dialog.close();
+                    },
+                    key: Clutter.KEY_c,
+                });
+            }
 
-        if (title) {
-            buttons.push({
-                label: _('By title: %s').replace('%s', title),
-                action: () => {
-                    this.addFloatEntry('float-titles', title);
-                    dialog.close();
-                },
-                key: Clutter.KEY_t,
-            });
+            if (title) {
+                buttons.push({
+                    label: _('By title: %s').replace('%s', title),
+                    action: () => {
+                        this.addFloatEntry('float-titles', title);
+                        dialog.close();
+                    },
+                    key: Clutter.KEY_t,
+                });
+            }
         }
 
         buttons.push({
@@ -440,10 +519,86 @@ export class Actions extends PlaidSubsystem {
         } else {
             this.core._floatingTitles = new Set(this.core._settings.get_strv('float-titles'));
         }
+        // A process-based verdict cached from before the rule existed would
+        // keep the window floating until relog.
+        if (this.core._floatProcessCache) this.core._floatProcessCache.clear();
 
-        if (value.length > 40)
-            value = value.substring(0, 37) + '...';
-        Main.notify(_('Added "%s" to float list').replace('%s', value));
+        Main.notify(_('Added "%s" to float list').replace('%s', this.clipFloatValue(value)));
+    }
+
+    removeFloatEntries(matches) {
+        const removed = this.applyFloatRemoval(matches);
+
+        const win = global.display.focus_window;
+        if (win) {
+            if (!this.core._windowWorkspaces.has(win) && this.core.windows.shouldManage(win))
+                this.core.windows.addWindow(win);
+            const ws = win.get_workspace();
+            if (ws) this.core.layouts.retileWorkspace(ws);
+        }
+
+        let values = removed;
+        if (values.length > 2)
+            values = [values[0], values[1], `+${values.length - 2}`];
+        Main.notify(_('Removed "%s" from float list').replace('%s', values.map(v => this.clipFloatValue(v)).join(', ')));
+    }
+
+    // Remove the matching entries from the settings and the live sets. Returns
+    // the removed values (unique), without touching the focused window.
+    applyFloatRemoval(matches) {
+        const removed = [];
+        const byKey = new Map();
+        for (const { key, value } of matches) {
+            if (!byKey.has(key)) byKey.set(key, new Set());
+            byKey.get(key).add(value);
+            removed.push(value);
+        }
+        for (const [key, values] of byKey) {
+            const next = this.core._settings.get_strv(key).filter(v => !values.has(v));
+            this.core._settings.set_strv(key, next);
+        }
+        this.core._floatingClasses = new Set(this.core._settings.get_strv('float-windows'));
+        this.core._floatingTitles = new Set(this.core._settings.get_strv('float-titles'));
+        if (this.core._floatProcessCache) this.core._floatProcessCache.clear();
+        return [...new Set(removed)];
+    }
+
+    clipFloatValue(value) {
+        return value.length > 40 ? value.substring(0, 37) + '...' : value;
+    }
+
+    showWorkspacesOnAllDisplaysPrompt() {
+        if (this.core._wsPromptDialog) return;
+        const dialog = new ModalDialog();
+        this.core._wsPromptDialog = dialog;
+
+        const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style: 'spacing: 12px;' });
+        content.add_child(new St.Label({
+            text: _('Use workspaces on all displays?'),
+            style: 'font-weight: bold; font-size: 14px;',
+        }));
+        content.add_child(new St.Label({
+            text: _('Tiling a second monitor works best when workspaces span every display. Plaid will not ask again.'),
+        }));
+        dialog.contentLayout.add_child(content);
+
+        dialog.setButtons([
+            {
+                label: _('Enable'),
+                key: Clutter.KEY_Return,
+                action: () => {
+                    if (this.core._mutterSettings)
+                        this.core._mutterSettings.set_boolean('workspaces-only-on-primary', false);
+                    dialog.close();
+                },
+            },
+            {
+                label: _('Not now'),
+                key: Clutter.KEY_Escape,
+                action: () => dialog.close(),
+            },
+        ]);
+        dialog.open();
     }
 
     destroyFloatPickDialog() {
@@ -455,6 +610,10 @@ export class Actions extends PlaidSubsystem {
 
     destroy() {
         this.destroyFloatPickDialog();
+        if (this.core._wsPromptDialog) {
+            this.core._wsPromptDialog.close();
+            this.core._wsPromptDialog = null;
+        }
         if (this.core._pickFocusId) {
             global.display.disconnectObject(this.core._pickFocusId);
             this.core._pickFocusId = null;

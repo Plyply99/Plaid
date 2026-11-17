@@ -187,6 +187,7 @@ test('finalizeSettleMin: restores the pre-bend split when the client shrank', ()
   };
   const live = split('h', 0.75, leaf(win), leaf(fakeWin({ id: 10 })));
   self._bspTrees.set(ws, live);
+  self.geometry.wsIndex = () => 4;
   self.windows.getWorkspaceLayout = () => 'dwindle';
   let retiles = 0;
   self.layouts.retileWorkspace = () => retiles++;

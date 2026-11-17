@@ -41,6 +41,21 @@ export class Workspaces extends PlaidSubsystem {
         super(core);
     }
 
+    // The monitor a Plaid popup should appear on: the focused window's, else
+    // the pointer's, else the primary. Sizing a popup to the union of every
+    // monitor puts it on the seam between displays.
+    popupMonitorGeometry(mon) {
+        if (Number.isInteger(mon) && mon >= 0) {
+            const geom = global.display.get_monitor_geometry(mon);
+            if (geom) return geom;
+        }
+        const win = global.display.focus_window;
+        const focused = win && win.get_monitor() >= 0 ? win.get_monitor() : -1;
+        const target = focused >= 0 ? focused : global.display.get_current_monitor();
+        return global.display.get_monitor_geometry(target)
+            || global.display.get_monitor_geometry(global.display.get_primary_monitor());
+    }
+
     showWorkspacePopup(ws) {
         if (!ws) return;
         // The hidden parking slot must never be announced as a workspace — it
@@ -51,7 +66,7 @@ export class Workspaces extends PlaidSubsystem {
             `Layout: ${LAYOUT_NAMES[layout] || layout}`);
     }
 
-    showPopup(title, subtitle = null, duration = 3000, onActivate = null) {
+    showPopup(title, subtitle = null, duration = 3000, onActivate = null, mon = -1) {
         if (this.core._layoutPopupHideId) {
             GLib.source_remove(this.core._layoutPopupHideId);
             this.core._layoutPopupHideId = 0;
@@ -62,14 +77,8 @@ export class Workspaces extends PlaidSubsystem {
             this.core._layoutPopup = null;
         }
 
-        const monitors = global.display.get_n_monitors();
-        let maxX = 0, maxY = 0;
-        for (let i = 0; i < monitors; i++) {
-            const geom = global.display.get_monitor_geometry(i);
-            maxX = Math.max(maxX, geom.x + geom.width);
-            maxY = Math.max(maxY, geom.y + geom.height);
-        }
-        const bottomMargin = Math.floor(maxY * 0.70);
+        const geom = this.popupMonitorGeometry(mon);
+        const bottomMargin = Math.floor(geom.height * 0.70);
 
         const box = new St.BoxLayout({
             orientation: Clutter.Orientation.VERTICAL,
@@ -93,8 +102,8 @@ export class Workspaces extends PlaidSubsystem {
             reactive: onActivate !== null,
         });
         this.core._layoutPopup = popup;
-        popup.set_position(0, 0);
-        popup.set_size(maxX, maxY);
+        popup.set_position(geom.x, geom.y);
+        popup.set_size(geom.width, geom.height);
         Main.layoutManager.uiGroup.add_child(popup);
         this.core.debugLog(`popup shown: ${title}`);
 
@@ -182,14 +191,8 @@ export class Workspaces extends PlaidSubsystem {
             this.core._warningPopup = null;
         }
 
-        const monitors = global.display.get_n_monitors();
-        let maxX = 0, maxY = 0;
-        for (let i = 0; i < monitors; i++) {
-            const geom = global.display.get_monitor_geometry(i);
-            maxX = Math.max(maxX, geom.x + geom.width);
-            maxY = Math.max(maxY, geom.y + geom.height);
-        }
-        const bottomMargin = Math.floor(maxY * 0.70);
+        const geom = this.popupMonitorGeometry();
+        const bottomMargin = Math.floor(geom.height * 0.70);
 
         const box = new St.BoxLayout({
             orientation: Clutter.Orientation.VERTICAL,
@@ -219,8 +222,8 @@ export class Workspaces extends PlaidSubsystem {
             reactive: true,
         });
         this.core._warningPopup = popup;
-        popup.set_position(0, 0);
-        popup.set_size(maxX, maxY);
+        popup.set_position(geom.x, geom.y);
+        popup.set_size(geom.width, geom.height);
         Main.layoutManager.uiGroup.add_child(popup);
 
         this.connectObject(popup, 'button-press-event', () => {

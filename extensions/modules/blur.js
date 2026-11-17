@@ -297,6 +297,26 @@ function getBlurEffectClass() {
             fb.set_projection_matrix(m);
         }
 
+        _monitorScale(mon) {
+            if (Number.isInteger(mon) && mon >= 0) {
+                const scale = global.display.get_monitor_scale(mon);
+                if (Number.isFinite(scale) && scale > 0) return scale;
+            }
+            return St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        }
+
+        _monitorForActor(actor) {
+            const pos = actor.get_transformed_position();
+            const n = global.display.get_n_monitors();
+            for (let i = 0; i < n; i++) {
+                const g = global.display.get_monitor_geometry(i);
+                if (pos[0] >= g.x && pos[0] < g.x + g.width &&
+                    pos[1] >= g.y && pos[1] < g.y + g.height)
+                    return i;
+            }
+            return global.display.get_primary_monitor();
+        }
+
         _monitorDims() {
             // Physical pixel dims (logical geometry × UI scale) — the
             // stage framebuffer and blit are physical, so FBOs must match.
@@ -307,12 +327,12 @@ function getBlurEffectClass() {
             const n = global.display.get_n_monitors();
             for (let i = 0; i < n; i++) {
                 const g = global.display.get_monitor_geometry(i);
-                monW = Math.max(monW, g.width);
-                monH = Math.max(monH, g.height);
+                const scale = this._monitorScale(i);
+                monW = Math.max(monW, Math.round(g.width * scale));
+                monH = Math.max(monH, Math.round(g.height * scale));
             }
 
-            const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
-            const d = { monW: Math.max(Math.round(monW * scale), 640), monH: Math.max(Math.round(monH * scale), 480) };
+            const d = { monW: Math.max(monW, 640), monH: Math.max(monH, 480) };
             _monitorDimsCache = { v: _monitorDimsVersion, d };
             return d;
         }
@@ -363,8 +383,8 @@ function getBlurEffectClass() {
             // the stage framebuffer in physical view pixels; composites
             // use logical rects; the SDF maps texcoords back to logical
             // pixels via pixelStep.
-            const bw = w / ds;
-            const bh = h / ds;
+            const bw = physW / ds;
+            const bh = physH / ds;
             if (!this._bgFb || !this._brightFb || !this._hFb || !this._vFb) return null;
             this._syncKernel(ds, this._radius);
             const monW = this._bgTex.get_width();
@@ -429,39 +449,17 @@ function getBlurEffectClass() {
                         this._lastRebuildTime = now;
                     }
                 }
-                let px = 0, py = 0;
-                const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+                const mon = this._monitorForActor(actor);
+                const geom = global.display.get_monitor_geometry(mon);
+                const scale = this._monitorScale(mon);
 
+                // The paint target is the monitor's own framebuffer: blit in
+                // view-local physical pixels. Monitor origins and scale differ
+                // on mixed-DPI setups, so neither the stage-wide theme scale nor
+                // global stage coordinates are correct here.
                 const pos = actor.get_transformed_position();
-                px = pos[0];
-                py = pos[1];
-                // View-relative blit. On 51 get_stage_view() works;
-                // on 50 it isn't introspectable, so subtract the
-                // actor's monitor origin instead.
-                if (typeof paintContext.get_stage_view === 'function') {
-                    const stageView = paintContext.get_stage_view();
-                    if (stageView && stageView.get_layout) {
-                        const layout = stageView.get_layout();
-                        if (layout) {
-                            px -= layout.x;
-                            py -= layout.y;
-                        }
-                    }
-                } else {
-                    const n = global.display.get_n_monitors();
-                    for (let i = 0; i < n; i++) {
-                        const g = global.display.get_monitor_geometry(i);
-                        if (px >= g.x && px < g.x + g.width &&
-                            py >= g.y && py < g.y + g.height) {
-                            px -= g.x;
-                            py -= g.y;
-                            break;
-                        }
-                    }
-                }
-
-                px *= scale;
-                py *= scale;
+                let px = (pos[0] - geom.x) * scale;
+                let py = (pos[1] - geom.y) * scale;
                 if (!Number.isFinite(px) || !Number.isFinite(py)) {
                     px = 0;
                     py = 0;
@@ -508,6 +506,14 @@ export class Blur extends PlaidSubsystem {
         return (this.core._settings && this.core._settings.get_boolean('rounded-corners'))
             ? this.core._settings.get_int('border-radius') + 1
             : 0;
+    }
+
+    windowScale(win) {
+        const mon = win ? win.get_monitor() : -1;
+        const scale = Number.isInteger(mon) && mon >= 0
+            ? global.display.get_monitor_scale(mon) : 0;
+        return Number.isFinite(scale) && scale > 0
+            ? scale : St.ThemeContext.get_for_stage(global.stage).scale_factor;
     }
 
     createGjsBlurEffect() {
@@ -652,7 +658,7 @@ export class Blur extends PlaidSubsystem {
             if (blur.mode !== blurMode)
                 blur.mode = blurMode;
         }
-        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        const scale = this.windowScale(win);
         const radius = Math.round(Math.min(this.core._settings.get_int('window-blur-radius') * scale, 100));
         if (blur.radius !== radius)
             blur.radius = radius;

@@ -24,6 +24,7 @@ import { Grab } from './grab.js';
 import { Windows } from './windows.js';
 import { Layouts } from './layouts.js';
 import { Persistence } from './persistence.js';
+import { Monitors } from './monitors.js';
 import { ProcInfo } from './proc-info.js';
 import { Signals } from './signals.js';
 import { Actions } from './actions.js';
@@ -52,6 +53,7 @@ export class PlaidCore {
         this.windows = new Windows(this);
         this.layouts = new Layouts(this);
         this.persistence = new Persistence(this);
+        this.monitors = new Monitors(this);
         this.procInfo = new ProcInfo(this);
         this.signals = new Signals(this);
         this.actions = new Actions(this);
@@ -251,6 +253,22 @@ export class PlaidCore {
         this._animTickId = 0;
         this._newWindowSet = new Set();
         this._floatHooks = new Map();
+        this._windowMonitors = new Map();
+        this._groupObjs = new Map();
+        this._monitorConnCache = null;
+        this._monitorConnPartial = false;
+        this._monitorsSettling = false;
+        this._monitorSettleId = 0;
+        this._monitorSettleRetries = 0;
+        this._keyedPrimary = '';
+        this._resumeMonitorsMoved = false;
+        this._regroupId = 0;
+        this._grabbedWindow = null;
+        this._grabFromMon = -1;
+        this._grabDropped = false;
+        this._wsPromptCheckId = 0;
+        this._wsPromptRetries = 0;
+        this._wsPromptDialog = null;
 
         const ctx = global.backend.get_context();
         if (!ctx.get_wayland_compositor()) {
@@ -269,6 +287,7 @@ export class PlaidCore {
         this._mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter' });
         this.dragPreview.init();
         this.signals.connectSignals();
+        this.monitors.connectSignals();
         this.keybindings.registerKeybindings();
         this.workspaces.suppressWorkspaceSwitcherPopup();
         this.dropdown.initDropdownTerminal();
@@ -412,6 +431,15 @@ export class PlaidCore {
         this._workspaceOrders = s.workspaceOrders;
         this._windowWorkspaces = s.windowWorkspaces;
         this._windowWSIndices = s.windowWSIndices;
+        if (s.windowMonitors) {
+            for (const [win] of s.windowMonitors) {
+                if (!alive(win)) s.windowMonitors.delete(win);
+            }
+            this._windowMonitors = s.windowMonitors;
+        }
+        if (s.groupObjs) this._groupObjs = s.groupObjs;
+        if (s.keyedPrimary !== undefined) this._keyedPrimary = s.keyedPrimary;
+        this._monitorConnCache = null;
         this._lastFocusedPerWorkspace = s.lastFocusedPerWorkspace;
         if (s.lastRealFocusedWindow && alive(s.lastRealFocusedWindow))
             this._lastRealFocusedWindow = s.lastRealFocusedWindow;
@@ -472,6 +500,9 @@ export class PlaidCore {
                 workspaceOrders: this._workspaceOrders,
                 windowWorkspaces: this._windowWorkspaces,
                 windowWSIndices: this._windowWSIndices,
+                windowMonitors: this._windowMonitors,
+                groupObjs: this._groupObjs,
+                keyedPrimary: this._keyedPrimary,
                 lastFocusedPerWorkspace: this._lastFocusedPerWorkspace,
                 lastRealFocusedWindow: this._lastRealFocusedWindow,
                 scratchpadWindows: this._scratchpadWindows,
@@ -489,6 +520,7 @@ export class PlaidCore {
         this.dropdown.destroy();
         this.bgApp.destroy();
         this.workspaces.destroy();
+        this.monitors.destroy();
         this.placement.destroy();
         this.grab.destroy();
         this.keybindings.destroy();
@@ -551,5 +583,21 @@ export class PlaidCore {
         this._maximizeToggleRects = null;
         this._scratchpadWindows = null;
         this._scratchpadVisible = false;
+        this._windowMonitors = null;
+        this._groupObjs = null;
+        this._monitorConnCache = null;
+        this._monitorConnPartial = false;
+        this._monitorsSettling = false;
+        this._monitorSettleId = 0;
+        this._monitorSettleRetries = 0;
+        this._keyedPrimary = '';
+        this._resumeMonitorsMoved = false;
+        this._regroupId = 0;
+        this._grabbedWindow = null;
+        this._grabFromMon = -1;
+        this._grabDropped = false;
+        this._wsPromptCheckId = 0;
+        this._wsPromptRetries = 0;
+        this._wsPromptDialog = null;
     }
 }

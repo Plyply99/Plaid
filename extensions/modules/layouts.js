@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib';
+
 // Workspace retile orchestration and the master-stack / dwindle layout
 // implementation. Methods live on this subsystem class.
 
@@ -27,6 +29,13 @@ export class Layouts {
         if (!this.core._settings.get_boolean('enabled')) {
             return;
         }
+        // Monitors are being reconfigured (resolution, rotation, hotplug):
+        // connector mapping is partial, so grouping would churn. The settled
+        // pass retiles everything once the connectors resolve.
+        if (this.core._monitorConnPartial || this.core._monitorsSettling) {
+            this.core.debugLog(`retile: deferred ws=${this.core.geometry.wsIndex(workspace)} (monitor connectors settling)`);
+            return;
+        }
         if (this.core._grabOp) return;
         const tiledWindows = this.core.windows.getWindowsForWorkspace(workspace)
             .filter(w => !this.core.windows.isFloating(w));
@@ -38,15 +47,20 @@ export class Layouts {
         // false 1x1-slot retile that floated Firefox). Bail — the
         // monitors-changed handler re-retiles once monitors settle, and the
         // settle/re-assert machinery covers the gap.
-        const monIdx = global.display.get_primary_monitor();
-        let workArea = null;
-        { workArea = workspace.get_work_area_for_monitor(monIdx); }
-        if (!this.core.geometry.isValidWorkArea(workArea)) {
+        const monList = this.core.monitors.tiledMonitors();
+        let areaReady = false;
+        for (const mon of monList) {
+            if (this.core.geometry.isValidWorkArea(workspace.get_work_area_for_monitor(mon))) {
+                areaReady = true;
+                break;
+            }
+        }
+        if (!areaReady) {
             this.core.debugLog(`retile: skipped ws=${this.core.geometry.wsIndex(workspace)} (work area not ready)`);
             return;
         }
         this.core.debugLog(`retile: ws=${this.core.geometry.wsIndex(workspace)} tiled=[${tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',')}] ` +
-            `layout=${this.core.windows.getWorkspaceLayout(workspace)} animTime=${this.core.placement.getAnimationTime().toFixed(2)} animating=${this.core._animating}`);
+            `monitors=[${monList.join(',')}] animTime=${this.core.placement.getAnimationTime().toFixed(2)} animating=${this.core._animating}`);
 
         if (this.core.placement.getAnimationTime() > 0 && !this.core._grabOp) {
             this.core.placement.animRetile(workspace, tiledWindows);
@@ -61,36 +75,36 @@ export class Layouts {
         // the borders refresh, and the debounced layout save.
     }
 
-    getMasterRatio(ws) {
-        const idx = this.core.geometry.wsIndex(ws);
-        if (!this.core._masterRatios.has(idx)) {
+    getMasterRatio(ws, mon) {
+        const key = this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), mon);
+        if (!this.core._masterRatios.has(key)) {
             let ratio = 0.5;
             if (this.core._persistedMasterByIndex) {
-                const rule = this.core._persistedMasterByIndex.get(idx);
+                const rule = this.core._persistedMasterByIndex.get(key);
                 if (rule !== undefined) ratio = rule;
             }
-            this.core._masterRatios.set(idx, ratio);
+            this.core._masterRatios.set(key, ratio);
         }
-        return this.core._masterRatios.get(idx);
+        return this.core._masterRatios.get(key);
     }
 
-    getStackRatios(ws) {
-        const idx = this.core.geometry.wsIndex(ws);
-        if (!this.core._stackRatios.has(idx)) {
+    getStackRatios(ws, mon) {
+        const key = this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), mon);
+        if (!this.core._stackRatios.has(key)) {
             const map = new Map();
             if (this.core._persistedStackByIndex) {
-                const rule = this.core._persistedStackByIndex.get(idx);
+                const rule = this.core._persistedStackByIndex.get(key);
                 if (rule) {
                     for (const [k, v] of rule)
                         map.set(k, v);
                 }
             }
-            this.core._stackRatios.set(idx, map);
+            this.core._stackRatios.set(key, map);
         }
-        return this.core._stackRatios.get(idx);
+        return this.core._stackRatios.get(key);
     }
 
-    clampMasterStackRatios(ws, tiledWindows, areaW, gap, centered) {
+    clampMasterStackRatios(ws, tiledWindows, areaW, gap, centered, mon) {
         if (!tiledWindows || tiledWindows.length < 2) return;
         const masterMin = this.core.bsp.getWindowMinSize(tiledWindows[0]).w || 0;
         let stackMinW = 0;
@@ -115,7 +129,7 @@ export class Layouts {
             }
             hi = 1 - 2 * Math.max(leftMinW, rightMinW) / basis;
         }
-        const ratio = this.getMasterRatio(ws);
+        const ratio = this.getMasterRatio(ws, mon);
         let clamped;
         if (hi <= lo) {
             const need = masterMin + stackMinW;
@@ -127,14 +141,15 @@ export class Layouts {
         } else {
             clamped = Math.max(lo, Math.min(hi, ratio));
         }
-        this.core._masterRatios.set(this.core.geometry.wsIndex(ws), clamped);
+        this.core._masterRatios.set(
+            this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), mon), clamped);
         this.core.persistence.scheduleSaveLayouts();
     }
 
-    retileMasterStack(workspace, tiledWindows, skipWindow = null) {
+    retileMasterStack(workspace, tiledWindows, skipWindow = null, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
+        const workArea = workspace.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return;
 
         const numWindows = tiledWindows.length;
@@ -152,8 +167,8 @@ export class Layouts {
         const areaY = area.y;
         const areaW = area.w;
         const areaH = area.h;
-        this.clampMasterStackRatios(workspace, tiledWindows, areaW, gap, false);
-        const masterRatio = this.getMasterRatio(workspace);
+        this.clampMasterStackRatios(workspace, tiledWindows, areaW, gap, false, mon);
+        const masterRatio = this.getMasterRatio(workspace, mon);
         const masterW = Math.floor((areaW - gap) * masterRatio);
         const stackW = areaW - masterW - gap;
         const numStack = numWindows - 1;
@@ -161,7 +176,7 @@ export class Layouts {
         if (tiledWindows[0] !== skipWindow)
             this.core.windows.moveWindow(tiledWindows[0], areaX, areaY, masterW, areaH);
 
-        const stackRatios = this.getStackRatios(workspace);
+        const stackRatios = this.getStackRatios(workspace, mon);
         const weights = [];
         let totalWeight = 0;
         for (let i = 0; i < numStack; i++) {
@@ -231,10 +246,10 @@ export class Layouts {
         }
     }
 
-    retileCenteredMasterStack(workspace, tiledWindows, skipWindow = null) {
+    retileCenteredMasterStack(workspace, tiledWindows, skipWindow = null, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
+        const workArea = workspace.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return;
 
         const numWindows = tiledWindows.length;
@@ -252,7 +267,7 @@ export class Layouts {
         const areaY = area.y;
         const areaW = area.w;
         const areaH = area.h;
-        this.clampMasterStackRatios(workspace, tiledWindows, areaW, gap, true);
+        this.clampMasterStackRatios(workspace, tiledWindows, areaW, gap, true, mon);
         const numStack = numWindows - 1;
         const leftCount = Math.ceil(numStack / 2);
         const rightCount = numStack - leftCount;
@@ -264,14 +279,16 @@ export class Layouts {
                 masterX = frame.x;
                 masterW = frame.width;
                 const effectiveRatio = masterW / (areaW - gap * 2);
-                this.core._masterRatios.set(this.core.geometry.wsIndex(workspace), Math.max(0.15, Math.min(0.85, effectiveRatio)));
+                this.core._masterRatios.set(
+                    this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(workspace), mon),
+                    Math.max(0.15, Math.min(0.85, effectiveRatio)));
             } else {
-                const masterRatio = this.getMasterRatio(workspace);
+                const masterRatio = this.getMasterRatio(workspace, mon);
                 masterW = Math.floor((areaW - gap * 2) * masterRatio);
                 masterX = areaX + Math.floor((areaW - masterW) / 2);
             }
         } else {
-            const masterRatio = this.getMasterRatio(workspace);
+            const masterRatio = this.getMasterRatio(workspace, mon);
             masterW = Math.floor((areaW - gap * 2) * masterRatio);
             masterX = areaX + Math.floor((areaW - masterW) / 2);
         }
@@ -282,7 +299,7 @@ export class Layouts {
         if (tiledWindows[0] !== skipWindow)
             this.core.windows.moveWindow(tiledWindows[0], masterX, areaY, masterW, areaH);
 
-        const stackRatios = this.getStackRatios(workspace);
+        const stackRatios = this.getStackRatios(workspace, mon);
         const leftWeights = [];
         let leftTotal = 0;
         for (let i = 0; i < leftCount; i++) {
@@ -387,24 +404,24 @@ export class Layouts {
 
     }
 
-    resizeMasterStack(focused, workspace, axis, delta) {
-        const tiledWindows = this.core.windows.getWindowsForWorkspace(workspace)
+    resizeMasterStack(focused, workspace, axis, delta, mon) {
+        const tiledWindows = this.core.monitors.getWindowsForGroup(workspace, mon)
             .filter(w => !this.core.windows.isFloating(w));
         const numStack = tiledWindows.length - 1;
         if (numStack === 0) return;
 
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
+        const workArea = workspace.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return;
         const gap = this.core._settings.get_int('inside-gap');
         const area = this.core.geometry.outsideArea(workArea);
         if (!area) return;
         const areaW = area.w;
-        const layout = this.core.windows.getWorkspaceLayout(workspace);
+        const layout = this.core.windows.getWorkspaceLayout(workspace, mon);
         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
 
         if (axis === 'width') {
-            const currentRatio = this.getMasterRatio(workspace);
+            const currentRatio = this.getMasterRatio(workspace, mon);
             const currentMasterW = masterDenom * currentRatio;
             // grow/shrink is relative to the FOCUSED window: a stack window
             // needs the master column to move the OPPOSITE way, and in the
@@ -420,13 +437,15 @@ export class Layouts {
             const maxMaster = masterDenom - numStack * 100;
             if (maxMaster >= minMaster) {
                 const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-                this.core._masterRatios.set(this.core.geometry.wsIndex(workspace), clamped / masterDenom);
+                this.core._masterRatios.set(
+                    this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(workspace), mon),
+                    clamped / masterDenom);
             }
         } else {
             const idx = tiledWindows.indexOf(focused);
             if (idx === 0) return;
             const stackIdx = idx - 1;
-            const stackRatios = this.getStackRatios(workspace);
+            const stackRatios = this.getStackRatios(workspace, mon);
             const currentWeight = stackRatios.has(stackIdx) ? stackRatios.get(stackIdx) : 1.0;
             const newWeight = Math.max(0.1, currentWeight + delta * 0.005);
             stackRatios.set(stackIdx, newWeight);
@@ -434,10 +453,10 @@ export class Layouts {
         }
     }
 
-    computeMasterStackDropTarget(ws, px, py) {
+    computeMasterStackDropTarget(ws, px, py, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const workArea = ws.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return -1;
 
         const area = this.core.geometry.outsideArea(workArea);
@@ -459,8 +478,8 @@ export class Layouts {
 
         if (numStack === 0) return 0;
 
-        const masterRatio = this.getMasterRatio(ws);
-        const layout = this.core.windows.getWorkspaceLayout(ws);
+        const masterRatio = this.getMasterRatio(ws, mon);
+        const layout = this.core.windows.getWorkspaceLayout(ws, mon);
 
         if (layout === 'centered-master-stack') {
             const masterW = Math.floor((areaW - gap * 2) * masterRatio);
@@ -473,7 +492,7 @@ export class Layouts {
 
             const leftCount = Math.ceil(numStack / 2);
             const rightCount = numStack - leftCount;
-            const stackRatios = this.getStackRatios(ws);
+            const stackRatios = this.getStackRatios(ws, mon);
 
             if (px < masterX && leftStackW > 0 && leftCount > 0) {
                 const weights = [];
@@ -531,7 +550,7 @@ export class Layouts {
                 return 0;
 
             if (px >= stackX && px <= stackX + stackW) {
-                const stackRatios = this.getStackRatios(ws);
+                const stackRatios = this.getStackRatios(ws, mon);
                 const weights = [];
                 let totalWeight = 0;
                 for (let i = 0; i < numStack; i++) {
@@ -556,11 +575,13 @@ export class Layouts {
         return -1;
     }
 
-    retileDwindle(workspace, tiledWindows) {
+    retileDwindle(workspace, tiledWindows, mon) {
         const gap = this.core._settings.get_int('inside-gap');
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
+        const workArea = workspace.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return;
+        const group = this.core.monitors.groupObj(workspace, mon);
+        const wsIndex = this.core.geometry.wsIndex(workspace);
 
         if (tiledWindows.length === 1) {
             const rect = this.core.geometry.singleWindowRect(workArea);
@@ -569,7 +590,7 @@ export class Layouts {
             return;
         }
 
-        let tree = this.core.bsp.bspGetTree(workspace);
+        let tree = this.core.bsp.bspGetTree(group);
         const area = this.core.geometry.outsideArea(workArea);
         if (!area) return;
         const areaX = area.x;
@@ -591,7 +612,7 @@ export class Layouts {
                     currentWins = this.core.bsp.bspCollectWindows(tree);
                 }
             }
-            this.core._bspTrees.set(workspace, tree);
+            this.core._bspTrees.set(group, tree);
         } else {
             tree = null;
             for (const win of tiledWindows) {
@@ -601,7 +622,7 @@ export class Layouts {
                     tree = this.core.bsp.bspMakeLeaf(win);
                 }
             }
-            this.core._bspTrees.set(workspace, tree);
+            this.core._bspTrees.set(group, tree);
         }
 
         // Restore saved split ratios ONLY when the window set changed
@@ -612,10 +633,10 @@ export class Layouts {
         // saved shape stays current for the next window-set change.
         if (tree && this.core._dwindleLeafSigs) {
             const sig = tiledWindows.map(w => w.get_id()).join(',');
-            if (this.core._dwindleLeafSigs.get(workspace) !== sig) {
-                this.core._dwindleLeafSigs.set(workspace, sig);
+            if (this.core._dwindleLeafSigs.get(group) !== sig) {
+                this.core._dwindleLeafSigs.set(group, sig);
                 const savedShape = this.core._persistedDwindleByIndex &&
-                    this.core._persistedDwindleByIndex.get(this.core.geometry.wsIndex(workspace));
+                    this.core._persistedDwindleByIndex.get(this.core.monitors.groupKeyFor(wsIndex, mon));
                 if (savedShape && this.core.bsp.reconcileTreeRatios(savedShape, tree))
                     this.core.debugLog(`dwindle: restored saved split ratios (ws=${this.core.geometry.wsIndex(workspace)}, windows=${tiledWindows.length})`);
             }

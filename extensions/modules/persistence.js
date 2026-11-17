@@ -6,6 +6,8 @@
 
 import GLib from 'gi://GLib';
 
+import { decodeMonitorEntry, encodeMonitorEntry, persistableConnector } from './monitors.js';
+
 
 export class Persistence {
     constructor(core) {
@@ -44,59 +46,147 @@ export class Persistence {
     }
 
     savePersistedLayouts() {
-        const layouts = [];
-        const masterRatios = [];
-        const stackRatios = [];
+        const primaryConnector = this.core._keyedPrimary || this.core.monitors.primaryConnector();
+        const primaryConnected = !primaryConnector ||
+            this.core.monitors.monitorForConnector(primaryConnector) >= 0;
+        const bareLayouts = [];
+        const bareMaster = [];
+        const bareStack = [];
         const dwindleRaw = new Map(this.core._persistedDwindleRaw || []);
         const n = global.workspace_manager.get_n_workspaces();
-        for (let i = 1; i < n; i++) {
-            const ws = global.workspace_manager.get_workspace_by_index(i);
-            if (!ws) continue;
-            // "The layout last used is the persistent one" — store the
-            // effective layout of every real workspace (the parking ws at
-            // index 0 is never stored).
-            layouts.push(`${i}:${this.core.windows.getWorkspaceLayout(ws)}`);
-            const mr = this.core._masterRatios.get(i);
-            if (mr !== undefined)
-                masterRatios.push(`${i}:${mr}`);
-            const sr = this.core._stackRatios.get(i);
-            if (sr && sr.size > 0) {
-                const idx = [];
-                for (const [k, v] of sr)
-                    idx.push(`${k}:${v}`);
-                stackRatios.push(`${i}:${idx.join(',')}`);
+
+        // Bare keys belong to the keyed primary. While that connector is
+        // absent, leave them untouched: they are its arrangement, waiting for
+        // it to come back.
+        if (primaryConnected) {
+            for (let i = 1; i < n; i++) {
+                const ws = global.workspace_manager.get_workspace_by_index(i);
+                if (!ws) continue;
+                bareLayouts.push(`${i}:${this.core.windows.getWorkspaceLayout(ws)}`);
+                const mr = this.core._masterRatios.get(i);
+                if (mr !== undefined)
+                    bareMaster.push(`${i}:${mr}`);
+                const sr = this.core._stackRatios.get(i);
+                if (sr && sr.size > 0) {
+                    const idx = [];
+                    for (const [k, v] of sr)
+                        idx.push(`${k}:${v}`);
+                    bareStack.push(`${i}:${idx.join(',')}`);
+                }
+                const group = this.core.monitors.groupObj(ws, this.core.monitors.primaryMonitorIndex());
+                const tree = this.core._bspTrees.get(group);
+                if (tree && tree.type === 'split' &&
+                    this.core.windows.getWorkspaceLayout(ws) === 'dwindle')
+                    dwindleRaw.set(i, this.core.bsp.dwindleShapeToString(tree));
             }
-            // Dwindle trees are in-memory only — serialize the shape+ratios
-            // (no window refs) so resized arrangements survive logins.
-            //
-            // MERGE, don't rebuild: a full rewrite would drop every workspace
-            // with no live tree at save time (at boot the first save deletes a
-            // not-yet-opened workspace's shape). Mid-session churn is worse —
-            // a collapsed single-leaf tree would overwrite a good shape. So
-            // only a live 2+-window tree may overwrite an entry; no tree /
-            // leaf / empty PRESERVES the previously-saved shape.
-            const tree = this.core._bspTrees.get(ws);
-            if (tree && tree.type === 'split' &&
-                this.core.windows.getWorkspaceLayout(ws) === 'dwindle')
-                dwindleRaw.set(i, this.core.bsp.dwindleShapeToString(tree));
         }
-        this.core._settings.set_strv('workspace-layouts', layouts);
-        this.core._settings.set_strv('workspace-master-ratios', masterRatios);
-        this.core._settings.set_strv('workspace-stack-ratios', stackRatios);
-        // Write merged dwindle shapes: filter out non-split leftovers, keep
-        // entries for workspaces beyond the current count, and re-sync the raw
-        // map to exactly what we wrote.
-        const dwindleTrees = [];
-        for (const [i, shape] of dwindleRaw) {
+
+        // Connector groups: live state first, then saved rules for slots that
+        // are not currently open.
+        const layoutEntries = new Map();
+        for (const [key, layout] of this.core._persistedLayoutByIndex || [])
+            if (typeof key === 'string') layoutEntries.set(key, `${parseInt(key, 10)}:${layout}`);
+        for (const [key, layout] of this.core._workspaceLayouts || [])
+            if (typeof key === 'string') layoutEntries.set(key, `${parseInt(key, 10)}:${layout}`);
+
+        const masterEntries = new Map();
+        for (const [key, ratio] of this.core._persistedMasterByIndex || [])
+            if (typeof key === 'string') masterEntries.set(key, `${parseInt(key, 10)}:${ratio}`);
+        for (const [key, ratio] of this.core._masterRatios || [])
+            if (typeof key === 'string') masterEntries.set(key, `${parseInt(key, 10)}:${ratio}`);
+
+        const stackEntries = new Map();
+        const addStack = (key, map) => {
+            const parts = [];
+            for (const [k, v] of map || []) parts.push(`${k}:${v}`);
+            if (parts.length) stackEntries.set(key, `${parseInt(key, 10)}:${parts.join(',')}`);
+        };
+        for (const [key, map] of this.core._persistedStackByIndex || [])
+            if (typeof key === 'string') addStack(key, map);
+        for (const [key, map] of this.core._stackRatios || [])
+            if (typeof key === 'string') addStack(key, map);
+
+        for (const [ws, byConnector] of this.core._groupObjs || []) {
+            const wsIndex = this.core.geometry.wsIndex(ws);
+            for (const [connector, group] of byConnector) {
+                const tree = this.core._bspTrees.get(group);
+                if (!tree || tree.type !== 'split') continue;
+                const mon = this.core.monitors.monitorForConnector(connector);
+                if (mon >= 0 &&
+                    this.core.windows.getWorkspaceLayout(ws, mon) !== 'dwindle') continue;
+                dwindleRaw.set(`${wsIndex}@${connector}`,
+                    this.core.bsp.dwindleShapeToString(tree));
+            }
+        }
+
+        if (primaryConnected) {
+            this.core._settings.set_strv('workspace-layouts', bareLayouts);
+            this.core._settings.set_strv('workspace-master-ratios', bareMaster);
+            this.core._settings.set_strv('workspace-stack-ratios', bareStack);
+        }
+
+        const bareDwindle = [];
+        const monitorDwindle = new Map();
+        for (const [key, shape] of dwindleRaw) {
             const node = this.core.bsp.dwindleShapeFromString(shape);
-            if (node && node.type === 'split')
-                dwindleTrees.push(`${i}:${shape}`);
+            if (!node || node.type !== 'split') continue;
+            if (typeof key === 'number')
+                bareDwindle.push(`${key}:${shape}`);
+            else
+                monitorDwindle.set(key, `${parseInt(key, 10)}:${shape}`);
         }
-        dwindleTrees.sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-        this.core._settings.set_strv('workspace-dwindle-trees', dwindleTrees);
-        this.core._persistedDwindleRaw = new Map(
-            dwindleTrees.map(e => [parseInt(e, 10), e.substring(e.indexOf(':') + 1)]));
-        this.core.debugLog(`persisted layouts: ${layouts.length} ws, ${masterRatios.length} master, ${stackRatios.length} stack, ${dwindleTrees.length} dwindle`);
+        if (primaryConnected) {
+            bareDwindle.sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+            this.core._settings.set_strv('workspace-dwindle-trees', bareDwindle);
+        }
+
+        this.saveMonitorEntries('monitor-workspace-layouts', layoutEntries);
+        this.saveMonitorEntries('monitor-workspace-master-ratios', masterEntries);
+        this.saveMonitorEntries('monitor-workspace-stack-ratios', stackEntries);
+        this.saveMonitorEntries('monitor-workspace-dwindle-trees', monitorDwindle);
+
+        const keyedPrimary = this.core._keyedPrimary || this.core.monitors.primaryConnector();
+        this.core._settings.set_string('monitor-primary-connector',
+            persistableConnector(keyedPrimary) || '');
+
+        // Re-sync the raw dwindle map to exactly what was written.
+        const raw = new Map();
+        for (const entry of bareDwindle) {
+            const sep = entry.indexOf(':');
+            raw.set(parseInt(entry.substring(0, sep), 10), entry.substring(sep + 1));
+        }
+        for (const [key, rest] of monitorDwindle) {
+            const sep = rest.indexOf(':');
+            raw.set(key, rest.substring(sep + 1));
+        }
+        this.core._persistedDwindleRaw = raw;
+
+        this.core.debugLog(`persisted layouts: ${bareLayouts.length} ws, ${bareMaster.length} master, ` +
+            `${bareStack.length} stack, ${bareDwindle.length} dwindle, ` +
+            `${layoutEntries.size} monitor layouts, ${monitorDwindle.size} monitor dwindle`);
+    }
+
+    // Write CONNECTOR:ENTRY rules. Entries for monitors that are not currently
+    // connected are preserved: unplugging must not erase their arrangement.
+    saveMonitorEntries(settingKey, entries) {
+        const connected = new Set(this.core.monitors.connectors().filter(Boolean));
+        const merged = new Map();
+        for (const raw of this.core._settings.get_strv(settingKey) || []) {
+            const decoded = decodeMonitorEntry(raw);
+            if (!decoded || connected.has(decoded.connector)) continue;
+            const idx = parseInt(decoded.value, 10);
+            if (!Number.isInteger(idx)) continue;
+            merged.set(`${idx}@${decoded.connector}`, decoded.value);
+        }
+        for (const [key, value] of entries) merged.set(key, value);
+        const out = [];
+        for (const [key, value] of merged) {
+            const at = key.indexOf('@');
+            if (at <= 0) continue;
+            const encoded = encodeMonitorEntry(key.substring(at + 1), value);
+            if (encoded) out.push(encoded);
+        }
+        this.core._settings.set_strv(settingKey, out);
     }
 
     loadPersistedLayoutRules() {
@@ -109,6 +199,7 @@ export class Persistence {
         this.core._persistedMasterByIndex = new Map();
         this.core._persistedStackByIndex = new Map();
         this.core._persistedDwindleByIndex = this.parsePersistedDwindleShapes();
+        this.core._keyedPrimary = this.core._settings.get_string('monitor-primary-connector') || '';
         const layouts = this.core._settings.get_strv('workspace-layouts') || [];
         for (const entry of layouts) {
             const [idxStr, layout] = entry.split(':');
@@ -142,9 +233,54 @@ export class Persistence {
             if (map.size > 0)
                 this.core._persistedStackByIndex.set(idx, map);
         }
+        this.loadMonitorRules();
         this.core.debugLog(`persisted rules: ${this.core._persistedLayoutByIndex.size} layouts, ` +
             `${this.core._persistedMasterByIndex.size} master, ${this.core._persistedStackByIndex.size} stack, ` +
             `${this.core._persistedDwindleByIndex.size} dwindle`);
+    }
+
+    // CONNECTOR:INDEX:VALUE rules for monitors that do not own the bare keys.
+    loadMonitorRules() {
+        const validLayouts = ['dwindle', 'master-stack', 'centered-master-stack', 'floating'];
+        const each = (key, fn) => {
+            for (const raw of this.core._settings.get_strv(key) || []) {
+                const decoded = decodeMonitorEntry(raw);
+                if (decoded) fn(decoded.connector, decoded.value);
+            }
+        };
+        each('monitor-workspace-layouts', (connector, rest) => {
+            const sep = rest.indexOf(':');
+            if (sep <= 0) return;
+            const idx = parseInt(rest.substring(0, sep), 10);
+            const layout = rest.substring(sep + 1);
+            if (idx <= 0 || !Number.isInteger(idx) || !validLayouts.includes(layout)) return;
+            this.core._persistedLayoutByIndex.set(`${idx}@${connector}`, layout);
+        });
+        each('monitor-workspace-master-ratios', (connector, rest) => {
+            const sep = rest.indexOf(':');
+            if (sep <= 0) return;
+            const idx = parseInt(rest.substring(0, sep), 10);
+            const ratio = parseFloat(rest.substring(sep + 1));
+            if (idx <= 0 || !Number.isInteger(idx) || !Number.isFinite(ratio)) return;
+            if (ratio < 0.05 || ratio > 0.95) return;
+            this.core._persistedMasterByIndex.set(`${idx}@${connector}`, ratio);
+        });
+        each('monitor-workspace-stack-ratios', (connector, rest) => {
+            const sep = rest.indexOf(':');
+            if (sep <= 0) return;
+            const idx = parseInt(rest.substring(0, sep), 10);
+            if (idx <= 0 || !Number.isInteger(idx)) return;
+            const map = new Map();
+            for (const part of rest.substring(sep + 1).split(',')) {
+                const [kStr, vStr] = part.split(':');
+                const k = parseInt(kStr, 10);
+                const v = parseFloat(vStr);
+                if (k >= 0 && Number.isFinite(v) && v > 0)
+                    map.set(k, v);
+            }
+            if (map.size > 0)
+                this.core._persistedStackByIndex.set(`${idx}@${connector}`, map);
+        });
     }
 
     parsePersistedDwindleShapes() {
@@ -165,6 +301,21 @@ export class Persistence {
             if (shape) {
                 map.set(idx, shape);
                 raw.set(idx, shapeStr);
+            }
+        }
+        for (const entry of (this.core._settings.get_strv('monitor-workspace-dwindle-trees') || [])) {
+            const decoded = decodeMonitorEntry(entry);
+            if (!decoded) continue;
+            const sep = decoded.value.indexOf(':');
+            if (sep <= 0) continue;
+            const idx = parseInt(decoded.value.substring(0, sep), 10);
+            if (idx <= 0 || !Number.isInteger(idx)) continue;
+            const shapeStr = decoded.value.substring(sep + 1);
+            const shape = this.core.bsp.dwindleShapeFromString(shapeStr);
+            if (shape) {
+                const key = `${idx}@${decoded.connector}`;
+                map.set(key, shape);
+                raw.set(key, shapeStr);
             }
         }
         this.core._persistedDwindleRaw = raw;

@@ -14,6 +14,8 @@ export function oneMonitor(extra = {}) {
     get_current_monitor: () => 0,
     get_monitor_geometry: () => ({ x: 0, y: 0, width: 2560, height: 1440 }),
     get_monitor_index_for_rect: () => 0,
+    get_n_monitors: () => 1,
+    get_monitor_scale: () => 1,
     focus_window: null,
     ...extra,
   };
@@ -54,8 +56,13 @@ export function fakeSettings(values = {}) {
     get_int: (k) => (k in values ? values[k] : 0),
     get_double: (k) => (k in values ? values[k] : 0.5),
     get_boolean: (k) => (k in values ? values[k] : false),
+    set_boolean: (k, v) => { values[k] = !!v; },
+    set_int: (k, v) => { values[k] = v; },
+    set_double: (k, v) => { values[k] = v; },
+    set_string: (k, v) => { values[k] = v; },
     get_string: (k) => (k in values ? values[k] : ''),
-    get_strv: (k) => (k in values ? values[k] : []),
+    get_strv: (k) => (k in values ? [...values[k]] : []),
+    set_strv: (k, v) => { values[k] = [...v]; },
     get_default_value: (k) => (k in values ? { deep_unpack: () => values[k] } : null),
     get_user_value: (k) => (k in values ? { deep_unpack: () => values[k] } : null),
     settings_schema: { list_keys: () => Object.keys(values) },
@@ -194,6 +201,22 @@ function resetCoreState(core, settings) {
   core._animTickId = 0;
   core._newWindowSet = new Set();
   core._floatHooks = new Map();
+  core._windowMonitors = new Map();
+  core._groupObjs = new Map();
+  core._monitorConnCache = null;
+  core._monitorConnPartial = false;
+  core._monitorsSettling = false;
+  core._monitorSettleId = 0;
+  core._monitorSettleRetries = 0;
+  core._keyedPrimary = '';
+  core._resumeMonitorsMoved = false;
+  core._regroupId = 0;
+  core._grabbedWindow = null;
+  core._grabFromMon = -1;
+  core._grabDropped = false;
+  core._wsPromptCheckId = 0;
+  core._wsPromptRetries = 0;
+  core._wsPromptDialog = null;
   core._mutterSettings = null;
   core._signals = [];
   core._windowSignals = new Map();
@@ -262,8 +285,7 @@ export function fakeWin(opts = {}) {
     get_wm_class: () => opts.wmClass ?? null,
     get_gtk_application_id: () => opts.appId ?? null,
     get_title: () => opts.title ?? '',
-    get_min_size: () => opts.minHint ?? (opts.minSize ? [...opts.minSize] : [0, 0]),
-    get_max_size: () => opts.maxHint ?? (opts.maxSize ? [...opts.maxSize] : [0, 0]),
+    get_min_size: () => opts.minHint ?? (opts.minSize ? [...opts.minSize] : [0, 0]),    get_max_size: () => opts.maxHint ?? (opts.maxSize ? [...opts.maxSize] : [0, 0]),
     // Fake client->frame mapping; tests pass frameDW/frameDH to simulate a
     // titlebar or shadow delta.
     client_rect_to_frame_rect: (r) => ({
@@ -274,6 +296,8 @@ export function fakeWin(opts = {}) {
     }),
     get_client_type: () => opts.clientType ?? 0,
     get_window_type: () => opts.type ?? 0,
+    get_transient_for: () => opts.transientFor ?? null,
+    get_monitor: () => opts.monitor ?? 0,
     get_pid: () => opts.pid ?? 0,
     get_compositor_private: () => opts.actor ?? null,
     _signals: {},

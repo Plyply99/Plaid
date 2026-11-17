@@ -12,8 +12,29 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
-## Unreleased
+## v51.30 — 2026-11-16
 
+- **Every monitor tiles its own windows.** Each display gets its own layout, split
+  tree, ratios and saved arrangement. Change the layout on one monitor and the
+  others stay exactly as they were.
+- **Per-monitor arrangements are remembered.** Layouts are stored per display
+  connector, so unplugging a monitor moves its windows to a remaining display and
+  plugging it back in restores them. The arrangement also survives a login.
+- **One-time prompt for workspaces across displays.** The first time Plaid sees
+  more than one monitor, it offers to span workspaces across all displays, since
+  GNOME's "workspaces on primary display only" setting keeps a second monitor
+  untileable. It asks once and never again. On an untiled display, windows
+  appear immediately and move, resize or centre like floating windows; the layout
+  shortcut explains why it cannot change that display's layout.
+- **Changing the primary display keeps both arrangements.** Layouts and ratios
+  are re-keyed to the new primary instead of being lost.
+- **Moving windows across monitors works.** GNOME's Move to Monitor, drag and
+  drop, focus and swap across the seam, and per-monitor resizing all agree on
+  which display a window belongs to. Directional focus moves to the nearest
+  window in that direction and prefers the display you are already on.
+- **Blur and popups understand monitors.** Window blur uses each display's own
+  scale, so mixed-DPI setups blur correctly; Plaid's popups appear on the focused
+  display instead of between displays.
 - **A failed Background App command no longer exposes an empty workspace.** If the
   command is missing, crashes, or never opens a window, Plaid keeps the reserved
   workspace hidden instead of showing an empty "Workspace 1" after 20 seconds.
@@ -45,6 +66,10 @@ Releases older than v50.43 predate this changelog; see the git history and the
   compositor's size hints in the wrong shape on GNOME 50, so a window's minimum
   width was ignored and its minimum height was wrong. Tiled windows now respect
   their real minimums, and fixed-size windows are detected correctly again.
+- **The float picker toggles.** Hitting the float-picker shortcut on a window
+  that is already on the float list now offers to remove it instead of offering
+  to add it again. Rules are removed by whichever entry matches — class, title,
+  or process name.
 - **Reopened windows no longer pop out or overlap.** A window that is still
   restoring its own geometry after opening (at login or when reopened) is not
   counted as a failed placement. If it refuses to shrink below its own minimum,
