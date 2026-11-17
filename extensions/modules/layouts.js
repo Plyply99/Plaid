@@ -395,24 +395,24 @@ export class Layouts {
 
     }
 
-    resizeMasterStack(focused, workspace, axis, delta) {
-        const tiledWindows = this.core.windows.getWindowsForWorkspace(workspace)
+    resizeMasterStack(focused, workspace, axis, delta, mon) {
+        const tiledWindows = this.core.monitors.getWindowsForGroup(workspace, mon)
             .filter(w => !this.core.windows.isFloating(w));
         const numStack = tiledWindows.length - 1;
         if (numStack === 0) return;
 
-        const monitor = global.display.get_primary_monitor();
-        const workArea = workspace.get_work_area_for_monitor(monitor);
+        const workArea = workspace.get_work_area_for_monitor(
+            mon === undefined || mon === null ? global.display.get_primary_monitor() : mon);
         if (!workArea) return;
         const gap = this.core._settings.get_int('inside-gap');
         const area = this.core.geometry.outsideArea(workArea);
         if (!area) return;
         const areaW = area.w;
-        const layout = this.core.windows.getWorkspaceLayout(workspace);
+        const layout = this.core.windows.getWorkspaceLayout(workspace, mon);
         const masterDenom = layout === 'centered-master-stack' ? areaW - gap * 2 : areaW - gap;
 
         if (axis === 'width') {
-            const currentRatio = this.getMasterRatio(workspace);
+            const currentRatio = this.getMasterRatio(workspace, mon);
             const currentMasterW = masterDenom * currentRatio;
             // grow/shrink is relative to the FOCUSED window: a stack window
             // needs the master column to move the OPPOSITE way, and in the
@@ -428,13 +428,15 @@ export class Layouts {
             const maxMaster = masterDenom - numStack * 100;
             if (maxMaster >= minMaster) {
                 const clamped = Math.max(minMaster, Math.min(maxMaster, newMasterW));
-                this.core._masterRatios.set(this.core.geometry.wsIndex(workspace), clamped / masterDenom);
+                this.core._masterRatios.set(
+                    this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(workspace), mon),
+                    clamped / masterDenom);
             }
         } else {
             const idx = tiledWindows.indexOf(focused);
             if (idx === 0) return;
             const stackIdx = idx - 1;
-            const stackRatios = this.getStackRatios(workspace);
+            const stackRatios = this.getStackRatios(workspace, mon);
             const currentWeight = stackRatios.has(stackIdx) ? stackRatios.get(stackIdx) : 1.0;
             const newWeight = Math.max(0.1, currentWeight + delta * 0.005);
             stackRatios.set(stackIdx, newWeight);

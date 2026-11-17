@@ -601,6 +601,17 @@ export class Bsp {
     }
 
     findDirectionalTarget(win, direction, windows) {
+        // Prefer a neighbour on the focused window's monitor. Overlap ranking
+        // alone can pick a taller window on the other display over the seam
+        // when the same-monitor neighbour is shorter (centred-master stacks).
+        const mon = win.get_monitor();
+        const sameMonitor = windows.filter(w => w !== win && w.get_monitor() === mon);
+        const local = this.findDirectionalIn(win, direction, sameMonitor);
+        if (local) return local;
+        return this.findDirectionalIn(win, direction, windows);
+    }
+
+    findDirectionalIn(win, direction, windows) {
         const f = win.get_frame_rect();
         let best = null;
         // bestOverlap starts at 0 (not -1): the acceptance test requires

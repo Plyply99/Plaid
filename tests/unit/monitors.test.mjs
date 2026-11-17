@@ -437,6 +437,25 @@ test('Monitors: monitorAt finds the monitor under a point', () => {
   });
 });
 
+test('layouts: keyboard master resize writes the focused monitor group', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({});
+    self.geometry.wsIndex = () => 2;
+    const ws = { get_work_area_for_monitor: () => ({ x: 0, y: 0, width: 1000, height: 800 }) };
+    const a = fakeWin({ id: 1, monitor: 1 });
+    const b = fakeWin({ id: 2, monitor: 1 });
+    self.windows.getWindowsForWorkspace = () => [a, b];
+    self.windows.isFloating = () => false;
+    self.monitors.setWindowMonitor(a, 1);
+    self.monitors.setWindowMonitor(b, 1);
+
+    self.layouts.resizeMasterStack(a, ws, 'width', 100, 1);
+
+    assert.equal(self._masterRatios.has('2@DP-1'), true);
+    assert.equal(self._masterRatios.has(2), false, 'the primary key is untouched');
+  });
+});
+
 test('layouts: master and stack ratios are kept per monitor group', () => {
   withMonitors(0, () => {
     const self = makeSelf({});

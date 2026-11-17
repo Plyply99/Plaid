@@ -125,7 +125,7 @@ export class Actions extends PlaidSubsystem {
         if (layout === 'dwindle')
             this.resizeDwindle(focused, ws, axis, delta, mon);
         else
-            this.core.layouts.resizeMasterStack(focused, ws, axis, delta);
+            this.core.layouts.resizeMasterStack(focused, ws, axis, delta, mon);
 
         this.core.layouts.retileWorkspace(ws);
         if (this.core._settings.get_boolean('follow-focus'))

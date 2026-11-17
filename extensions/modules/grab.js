@@ -293,7 +293,8 @@ export class Grab extends PlaidSubsystem {
                     const areaH = area.h;
 
                     if (this.core._grabWidthSign !== 0) {
-                        const tiled = this.core.windows.getWindowsForWorkspace(ws).filter(w => !this.core.windows.isFloating(w));
+                        const tiled = this.core.monitors.getWindowsForGroup(ws, mon)
+                            .filter(w => !this.core.windows.isFloating(w));
                         const idx = tiled.indexOf(metaWindow);
                         this.core.debugLog(`MS_RESIZE dx=${dx} dy=${dy} wSign=${this.core._grabWidthSign} hSign=${this.core._grabHeightSign} ` +
                             `idx=${idx} numTiled=${tiled.length} initMasterRatio=${this.core._grabInitialMasterRatio.toFixed(3)}`);
@@ -325,7 +326,9 @@ export class Grab extends PlaidSubsystem {
                             }
                             if (hi <= lo) { lo = 0.5; hi = 0.5; }
                             if (Number.isFinite(newRatio))
-                                this.core._masterRatios.set(this.core.geometry.wsIndex(ws), Math.max(lo, Math.min(hi, newRatio)));
+                                this.core._masterRatios.set(
+                                    this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), mon),
+                                    Math.max(lo, Math.min(hi, newRatio)));
                         }
                     }
                     if (this.core._grabHeightSign !== 0) {
