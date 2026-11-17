@@ -28,7 +28,8 @@ Releases older than v50.43 predate this changelog; see the git history and the
   are re-keyed to the new primary instead of being lost.
 - **Moving windows across monitors works.** GNOME's Move to Monitor, drag and
   drop, focus and swap across the seam, and per-monitor resizing all agree on
-  which display a window belongs to.
+  which display a window belongs to. Directional focus moves to the nearest
+  window in that direction and prefers the display you are already on.
 - **Blur and popups understand monitors.** Window blur uses each display's own
   scale, so mixed-DPI setups blur correctly; Plaid's popups appear on the focused
   display instead of between displays.
