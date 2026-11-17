@@ -12,8 +12,26 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
-## Unreleased
+## v51.30 — 2026-11-16
 
+- **Every monitor tiles its own windows.** Each display gets its own layout, split
+  tree, ratios and saved arrangement. Change the layout on one monitor and the
+  others stay exactly as they were.
+- **Per-monitor arrangements are remembered.** Layouts are stored per display
+  connector, so unplugging a monitor moves its windows to a remaining display and
+  plugging it back in restores them. The arrangement also survives a login.
+- **One-time prompt for workspaces across displays.** The first time Plaid sees
+  more than one monitor, it offers to span workspaces across all displays, since
+  GNOME's "workspaces on primary display only" setting keeps a second monitor
+  untileable. It asks once and never again.
+- **Changing the primary display keeps both arrangements.** Layouts and ratios
+  are re-keyed to the new primary instead of being lost.
+- **Moving windows across monitors works.** GNOME's Move to Monitor, drag and
+  drop, focus and swap across the seam, and per-monitor resizing all agree on
+  which display a window belongs to.
+- **Blur and popups understand monitors.** Window blur uses each display's own
+  scale, so mixed-DPI setups blur correctly; Plaid's popups appear on the focused
+  display instead of between displays.
 - **A failed Background App command no longer exposes an empty workspace.** If the
   command is missing, crashes, or never opens a window, Plaid keeps the reserved
   workspace hidden instead of showing an empty "Workspace 1" after 20 seconds.
