@@ -461,7 +461,29 @@ export class Monitors extends PlaidSubsystem {
             this.core.borders.updateBorders();
             return GLib.SOURCE_REMOVE;
         });
+        this.logSettleShapes();
         this.core.debugLog('monitors: settled pass done');
+    }
+
+    // Debug-only snapshot of the dwindle shape per workspace and monitor, so
+    // an intermittent shuffle after a monitor event has a before/after trail.
+    logSettleShapes() {
+        if (!this.core._settings || !this.core._settings.get_boolean('debug')) return;
+        if (!global.workspace_manager) return;
+        const parts = [];
+        for (let i = 1; i < global.workspace_manager.get_n_workspaces(); i++) {
+            const ws = global.workspace_manager.get_workspace_by_index(i);
+            if (!ws) continue;
+            const groups = [];
+            for (const mon of this.tiledMonitors()) {
+                const group = this.groupObj(ws, mon);
+                const tree = this.core._bspTrees && this.core._bspTrees.get(group);
+                if (!tree || tree.type !== 'split') continue;
+                groups.push(`${this.connectorOrFallback(mon)}:${this.core.bsp.dwindleShapeToString(tree)}`);
+            }
+            if (groups.length) parts.push(`${i}:[${groups.join(' ')}]`);
+        }
+        this.core.debugLog(`settle shapes: ${parts.join(' ') || 'none'}`);
     }
 
     scheduleMonitorsSettled(delay = 300) {
