@@ -187,7 +187,3 @@ for ideas, and the issue tracker for bugs.
 | [v51.17](https://github.com/Plyply99/Plaid/releases/tag/v51.17) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.17/total?label=) |
 | [v51.16](https://github.com/Plyply99/Plaid/releases/tag/v51.16) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.16/total?label=) |
 | **Total** | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/total?label=) |
-
-Older releases are listed on [Releases](https://github.com/Plyply99/Plaid/releases).
-Full counts are available from the GitHub API, or regenerate this table with
-`scripts/release-downloads.sh`.
