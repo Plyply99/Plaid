@@ -4,7 +4,11 @@
   <img src="extensions/assets/plaid-logo.svg" alt="Plaid" width="160">
 </p>
 
-
+<p align="center">
+  <a href="https://github.com/Plyply99/Plaid/releases">
+    <img src="https://img.shields.io/github/downloads/Plyply99/Plaid/total?label=downloads" alt="Downloads">
+  </a>
+</p>
 
 Plaid is a tiling window manager for GNOME Shell. Tiling, borders, true rounded corners, window blur and plenty more.
 
