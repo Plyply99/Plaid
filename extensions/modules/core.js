@@ -256,6 +256,10 @@ export class PlaidCore {
         this._windowMonitors = new Map();
         this._groupObjs = new Map();
         this._monitorConnCache = null;
+        this._monitorConnPartial = false;
+        this._monitorsSettling = false;
+        this._monitorSettleId = 0;
+        this._monitorSettleRetries = 0;
         this._keyedPrimary = '';
         this._resumeMonitorsMoved = false;
         this._regroupId = 0;
@@ -582,6 +586,10 @@ export class PlaidCore {
         this._windowMonitors = null;
         this._groupObjs = null;
         this._monitorConnCache = null;
+        this._monitorConnPartial = false;
+        this._monitorsSettling = false;
+        this._monitorSettleId = 0;
+        this._monitorSettleRetries = 0;
         this._keyedPrimary = '';
         this._resumeMonitorsMoved = false;
         this._regroupId = 0;

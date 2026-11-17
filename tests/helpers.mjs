@@ -204,6 +204,10 @@ function resetCoreState(core, settings) {
   core._windowMonitors = new Map();
   core._groupObjs = new Map();
   core._monitorConnCache = null;
+  core._monitorConnPartial = false;
+  core._monitorsSettling = false;
+  core._monitorSettleId = 0;
+  core._monitorSettleRetries = 0;
   core._keyedPrimary = '';
   core._resumeMonitorsMoved = false;
   core._regroupId = 0;

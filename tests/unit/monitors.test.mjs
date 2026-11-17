@@ -388,6 +388,26 @@ test('Monitors: a primary change moves trees and ratios to the new keying', () =
   });
 });
 
+test('Monitors: monitor changes are coalesced before touching trees', () => {
+  withMonitorList([
+    { get_connector: () => 'HDMI-1' },
+    { get_connector: () => 'DP-1' },
+  ], 0, () => {
+    const self = makeSelf({});
+    self._keyedPrimary = 'HDMI-1';
+    let scheduled = 0;
+    self.monitors.scheduleMonitorsSettled = () => scheduled++;
+    let regroups = 0;
+    self.monitors.regroupWindow = () => regroups++;
+
+    self.monitors.onMonitorsChanged();
+
+    assert.equal(scheduled, 1, 'one settled pass is armed');
+    assert.equal(regroups, 0, 'nothing is regrouped yet');
+    assert.equal(self._monitorsSettling, true);
+  });
+});
+
 test('Monitors: monitors-changed rekeys when the runtime primary changes', () => {
   withMonitors(1, () => {
     const self = makeSelf({});
@@ -397,7 +417,7 @@ test('Monitors: monitors-changed rekeys when the runtime primary changes', () =>
     self.layouts.retileAll = () => retiles++;
     self.persistence.scheduleSaveLayouts = () => {};
 
-    self.monitors.onMonitorsChanged();
+    self.monitors.processMonitorsChanged();
 
     assert.equal(self._keyedPrimary, 'DP-1');
     assert.equal(retiles, 1);
@@ -507,5 +527,79 @@ test('layouts: dwindle keeps one tree per monitor and uses that monitor area', (
       else
         assert.ok(m.x < 1000, `primary window placed at x=${m.x}`);
     }
+  });
+});
+
+function withMonitorList(list, primary, fn) {
+  const mgr = {
+    get_logical_monitors: () => list.map((m, i) => ({
+      get_number: () => i,
+      get_monitors: () => [m],
+    })),
+  };
+  const old = {
+    backend: globalThis.global.backend,
+    primary: globalThis.global.display.get_primary_monitor,
+    count: globalThis.global.display.get_n_monitors,
+  };
+  globalThis.global.backend = { get_monitor_manager: () => mgr };
+  globalThis.global.display.get_primary_monitor = () => primary;
+  globalThis.global.display.get_n_monitors = () => list.length;
+  try {
+    fn(list);
+  } finally {
+    globalThis.global.backend = old.backend;
+    globalThis.global.display.get_primary_monitor = old.primary;
+    globalThis.global.display.get_n_monitors = old.count;
+  }
+}
+
+test('Monitors: a partial connector map keeps the primary bare and defers regroup', () => {
+  withMonitorList([
+    { get_connector: () => 'HDMI-1' },
+    { get_connector: () => '' },
+  ], 0, () => {
+    const self = makeSelf({});
+    self._keyedPrimary = 'HDMI-1';
+    assert.equal(self.monitors.isKeyedPrimary(0), true);
+    assert.equal(self.monitors.groupKeyFor(2, 0), 2);
+    assert.equal(self.monitors.connectors().length >= 2, false, 'partial map');
+
+    const win = fakeWin({ id: 1, monitor: 1 });
+    self._windowMonitors.set(win, 'HDMI-1');
+    let regroups = 0;
+    self.monitors.regroupWindow = () => regroups++;
+    let scheduled = 0;
+    self.monitors.scheduleMonitorsSettled = () => scheduled++;
+
+    self.monitors.onMonitorsChanged();
+
+    assert.equal(self._monitorConnPartial, true);
+    assert.equal(regroups, 0, 'no regrouping while connectors are unresolved');
+    assert.equal(scheduled, 1, 'a settled pass is scheduled');
+  });
+});
+
+test('Monitors: the settled pass regroups windows and retiles', () => {
+  withMonitorList([
+    { get_connector: () => 'HDMI-1' },
+    { get_connector: () => 'DP-1' },
+  ], 0, () => {
+    const self = makeSelf({});
+    self._keyedPrimary = 'HDMI-1';
+    const win = fakeWin({ id: 1, monitor: 1, actor: {} });
+    win.get_workspace = () => ({});
+    self._windowMonitors.set(win, 'HDMI-1');
+    self._windowWorkspaces.set(win, win.get_workspace());
+    let regroups = 0;
+    self.monitors.regroupWindow = () => regroups++;
+    let retiles = 0;
+    self.layouts.retileAll = () => retiles++;
+
+    self.monitors.processMonitorsChanged();
+
+    assert.equal(self._monitorConnPartial, false);
+    assert.equal(regroups, 1);
+    assert.equal(retiles, 1);
   });
 });

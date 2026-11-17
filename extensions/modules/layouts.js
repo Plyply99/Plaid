@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib';
+
 // Workspace retile orchestration and the master-stack / dwindle layout
 // implementation. Methods live on this subsystem class.
 
@@ -25,6 +27,13 @@ export class Layouts {
     doRetileWorkspace(workspace) {
         if (!this.core._settings || this.core._shuttingDown) return;
         if (!this.core._settings.get_boolean('enabled')) {
+            return;
+        }
+        // Monitors are being reconfigured (resolution, rotation, hotplug):
+        // connector mapping is partial, so grouping would churn. The settled
+        // pass retiles everything once the connectors resolve.
+        if (this.core._monitorConnPartial || this.core._monitorsSettling) {
+            this.core.debugLog(`retile: deferred ws=${this.core.geometry.wsIndex(workspace)} (monitor connectors settling)`);
             return;
         }
         if (this.core._grabOp) return;

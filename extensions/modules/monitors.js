@@ -83,6 +83,10 @@ export class Monitors extends PlaidSubsystem {
                 if (conn) conns[lm.get_number()] = conn;
             }
         }
+        const n = this.nMonitors();
+        let full = conns.length >= n;
+        for (let i = 0; i < n && full; i++) full = !!conns[i];
+        this.core._monitorConnPartial = !full;
         this.core._monitorConnCache = conns;
         if (conns.some(Boolean)) this.syncFallbackConnectors(conns);
         return conns;
@@ -256,9 +260,13 @@ export class Monitors extends PlaidSubsystem {
     // keyed primary; an unresolved secondary does not.
     isKeyedPrimary(mon) {
         if (mon === undefined || mon === null) return true;
+        const connector = this.connectorForMonitor(mon);
+        // An unresolved connector must not turn the primary into a phantom
+        // group during a monitor reconfiguration.
+        if (!connector) return mon === this.primaryMonitorIndex();
         const keyed = this.primaryConnector();
-        if (!keyed) return mon === this.primaryMonitorIndex();
-        return this.connectorForMonitor(mon) === keyed;
+        if (!keyed) return false;
+        return connector === keyed;
     }
 
     // The group key for a workspace on a monitor: the keyed primary keeps the
@@ -394,9 +402,30 @@ export class Monitors extends PlaidSubsystem {
     }
 
     onMonitorsChanged() {
+        // Monitors reconfigure in bursts and index order can change
+        // transiently. Coalesce into one settled pass so trees are never
+        // rebuilt from a half-applied layout.
         this.invalidate();
         this.scheduleWorkspacesPrompt();
-        let moved = false;
+        this.core._monitorsSettling = true;
+        this.scheduleMonitorsSettled();
+    }
+
+    processMonitorsChanged() {
+        // Clear the settling flag first: an exception later in this pass must
+        // never leave every future retile deferred.
+        this.core._monitorsSettling = false;
+        this.invalidate();
+        this.connectors();
+        this.core.debugLog(`monitors: settled pass begin partial=${this.core._monitorConnPartial} ` +
+            `retries=${this.core._monitorSettleRetries}`);
+        if (this.core._monitorConnPartial && this.core._monitorSettleRetries < 10) {
+            this.core._monitorSettleRetries++;
+            this.scheduleMonitorsSettled();
+            return;
+        }
+        this.core._monitorSettleRetries = 0;
+        let rekeyed = false;
         const map = this.core._windowMonitors;
         if (map) {
             for (const win of [...map.keys()]) {
@@ -409,24 +438,47 @@ export class Monitors extends PlaidSubsystem {
                 map.set(win, next);
                 const prevMon = this.monitorForConnector(prev);
                 const ws = win.get_workspace();
-                if (ws && prevMon !== mon) {
+                if (ws && prevMon !== mon)
                     this.regroupWindow(win, ws, prevMon, mon);
-                    moved = true;
-                }
             }
         }
         const livePrimary = this.connectorForMonitor(this.primaryMonitorIndex());
         if (livePrimary) {
             if (!this.core._keyedPrimary)
                 this.core._keyedPrimary = livePrimary;
-            else if (livePrimary !== this.core._keyedPrimary)
+            else if (livePrimary !== this.core._keyedPrimary) {
                 this.syncKeyedPrimary(livePrimary);
+                rekeyed = true;
+            }
         }
-        if (moved && livePrimary === this.core._keyedPrimary)
-            this.core.layouts.retileAll();
+        // A settled monitor change (resolution, rotation, scale) changes work
+        // areas even when no window changed displays.
+        if (!rekeyed) this.core.layouts.retileAll();
+        // X11 frame/buffer offsets and mask bounds can be left stale by the
+        // reconfiguration even when the window itself never resized.
+        this.core.signals.addTimeout(150, () => {
+            if (!this.core._settings) return GLib.SOURCE_REMOVE;
+            this.core.borders.updateBorders();
+            return GLib.SOURCE_REMOVE;
+        });
+        this.core.debugLog('monitors: settled pass done');
+    }
+
+    scheduleMonitorsSettled(delay = 300) {
+        if (!this.core._settings || this.core._monitorSettleId) return;
+        this.core._monitorSettleId = this.core.signals.addTimeout(delay, () => {
+            this.core._monitorSettleId = 0;
+            this.processMonitorsChanged();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     destroy() {
+        if (this.core._monitorSettleId) {
+            GLib.source_remove(this.core._monitorSettleId);
+            this.core.signals.untrackSource(this.core._monitorSettleId);
+            this.core._monitorSettleId = 0;
+        }
         if (this.core._wsPromptCheckId) {
             GLib.source_remove(this.core._wsPromptCheckId);
             this.core.signals.untrackSource(this.core._wsPromptCheckId);

@@ -139,7 +139,8 @@ export class Signals extends PlaidSubsystem {
             bumpMonitorDims();
             this.core.dragPreview.updateDropOverlaySize();
             this.core.bgApp.refillBackgroundApp();
-            this.core.layouts.retileAll();
+            // Retiling waits for Monitors' settled pass: acting here can
+            // rebuild trees from a transient monitor layout.
             const mon = global.display.get_monitor_geometry(global.display.get_primary_monitor());
             if (mon) this.core._lastMonitorsGeom = mon;
             this.core.debugLog('monitors-changed handled');
