@@ -23,7 +23,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **One-time prompt for workspaces across displays.** The first time Plaid sees
   more than one monitor, it offers to span workspaces across all displays, since
   GNOME's "workspaces on primary display only" setting keeps a second monitor
-  untileable. It asks once and never again.
+  untileable. It asks once and never again. On an untiled display, windows
+  appear immediately and move, resize or centre like floating windows; the layout
+  shortcut explains why it cannot change that display's layout.
 - **Changing the primary display keeps both arrangements.** Layouts and ratios
   are re-keyed to the new primary instead of being lost.
 - **Moving windows across monitors works.** GNOME's Move to Monitor, drag and

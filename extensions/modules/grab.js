@@ -59,6 +59,8 @@ export class Grab extends PlaidSubsystem {
     handleGrabBegin(metaWindow, grabOp) {
         if (!metaWindow || metaWindow.get_window_type() !== Meta.WindowType.NORMAL) return;
         if (metaWindow.is_skip_taskbar()) return;
+        // Untiled displays are plain GNOME: leave move/resize to Mutter.
+        if (!this.core.monitors.monitorTiled(metaWindow.get_monitor())) return;
         const ws = metaWindow.get_workspace();
         if (!ws || ws !== global.workspace_manager.get_active_workspace()) return;
 

@@ -292,6 +292,7 @@ export function fakeWin(opts = {}) {
     }),
     get_client_type: () => opts.clientType ?? 0,
     get_window_type: () => opts.type ?? 0,
+    get_transient_for: () => opts.transientFor ?? null,
     get_monitor: () => opts.monitor ?? 0,
     get_pid: () => opts.pid ?? 0,
     get_compositor_private: () => opts.actor ?? null,

@@ -54,6 +54,10 @@ export class Actions extends PlaidSubsystem {
         const ws = focused.get_workspace();
         if (!ws) return;
         const mon = focused.get_monitor();
+        if (!this.core.monitors.monitorTiled(mon)) {
+            this.moveFloating(focused, direction);
+            return;
+        }
         if (this.core.windows.getWorkspaceLayout(ws, mon) === 'floating') {
             this.moveFloating(focused, direction);
             return;
@@ -111,6 +115,12 @@ export class Actions extends PlaidSubsystem {
         const ws = focused.get_workspace();
         if (!ws) return;
         const mon = focused.get_monitor();
+        // Untiled displays behave like floating for move/resize, without
+        // being marked floating (focus navigation still includes them).
+        if (!this.core.monitors.monitorTiled(mon)) {
+            this.resizeFloating(focused, axis, delta);
+            return;
+        }
         if (this.core.windows.getWorkspaceLayout(ws, mon) === 'floating') {
             this.resizeFloating(focused, axis, delta);
             return;
@@ -307,14 +317,16 @@ export class Actions extends PlaidSubsystem {
     centerWindow() {
         const win = this.getActiveWindow();
         if (!win) return;
-        if (!this.core.windows.isFloating(win)) return;
+        const mon = win.get_monitor();
+        // Tiled windows are laid out; floating windows and windows on untiled
+        // displays can be centred.
+        if (!this.core.windows.isFloating(win) && this.core.monitors.monitorTiled(mon)) return;
 
         const ws = win.get_workspace();
         if (!ws) return;
 
         const frame = win.get_frame_rect();
-        const monitor = global.display.get_primary_monitor();
-        const workArea = ws.get_work_area_for_monitor(monitor);
+        const workArea = ws.get_work_area_for_monitor(mon);
         if (!workArea) return;
 
         const x = workArea.x + Math.floor((workArea.width - frame.width) / 2);
@@ -339,11 +351,24 @@ export class Actions extends PlaidSubsystem {
 
     cycleLayout() {
         const layouts = ['dwindle', 'master-stack', 'centered-master-stack', 'floating'];
-        const ws = global.workspace_manager.get_active_workspace();
-        if (!ws) return;
-        this.core.placement.releaseMinLimitedWindows();
         const focused = this.getActiveWindow();
-        const mon = focused ? focused.get_monitor() : this.core.monitors.primaryMonitorIndex();
+        const ws = focused ? focused.get_workspace() : global.workspace_manager.get_active_workspace();
+        if (!ws) return;
+        // The pointer selects the display: an empty display has no focused
+        // window, and layout is per-display state.
+        const currentMon = global.display.get_current_monitor();
+        const mon = Number.isInteger(currentMon) && currentMon >= 0
+            ? currentMon
+            : (focused ? focused.get_monitor() : this.core.monitors.primaryMonitorIndex());
+        // Untiled displays (workspaces on the primary only) have no slots to
+        // change. Say why instead of claiming a layout changed.
+        if (this.core.monitors && !this.core.monitors.monitorTiled(mon)) {
+            this.core.workspaces.showPopup(_('Display not tiled'),
+                _('Enable "Workspaces on all displays" in Settings → Multitasking to tile this monitor.'),
+                3000, null, mon);
+            return;
+        }
+        this.core.placement.releaseMinLimitedWindows();
         const current = this.core.windows.getWorkspaceLayout(ws, mon);
         const idx = layouts.indexOf(current);
         const next = layouts[(idx + 1) % layouts.length];

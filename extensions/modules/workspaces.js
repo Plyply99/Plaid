@@ -44,11 +44,15 @@ export class Workspaces extends PlaidSubsystem {
     // The monitor a Plaid popup should appear on: the focused window's, else
     // the pointer's, else the primary. Sizing a popup to the union of every
     // monitor puts it on the seam between displays.
-    popupMonitorGeometry() {
+    popupMonitorGeometry(mon) {
+        if (Number.isInteger(mon) && mon >= 0) {
+            const geom = global.display.get_monitor_geometry(mon);
+            if (geom) return geom;
+        }
         const win = global.display.focus_window;
         const focused = win && win.get_monitor() >= 0 ? win.get_monitor() : -1;
-        const mon = focused >= 0 ? focused : global.display.get_current_monitor();
-        return global.display.get_monitor_geometry(mon)
+        const target = focused >= 0 ? focused : global.display.get_current_monitor();
+        return global.display.get_monitor_geometry(target)
             || global.display.get_monitor_geometry(global.display.get_primary_monitor());
     }
 
@@ -62,7 +66,7 @@ export class Workspaces extends PlaidSubsystem {
             `Layout: ${LAYOUT_NAMES[layout] || layout}`);
     }
 
-    showPopup(title, subtitle = null, duration = 3000, onActivate = null) {
+    showPopup(title, subtitle = null, duration = 3000, onActivate = null, mon = -1) {
         if (this.core._layoutPopupHideId) {
             GLib.source_remove(this.core._layoutPopupHideId);
             this.core._layoutPopupHideId = 0;
@@ -73,7 +77,7 @@ export class Workspaces extends PlaidSubsystem {
             this.core._layoutPopup = null;
         }
 
-        const geom = this.popupMonitorGeometry();
+        const geom = this.popupMonitorGeometry(mon);
         const bottomMargin = Math.floor(geom.height * 0.70);
 
         const box = new St.BoxLayout({

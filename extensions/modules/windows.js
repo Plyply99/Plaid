@@ -217,6 +217,14 @@ export class Windows extends PlaidSubsystem {
             this.core.debugLog('hide skip: disabled');
             return;
         }
+        // Untiled displays are not held: there is no slot to land in, and the
+        // hold would only delay the reveal until the backstop timer.
+        if (!this.core.monitors.monitorTiled(win.get_monitor())) {
+            if (this.core._settings.get_boolean('follow-focus') &&
+                win.get_window_type() === Meta.WindowType.NORMAL)
+                this.cursorWarpDeferred(win);
+            return;
+        }
         if (this.isFloating(win)) {
             if (this.core._settings.get_boolean('follow-focus') &&
                 win.get_window_type() === Meta.WindowType.NORMAL)
@@ -310,7 +318,8 @@ export class Windows extends PlaidSubsystem {
         // slot (and its mask opacity driven to 0 with no retile to reveal it,
         // since every retile path bails on !enabled).
         const tilingEnabled = this.core._settings.get_boolean('enabled');
-        if (!resume && tilingEnabled) {
+        if (!resume && tilingEnabled &&
+            this.core.monitors.monitorTiled(win.get_monitor())) {
             this.core._newWindowSet.add(win);
             this.markPendingWindowInvisible(win, win.get_compositor_private());
         }
