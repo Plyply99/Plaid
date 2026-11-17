@@ -2,6 +2,19 @@ name: Stars chart
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/stars.svg'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stars-chart
+  cancel-in-progress: true
 
 jobs:
   chart:
@@ -12,8 +25,10 @@ jobs:
         run: python3 .github/scripts/stars.py
         env:
           GITHUB_TOKEN: ${{ github.token }}
-      - name: Upload chart
-        uses: actions/upload-artifact@v4
-        with:
-          name: stars-svg
-          path: .github/stars.svg
+      - name: Commit chart
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/stars.svg
+          git diff --cached --quiet || git commit -m "chore: refresh stars chart"
+          git push
