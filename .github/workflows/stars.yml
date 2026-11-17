@@ -4,10 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
-  push:
-    branches: [main]
-    paths-ignore:
-      - '.github/stars.svg'
 
 permissions:
   contents: write
@@ -31,4 +27,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/stars.svg
           git diff --cached --quiet || git commit -m "chore: refresh stars chart"
+          git pull --rebase --autostash
           git push
