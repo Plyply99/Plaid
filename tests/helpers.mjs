@@ -15,6 +15,7 @@ export function oneMonitor(extra = {}) {
     get_monitor_geometry: () => ({ x: 0, y: 0, width: 2560, height: 1440 }),
     get_monitor_index_for_rect: () => 0,
     get_n_monitors: () => 1,
+    get_monitor_scale: () => 1,
     focus_window: null,
     ...extra,
   };
