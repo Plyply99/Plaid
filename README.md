@@ -15,6 +15,9 @@ Full docs live on the [wiki](https://github.com/Plyply99/Plaid/wiki).
 - **Four layouts**: Dwindle (BSP), Master-stack, Centered Master-stack, and
   Floating. Per workspace layouts.
 
+- **Multi-monitor**: each display tiles independently with its own layout and
+  saved arrangement. Unplugging, replugging and primary changes keep both.
+
 
 [Plaid-layouts.webm](https://github.com/user-attachments/assets/ca001f17-9bfd-49b9-9251-152579054011)
 
@@ -147,8 +150,10 @@ what Plaid was doing):
 journalctl -b -o cat | grep '\[plaid\]'
 ```
 
-Multi-monitor setups are especially valuable to test. Feature ideas and pull
-requests are welcome: [github.com/Plyply99/Plaid/issues](https://github.com/Plyply99/Plaid/issues)
+Multi-monitor setups are fully supported: per-display layouts, hotplug and
+primary changes. Feature ideas and pull requests are welcome — use
+[Discussions → Ideas](https://github.com/Plyply99/Plaid/discussions/new?category=ideas)
+for ideas, and the issue tracker for bugs.
 
 
 
