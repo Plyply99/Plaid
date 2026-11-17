@@ -12,6 +12,6 @@ gh release list --repo "$repo" --exclude-pre-releases --limit "$count" \
   --json tagName \
   --jq '.[].tagName' \
   | while read -r tag; do
-      echo "| [${tag}](https://github.com/${repo}/releases/tag/${tag}) | ![](https://img.shields.io/github/downloads/${repo}/${tag}/total) |"
+      echo "| [${tag}](https://github.com/${repo}/releases/tag/${tag}) | ![](https://img.shields.io/github/downloads/${repo}/${tag}/total?label=) |"
     done
-echo "| **Total** | ![](https://img.shields.io/github/downloads/${repo}/total) |"
+echo "| **Total** | ![](https://img.shields.io/github/downloads/${repo}/total?label=) |"
