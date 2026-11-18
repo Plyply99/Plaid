@@ -270,27 +270,6 @@ export class Actions extends PlaidSubsystem {
         this.core._settings.set_boolean('enabled', !this.core._settings.get_boolean('enabled'));
     }
 
-    toggleMaximize() {
-        const win = this.getActiveWindow();
-        if (!win) return;
-        if (win.is_maximized()) {
-            win.unmaximize();
-            return;
-        }
-        const saved = this.core._maximizeToggleRects && this.core._maximizeToggleRects.get(win);
-        if (saved) {
-            this.core._maximizeToggleRects.delete(win);
-            win.unmaximize();
-            if (saved.w > 0)
-                win.move_resize_frame(true, saved.x, saved.y, saved.w, saved.h);
-            return;
-        }
-        const f = win.get_frame_rect();
-        if (this.core._maximizeToggleRects)
-            this.core._maximizeToggleRects.set(win, { x: f.x, y: f.y, w: f.width, h: f.height });
-        win.maximize();
-    }
-
     onTilingEnabledChanged() {
         if (!this.core._settings) return;
         const enabled = this.core._settings.get_boolean('enabled');

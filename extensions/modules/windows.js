@@ -447,7 +447,6 @@ export class Windows extends PlaidSubsystem {
         win._plaidSettleFrameRef = null;
         win._plaidSurfaceStrikes = 0;
         win._plaidHoldReveal = false;
-        if (this.core._maximizeToggleRects) this.core._maximizeToggleRects.delete(win);
         this.core._savedRects.delete(win);
         this.core._scratchpadWindows.delete(win);
         this.core._gappedMaxSet.delete(win);
@@ -587,7 +586,6 @@ export class Windows extends PlaidSubsystem {
             this.core.borders.removeBorder(win); // border + ring + mask + quarantine
             this.core._floatMaxRects.delete(win);
             this.core._gappedMaxSet.delete(win);
-            this.core._maximizeToggleRects.delete(win);
             this.core._scratchpadWindows.delete(win);
             this.core._toggleFloatWindows.delete(win);
             this.core._savedRects.delete(win);

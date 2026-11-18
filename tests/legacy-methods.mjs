@@ -272,7 +272,6 @@ export const LEGACY_METHODS = {
     _teardownPointerFocus: ['pointerFocus', 'teardownPointerFocus'],
     _toggleDropdownTerminal: ['dropdown', 'toggleDropdownTerminal'],
     _toggleFloat: ['actions', 'toggleFloat'],
-    _toggleMaximize: ['actions', 'toggleMaximize'],
     _toggleTiling: ['actions', 'toggleTiling'],
     _trackFloatGeometry: ['windows', 'trackFloatGeometry'],
     _trackSource: ['signals', 'trackSource'],

@@ -204,7 +204,6 @@ export class PlaidCore {
         this._backgroundAppWin = null;
         this._backgroundAppWaiter = null;
         this._backgroundAppReleaseId = 0;
-        this._maximizeToggleRects = new Map();
         this._backgroundAppPending = false;
         this._backgroundAppSpawnRetries = 0;
         this._backgroundAppFailureNotified = false;
@@ -580,7 +579,6 @@ export class PlaidCore {
         this._lastMonitorsGeom = null;
         this._pinnedAdjustCounts = null;
         this._stackDiagnostics = null;
-        this._maximizeToggleRects = null;
         this._scratchpadWindows = null;
         this._scratchpadVisible = false;
         this._windowMonitors = null;

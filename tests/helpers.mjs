@@ -152,7 +152,6 @@ function resetCoreState(core, settings) {
   core._backgroundAppWin = null;
   core._backgroundAppWaiter = null;
   core._backgroundAppReleaseId = 0;
-  core._maximizeToggleRects = new Map();
   core._backgroundAppPending = false;
   core._backgroundAppSpawnRetries = 0;
   core._markerSweepPending = false;

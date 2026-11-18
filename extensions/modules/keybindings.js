@@ -28,7 +28,7 @@ const PLAID_KEYBIND_KEYS = [
     'move-focus-left', 'move-focus-right', 'move-focus-up', 'move-focus-down',
     'swap-left', 'swap-right', 'swap-up', 'swap-down',
     'resize-shrink-width', 'resize-grow-width', 'resize-shrink-height', 'resize-grow-height',
-    'toggle-float', 'toggle-tiling', 'toggle-maximize', 'center-window',
+    'toggle-float', 'toggle-tiling', 'center-window',
     'pick-float-window', 'cycle-layout',
     'scratchpad-toggle', 'scratchpad-add', 'dropdown-terminal',
 ];
@@ -133,7 +133,6 @@ export class Keybindings extends PlaidSubsystem {
             { key: 'resize-grow-height', fn: () => this.core.actions.resizeWindow('grow', 'height') },
             { key: 'toggle-float', fn: () => this.core.actions.toggleFloat() },
             { key: 'toggle-tiling', fn: () => this.core.actions.toggleTiling() },
-            { key: 'toggle-maximize', fn: () => this.core.actions.toggleMaximize() },
             { key: 'center-window', fn: () => this.core.actions.centerWindow() },
             { key: 'pick-float-window', fn: () => this.core.actions.handlePickFloat() },
             { key: 'cycle-layout', fn: () => this.core.actions.cycleLayout() },
