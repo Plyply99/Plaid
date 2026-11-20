@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import { makeSelf, oneMonitor } from '../helpers.mjs';
+import { makeSelf, oneMonitor, fakeWin } from '../helpers.mjs';
 
 // Border animation idle cost: colour-level gate, visibility gate, stop when
 // nothing animates, mask re-arm, per-pass settings memo, no-Flair return.
@@ -309,4 +309,49 @@ test('updateMaskBounds without settings (disable): the mask no longer keeps a ti
   } finally {
     globalThis.global.display = old;
   }
+});
+
+
+test('ensureWindowBorder: rounded corners at radius 0 uses the mask path on Wayland', () => {
+  const self = makeSelf({ 'rounded-corners': true, 'border-radius': 0 });
+  let removed = 0;
+  self.borders.removeWidgetBorder = () => removed++;
+  const win = fakeWin({ clientType: 0 });
+
+  const result = self.borders.ensureWindowBorder(win, null,
+    { x: 0, y: 0, width: 400, height: 300 }, true);
+
+  assert.equal(result, false);
+  assert.equal(removed, 1, 'widget border removed so the mask can draw');
+});
+
+test('doUpdateBorders: rounded corners at radius 0 draws the border through the mask', () => {
+  const self = makeSelf({
+    'borders-enabled': true, 'rounded-corners': true, 'border-radius': 0,
+    'window-blur': false, 'gradient-borders': false,
+    'active-border-width': 2, 'inactive-border-width': 1,
+    'active-border-color': ['#ff0000'], 'inactive-border-color': ['#202020'],
+  });
+  const win = fakeWin({ clientType: 0, actor: {} });
+  const maskRadii = [];
+  let widgets = 0;
+  self.windows.getVisibleWindows = () => [win];
+  self.masks.ensureWindowMask = (_win, _actor, radius) => maskRadii.push(radius);
+  self.borders.ensureWindowBorder = () => widgets++;
+  self.borders.syncBorderAnimation = () => {};
+  const ws = {};
+  const old = globalThis.global;
+  globalThis.global = {
+    ...old,
+    display: { ...oneMonitor(), focus_window: win },
+    workspace_manager: { get_active_workspace: () => ws },
+  };
+  try {
+    self.borders.doUpdateBorders();
+  } finally {
+    globalThis.global = old;
+  }
+
+  assert.deepEqual(maskRadii, [0], 'square SDF border inside the frame');
+  assert.equal(widgets, 0, 'no outside widget border');
 });

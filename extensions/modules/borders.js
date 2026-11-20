@@ -23,8 +23,7 @@ export class Borders extends PlaidSubsystem {
         // (on the actor) escapes the capture; borderBox keeps its stroke inside the
         // buffer, and a childless window uses a placeholder until the surface arrives.
         // Teardown is border-only (_removeWidgetBorder), never destroying the mask.
-        if (settings.get_boolean('rounded-corners') &&
-            settings.get_int('border-radius') > 0) {
+        if (settings.get_boolean('rounded-corners')) {
             if (win.get_client_type() !== Meta.WindowClientType.X11) {
                 this.removeWidgetBorder(win);
                 return false;
@@ -334,8 +333,9 @@ export class Borders extends PlaidSubsystem {
         if (blurEnabled)
             this.core.blur.ensureWindowBlur(win, actor);
 
-        if (roundedCorners && borderRadius > 0) {
-            this.core.masks.ensureWindowMask(win, actor, borderRadius + 1);
+        if (roundedCorners) {
+            this.core.masks.ensureWindowMask(win, actor,
+                borderRadius > 0 ? borderRadius + 1 : 0);
         } else {
             this.core.masks.removeMask(win);
         }
@@ -711,7 +711,7 @@ export class Borders extends PlaidSubsystem {
             const isFocused = win === focusWindow;
             const scratch = !!(this.core._scratchpadWindows && this.core._scratchpadWindows.has(win));
 
-            if (roundedCorners && borderRadius > 0) {
+            if (roundedCorners) {
                 // Stale-widget purge FIRST (was after the mask): updateMask
                 // zeroes the SDF border while a widget still exists, so the
                 // old order left a borderless gap between the mask pass and
@@ -743,7 +743,8 @@ export class Borders extends PlaidSubsystem {
                 // loop) for the scratch fall-through.
                 if (scratch && bordersEnabled)
                     this.ensureWindowBorder(win, actor, frame, isFocused, settings);
-                this.core.masks.ensureWindowMask(win, actor, borderRadius + 1, settings);
+                this.core.masks.ensureWindowMask(win, actor,
+                    borderRadius > 0 ? borderRadius + 1 : 0, settings);
                 // Scratch windows fall through to their special border even
                 // with rounded corners (normal windows stay mask-only).
                 if (!scratch)
@@ -777,8 +778,9 @@ export class Borders extends PlaidSubsystem {
             // widget exists, so creating the widget first avoids a
             // first-pass (or transition-pass) transient double border.
             if (bordersEnabled) this.ensureWindowBorder(win, actor, frame, isFocused, settings);
-            if (roundedCorners && borderRadius > 0)
-                this.core.masks.ensureWindowMask(win, actor, borderRadius + 1, settings);
+            if (roundedCorners)
+                this.core.masks.ensureWindowMask(win, actor,
+                    borderRadius > 0 ? borderRadius + 1 : 0, settings);
         }
 
         // The border animation is armed by _syncBorderAnimation() below with the
@@ -787,7 +789,7 @@ export class Borders extends PlaidSubsystem {
         // even with empty maps — start log → sync stops it → next pass:
         // a per-pass `border animation: start` log pair.
 
-        if (!roundedCorners || borderRadius <= 0)
+        if (!roundedCorners)
             this.core.masks.removeAllMasks();
 
         if (!blurEnabled)
