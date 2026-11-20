@@ -82,7 +82,7 @@ export class Updater extends PlaidSubsystem {
         return new Promise((resolve, reject) => {
             // A spawn failure rejects the promise (the executor catches it).
             const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE);
-            proc.communicate_utf8_async(cancellable, null, (sub, res) => {
+            proc.communicate_utf8_async(null, cancellable, (sub, res) => {
                 try {
                     const [, stdout] = sub.communicate_utf8_finish(res);
                     resolve(stdout || '');
