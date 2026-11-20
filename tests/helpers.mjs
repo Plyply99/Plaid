@@ -214,9 +214,6 @@ function resetCoreState(core, settings) {
   core._grabbedWindow = null;
   core._grabFromMon = -1;
   core._grabDropped = false;
-  core._wsPromptCheckId = 0;
-  core._wsPromptRetries = 0;
-  core._wsPromptDialog = null;
   core._mutterSettings = null;
   core._signals = [];
   core._windowSignals = new Map();

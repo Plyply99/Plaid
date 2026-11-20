@@ -266,9 +266,6 @@ export class PlaidCore {
         this._grabbedWindow = null;
         this._grabFromMon = -1;
         this._grabDropped = false;
-        this._wsPromptCheckId = 0;
-        this._wsPromptRetries = 0;
-        this._wsPromptDialog = null;
 
         const ctx = global.backend.get_context();
         if (!ctx.get_wayland_compositor()) {
@@ -598,8 +595,5 @@ export class PlaidCore {
         this._grabbedWindow = null;
         this._grabFromMon = -1;
         this._grabDropped = false;
-        this._wsPromptCheckId = 0;
-        this._wsPromptRetries = 0;
-        this._wsPromptDialog = null;
     }
 }

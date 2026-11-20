@@ -341,14 +341,6 @@ export class Actions extends PlaidSubsystem {
         const mon = Number.isInteger(currentMon) && currentMon >= 0
             ? currentMon
             : (focused ? focused.get_monitor() : this.core.monitors.primaryMonitorIndex());
-        // Untiled displays (workspaces on the primary only) have no slots to
-        // change. Say why instead of claiming a layout changed.
-        if (this.core.monitors && !this.core.monitors.monitorTiled(mon)) {
-            this.core.workspaces.showPopup(_('Display not tiled'),
-                _('Enable "Workspaces on all displays" in Settings → Multitasking to tile this monitor.'),
-                3000, null, mon);
-            return;
-        }
         this.core.placement.releaseMinLimitedWindows();
         const current = this.core.windows.getWorkspaceLayout(ws, mon);
         const idx = layouts.indexOf(current);
@@ -549,40 +541,6 @@ export class Actions extends PlaidSubsystem {
         return value.length > 40 ? value.substring(0, 37) + '...' : value;
     }
 
-    showWorkspacesOnAllDisplaysPrompt() {
-        if (this.core._wsPromptDialog) return;
-        const dialog = new ModalDialog();
-        this.core._wsPromptDialog = dialog;
-
-        const content = new St.BoxLayout({ orientation: Clutter.Orientation.VERTICAL, style: 'spacing: 12px;' });
-        content.add_child(new St.Label({
-            text: _('Use workspaces on all displays?'),
-            style: 'font-weight: bold; font-size: 14px;',
-        }));
-        content.add_child(new St.Label({
-            text: _('Tiling a second monitor works best when workspaces span every display. Plaid will not ask again.'),
-        }));
-        dialog.contentLayout.add_child(content);
-
-        dialog.setButtons([
-            {
-                label: _('Enable'),
-                key: Clutter.KEY_Return,
-                action: () => {
-                    if (this.core._mutterSettings)
-                        this.core._mutterSettings.set_boolean('workspaces-only-on-primary', false);
-                    dialog.close();
-                },
-            },
-            {
-                label: _('Not now'),
-                key: Clutter.KEY_Escape,
-                action: () => dialog.close(),
-            },
-        ]);
-        dialog.open();
-    }
-
     destroyFloatPickDialog() {
         if (this.core._pickDialog) {
             this.core._pickDialog.close();
@@ -592,10 +550,6 @@ export class Actions extends PlaidSubsystem {
 
     destroy() {
         this.destroyFloatPickDialog();
-        if (this.core._wsPromptDialog) {
-            this.core._wsPromptDialog.close();
-            this.core._wsPromptDialog = null;
-        }
         if (this.core._pickFocusId) {
             global.display.disconnectObject(this.core._pickFocusId);
             this.core._pickFocusId = null;

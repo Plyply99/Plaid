@@ -9,7 +9,6 @@
 // used only while a connector is unresolved and is NEVER persisted.
 
 import GLib from 'gi://GLib';
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { PlaidSubsystem } from './subsystem.js';
 
@@ -409,47 +408,6 @@ export class Monitors extends PlaidSubsystem {
                     this.core.layouts.retileAll();
                 });
         }
-        this.scheduleWorkspacesPrompt(4000);
-    }
-
-    // 'skip'  - nothing to do (one monitor, or already offered)
-    // 'mark'  - multiple monitors but workspaces already span displays
-    // 'ask'   - multiple monitors and workspaces are primary-only
-    workspacesPromptAction() {
-        if (!this.core._settings) return 'skip';
-        if (this.nMonitors() <= 1) return 'skip';
-        if (this.core._settings.get_boolean('monitor-workspaces-prompted')) return 'skip';
-        const primaryOnly = !!(this.core._mutterSettings &&
-            this.core._mutterSettings.get_boolean('workspaces-only-on-primary'));
-        return primaryOnly ? 'ask' : 'mark';
-    }
-
-    scheduleWorkspacesPrompt(delay = 3000) {
-        if (!this.core._settings || this.core._wsPromptCheckId) return;
-        this.core._wsPromptCheckId = this.core.signals.addTimeout(delay, () => {
-            this.core._wsPromptCheckId = 0;
-            this.runWorkspacesPromptCheck();
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    runWorkspacesPromptCheck() {
-        const action = this.workspacesPromptAction();
-        if (action === 'skip') return;
-        // The prompt would sit behind the lock screen; retry for a while and
-        // leave the marker unset so a later login can still offer it.
-        if (Main.sessionMode.isLocked) {
-            if (this.core._wsPromptRetries < 10) {
-                this.core._wsPromptRetries++;
-                this.scheduleWorkspacesPrompt(3000);
-            }
-            return;
-        }
-        this.core._wsPromptRetries = 0;
-        // One time only: mark it as offered before showing the dialog.
-        this.core._settings.set_boolean('monitor-workspaces-prompted', true);
-        if (action === 'mark') return;
-        this.core.actions.showWorkspacesOnAllDisplaysPrompt();
     }
 
     onMonitorsChanged() {
@@ -457,7 +415,6 @@ export class Monitors extends PlaidSubsystem {
         // transiently. Coalesce into one settled pass so trees are never
         // rebuilt from a half-applied layout.
         this.invalidate();
-        this.scheduleWorkspacesPrompt();
         this.core._monitorsSettling = true;
         this.scheduleMonitorsSettled();
     }
@@ -551,11 +508,6 @@ export class Monitors extends PlaidSubsystem {
             GLib.source_remove(this.core._monitorSettleId);
             this.core.signals.untrackSource(this.core._monitorSettleId);
             this.core._monitorSettleId = 0;
-        }
-        if (this.core._wsPromptCheckId) {
-            GLib.source_remove(this.core._wsPromptCheckId);
-            this.core.signals.untrackSource(this.core._wsPromptCheckId);
-            this.core._wsPromptCheckId = 0;
         }
         super.destroy();
     }

@@ -21,34 +21,23 @@ function withFocused(monitor, fn) {
   }
 }
 
-test('cycleLayout: an untiled display explains instead of changing the layout', () => {
-  withFocused(1, (self, calls) => {
-    self.monitors.monitorTiled = () => false;
-    self.actions.cycleLayout();
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].title, 'Display not tiled');
-    assert.equal(self._workspaceLayouts.size, 0);
-  });
-});
-
 test('cycleLayout: the pointer monitor wins over a focused window elsewhere', () => {
   withFocused(1, (self) => {
     const display = globalThis.global.display;
     const oldCurrent = display.get_current_monitor;
     display.get_current_monitor = () => 0;
     const seen = [];
-    self.monitors.monitorTiled = (m) => { seen.push(m); return true; };
-    self.monitors.groupKeyFor = () => '1';
+    self.monitors.groupKeyFor = (wsIndex, mon) => { seen.push(mon); return '1'; };
     try {
       self.actions.cycleLayout();
     } finally {
       display.get_current_monitor = oldCurrent;
     }
-    assert.deepEqual(seen, [0]);
+    assert.ok(seen.length > 0 && seen.every(m => m === 0), 'pointer monitor used');
   });
 });
 
-test('cycleLayout: the pointer display is explained even with no focused window', () => {
+test('cycleLayout: with no focused window the pointer display is used', () => {
   const self = makeSelf({ layout: 'dwindle' });
   const display = globalThis.global.display;
   const oldFocus = display.focus_window;
@@ -57,9 +46,10 @@ test('cycleLayout: the pointer display is explained even with no focused window'
   display.focus_window = null;
   display.get_current_monitor = () => 1;
   globalThis.global.workspace_manager = { get_active_workspace: () => ({}) };
-  const calls = [];
-  self.workspaces.showPopup = (title) => calls.push(title);
-  self.monitors.monitorTiled = () => false;
+  self.workspaces.showPopup = () => {};
+  self.monitors.groupKeyFor = (wsIndex, mon) => `key-${mon}`;
+  self.layouts.retileWorkspace = () => {};
+  self.persistence.scheduleSaveLayouts = () => {};
   self.geometry.wsIndex = () => 1;
   try {
     self.actions.cycleLayout();
@@ -68,8 +58,7 @@ test('cycleLayout: the pointer display is explained even with no focused window'
     display.get_current_monitor = oldCurrent;
     globalThis.global.workspace_manager = oldWm;
   }
-  assert.equal(calls[0], 'Display not tiled');
-  assert.equal(self._workspaceLayouts.size, 0);
+  assert.equal(self._workspaceLayouts.get('key-1'), 'master-stack');
 });
 
 test('cycleLayout: a tiled display cycles its monitor group', () => {
