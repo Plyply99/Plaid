@@ -22,6 +22,16 @@ export class Actions extends PlaidSubsystem {
         return global.display.focus_window;
     }
 
+    // Keyboard-driven focus changes must not be mistaken for a pointer move;
+    // clear the flag once the activation settles.
+    resetKeyboardFocusChange() {
+        this.core.signals.addIdle(() => {
+            if (!this.core._settings) return false;
+            this.core._keyboardFocusChange = false;
+            return false;
+        });
+    }
+
     moveFocus(direction) {
         const focused = this.getActiveWindow();
         if (!focused) return;
@@ -37,11 +47,7 @@ export class Actions extends PlaidSubsystem {
 
         this.core._keyboardFocusChange = true;
         bestWindow.activate(this.core.currentTime());
-        this.core.signals.addIdle(() => {
-            if (!this.core._settings) return false;
-            this.core._keyboardFocusChange = false;
-            return false;
-        });
+        this.resetKeyboardFocusChange();
     }
 
     swapWindow(direction) {
@@ -93,11 +99,7 @@ export class Actions extends PlaidSubsystem {
         this.core._keyboardFocusChange = true;
         focused.activate(this.core.currentTime());
         this.core.windows.cursorWarpDeferred(focused);
-        this.core.signals.addIdle(() => {
-            if (!this.core._settings) return false;
-            this.core._keyboardFocusChange = false;
-            return false;
-        });
+        this.resetKeyboardFocusChange();
     }
 
     resizeWindow(action, axis) {
@@ -259,11 +261,7 @@ export class Actions extends PlaidSubsystem {
 
         this.core._keyboardFocusChange = true;
         this.core.layouts.retileWorkspace(ws);
-        this.core.signals.addIdle(() => {
-            if (!this.core._settings) return false;
-            this.core._keyboardFocusChange = false;
-            return false;
-        });
+        this.resetKeyboardFocusChange();
     }
 
     toggleTiling() {
@@ -323,11 +321,7 @@ export class Actions extends PlaidSubsystem {
 
         this.core.windows.moveCursorToWindow(win);
 
-        this.core.signals.addIdle(() => {
-            if (!this.core._settings) return false;
-            this.core._keyboardFocusChange = false;
-            return false;
-        });
+        this.resetKeyboardFocusChange();
     }
 
     cycleLayout() {

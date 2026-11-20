@@ -391,9 +391,14 @@ export class BackgroundApp extends PlaidSubsystem {
         this.core.debugLog(`background app: launching ${command}`);
         this.recordBackgroundAppHistory(command);
         try {
-            this.core._backgroundAppProc = Gio.Subprocess.new(
-                ['/bin/sh', '-c', `env PLAID_BGAPP=1 ${command}`],
-                Gio.SubprocessFlags.NONE);
+            // Parse the command line directly instead of routing it through
+            // `/bin/sh`, so the shell isn't spawned for a plain app command.
+            const [, argv] = GLib.shell_parse_argv(command);
+            const launcher = new Gio.SubprocessLauncher({
+                flags: Gio.SubprocessFlags.NONE,
+            });
+            launcher.setenv('PLAID_BGAPP', '1', true);
+            this.core._backgroundAppProc = launcher.spawnv(argv);
             // Watch for an early exit: a process that dies before its window is
             // ever claimed would otherwise leave Plaid waiting out the 30s
             // pending timer and give up (the "bgapp didn't autostart" report).
@@ -412,11 +417,12 @@ export class BackgroundApp extends PlaidSubsystem {
             this.core._backgroundAppPending = false;
             this.core._backgroundAppProc = null;
             this.core.debugLog(`background app: spawn failed: ${e.message}`);
+            this.notifyBackgroundAppFailure(command, 'Could not start');
         }
     }
 
     onBackgroundAppProcExit(proc) {
-        // The spawned shell exited. Only respawn when it died BEFORE any window
+        // The spawned process exited. Only respawn when it died BEFORE any window
         // was claimed and nothing else has already resolved the launch.
         if (!this.core._settings) return;
         if (proc !== this.core._backgroundAppProc) return; // superseded (restart/relaunch)

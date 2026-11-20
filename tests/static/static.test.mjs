@@ -311,3 +311,34 @@ test('try/catch budget and no wrappers around standard calls', () => {
   }
   assert.ok(total <= 28, `shell code has ${total} try blocks (max 28)`);
 });
+
+test('no try/catch around guaranteed-safe lifecycle calls', () => {
+  const wrappedSafeCall = /\btry\s*\{\s*(?:[A-Za-z_$][\w$.]*\s*=\s*)?[A-Za-z_$][\w$.]*\.(?:destroy|connect|disconnect|abort)\s*\(|\btry\s*\{\s*GLib\.(?:Source\.remove|source_remove)\s*\(/;
+  const match = codeOnly.match(wrappedSafeCall);
+  assert.equal(match, null,
+    `wrap-free lifecycle call: ${match ? match[0].trim() : ''}`);
+});
+
+test('no silently empty catch blocks', () => {
+  const emptyCatch = /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/;
+  const match = allJs.match(emptyCatch);
+  assert.equal(match, null,
+    `catch block needs a comment or an action: ${match ? match[0].trim() : ''}`);
+});
+
+test('no function-type checks for guaranteed APIs', () => {
+  const guarded = codeOnly.match(/typeof\s+[^;\n]+===\s*'function'/);
+  assert.equal(guarded, null,
+    `remove the version/type guard: ${guarded ? guarded[0].trim() : ''}`);
+});
+
+test('no optional calls on guaranteed methods', () => {
+  const optionalCall = codeOnly.match(/\?\.\s*\(/);
+  assert.equal(optionalCall, null,
+    `call the method directly: ${optionalCall ? optionalCall[0] : ''}`);
+});
+
+test('no boolean lifecycle flags', () => {
+  assert.ok(!/this\._destroyed\b/.test(codeOnly),
+    'use a Gio.Cancellable in destroy() instead of a _destroyed flag');
+});

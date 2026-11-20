@@ -356,125 +356,122 @@ export class Borders extends PlaidSubsystem {
     // of the rounded rect with a cairo gradient. A rotating one is drawn in
     // runs of segments, limited to those whose stroke can reach the strip.
     repaintBorder(border, strip = null) {
-        try {
-            const info = border._plaidBorder;
-            const area = strip ?? border;
-            if (!info || !area.get_context) return;
-            const [w, h] = border._plaidGeom ? border._plaidGeom.slice(2) : [border.width, border.height];
-            if (w <= 0 || h <= 0) return;
-            const path = this.core.borderMath.borderPath(info, w, h);
-            if (!path) return;
-            const [ox, oy] = strip?._plaidOrigin ?? [0, 0];
+        const info = border._plaidBorder;
+        const area = strip ?? border;
+        if (!info) return;
+        const [w, h] = border._plaidGeom ? border._plaidGeom.slice(2) : [border.width, border.height];
+        if (w <= 0 || h <= 0) return;
+        const path = this.core.borderMath.borderPath(info, w, h);
+        if (!path) return;
+        const [ox, oy] = strip?._plaidOrigin ?? [0, 0];
 
-            const bw = info.width;
-            // The angle queued with the repaint: the four strips draw one.
-            const [animated, now] = this.borderAngle();
-            const theta = animated ? (border._plaidPaintTheta ?? now) : 0;
-            border._plaidTheta = theta;
+        const bw = info.width;
+        // The angle queued with the repaint: the four strips draw one.
+        const [animated, now] = this.borderAngle();
+        const theta = animated ? (border._plaidPaintTheta ?? now) : 0;
+        border._plaidTheta = theta;
 
-            const cr = area.get_context();
-            // The surface this draw fills: during a pending allocation the
-            // old one, which is what St compares a new allocation against.
-            area._plaidDrawn = area.get_surface_size ? area.get_surface_size() : [area.width, area.height];
-            cr.translate(-ox, -oy);
-            cr.setLineWidth(bw);
-            cr.setLineCap(cairo.LineCap.ROUND);
-            // One path per run of same-colour segments (a stroke each is hundreds of
-            // GI calls per repaint); round joins match separate round caps.
-            cr.setLineJoin(cairo.LineJoin.ROUND);
+        const cr = area.get_context();
+        if (!cr) return;
+        // The surface this draw fills: during a pending allocation the
+        // old one, which is what St compares a new allocation against.
+        area._plaidDrawn = area.get_surface_size ? area.get_surface_size() : [area.width, area.height];
+        cr.translate(-ox, -oy);
+        cr.setLineWidth(bw);
+        cr.setLineCap(cairo.LineCap.ROUND);
+        // One path per run of same-colour segments (a stroke each is hundreds of
+        // GI calls per repaint); round joins match separate round caps.
+        cr.setLineJoin(cairo.LineJoin.ROUND);
 
-            if (!animated) {
-                const [gx0, gy0, gx1, gy1] = this.core.borderMath.borderGradientLine(w, h, info.direction);
-                const pattern = new cairo.LinearGradient(gx0, gy0, gx1, gy1);
-                pattern.addColorStopRGB(0, info.color1.r, info.color1.g, info.color1.b);
-                pattern.addColorStopRGB(1, info.color2.r, info.color2.g, info.color2.b);
-                cr.setSource(pattern);
-                const { x, y, pw, ph, r } = path;
-                cr.moveTo(x + r, y);
-                cr.lineTo(x + pw - r, y);
-                cr.arc(x + pw - r, y + r, r, -Math.PI / 2, 0);
-                cr.lineTo(x + pw, y + ph - r);
-                cr.arc(x + pw - r, y + ph - r, r, 0, Math.PI / 2);
-                cr.lineTo(x + r, y + ph);
-                cr.arc(x + r, y + ph - r, r, Math.PI / 2, Math.PI);
-                cr.lineTo(x, y + r);
-                cr.arc(x + r, y + r, r, Math.PI, Math.PI * 1.5);
-                cr.closePath();
-                cr.stroke();
-                cr.$dispose();
-                return;
+        if (!animated) {
+            const [gx0, gy0, gx1, gy1] = this.core.borderMath.borderGradientLine(w, h, info.direction);
+            const pattern = new cairo.LinearGradient(gx0, gy0, gx1, gy1);
+            pattern.addColorStopRGB(0, info.color1.r, info.color1.g, info.color1.b);
+            pattern.addColorStopRGB(1, info.color2.r, info.color2.g, info.color2.b);
+            cr.setSource(pattern);
+            const { x, y, pw, ph, r } = path;
+            cr.moveTo(x + r, y);
+            cr.lineTo(x + pw - r, y);
+            cr.arc(x + pw - r, y + r, r, -Math.PI / 2, 0);
+            cr.lineTo(x + pw, y + ph - r);
+            cr.arc(x + pw - r, y + ph - r, r, 0, Math.PI / 2);
+            cr.lineTo(x + r, y + ph);
+            cr.arc(x + r, y + ph - r, r, Math.PI / 2, Math.PI);
+            cr.lineTo(x, y + r);
+            cr.arc(x + r, y + r, r, Math.PI, Math.PI * 1.5);
+            cr.closePath();
+            cr.stroke();
+            cr.$dispose();
+            return;
+        }
+
+        const segs = this.core.borderMath.buildBorderSegments(border, w, h);
+        if (segs.length === 0) return;
+        const reach = info.width / 2 + 1;
+        const x0 = ox - reach, y0 = oy - reach;
+        const x1 = ox + area.width + reach, y1 = oy + area.height + reach;
+
+        // Every strip of one repaint shares the runs (same segments, look
+        // and angle).
+        let runs = border._plaidRuns;
+        if (!runs || runs.segs !== segs || runs.info !== info || runs.theta !== theta) {
+            runs = { segs, info, theta,
+                list: this.core.borderMath.borderRuns(segs, w, h, info, animated, theta) };
+            border._plaidRuns = runs;
+        }
+        // The segments whose stroke can reach this strip, found once per
+        // shape (the strips follow the segments' size).
+        const reachKey = `${x0},${y0},${x1},${y1}`;
+        let reached = runs.reach?.get(reachKey);
+        if (!reached) {
+            reached = [];
+            for (const [i, seg] of segs.entries()) {
+                if (Math.max(seg.x0, seg.x1) >= x0 && Math.min(seg.x0, seg.x1) <= x1 &&
+                    Math.max(seg.y0, seg.y1) >= y0 && Math.min(seg.y0, seg.y1) <= y1)
+                    reached.push(i);
             }
-
-            const segs = this.core.borderMath.buildBorderSegments(border, w, h);
-            if (segs.length === 0) return;
-            const reach = info.width / 2 + 1;
-            const x0 = ox - reach, y0 = oy - reach;
-            const x1 = ox + area.width + reach, y1 = oy + area.height + reach;
-
-            // Every strip of one repaint shares the runs (same segments, look
-            // and angle).
-            let runs = border._plaidRuns;
-            if (!runs || runs.segs !== segs || runs.info !== info || runs.theta !== theta) {
-                runs = { segs, info, theta,
-                    list: this.core.borderMath.borderRuns(segs, w, h, info, animated, theta) };
-                border._plaidRuns = runs;
-            }
-            // The segments whose stroke can reach this strip, found once per
-            // shape (the strips follow the segments' size).
-            const reachKey = `${x0},${y0},${x1},${y1}`;
-            let reached = runs.reach?.get(reachKey);
-            if (!reached) {
-                reached = [];
-                for (const [i, seg] of segs.entries()) {
-                    if (Math.max(seg.x0, seg.x1) >= x0 && Math.min(seg.x0, seg.x1) <= x1 &&
-                        Math.max(seg.y0, seg.y1) >= y0 && Math.min(seg.y0, seg.y1) <= y1)
-                        reached.push(i);
-                }
-                (runs.reach ??= new Map()).set(reachKey, reached);
-            }
-            let runKey = -1;
-            let endX = 0, endY = 0, dirX = 0, dirY = 0;
-            let prev = -2;
-            for (const i of reached) {
-                const seg = segs[i];
-                // A gap (segments outside the strip) ends the run: their
-                // stroke draws nothing here, so the cut changes no pixel.
-                if (i !== prev + 1 && runKey >= 0) {
-                    cr.lineTo(endX, endY);
-                    cr.stroke();
-                    runKey = -1;
-                }
-                prev = i;
-                const { key, c } = runs.list[i];
-                const sx = seg.x1 - seg.x0;
-                const sy = seg.y1 - seg.y0;
-                if (key !== runKey) {
-                    if (runKey >= 0) {
-                        cr.lineTo(endX, endY);
-                        cr.stroke();
-                    }
-                    runKey = key;
-                    cr.setSourceRGB(c.r, c.g, c.b);
-                    cr.moveTo(seg.x0, seg.y0);
-                    dirX = sx;
-                    dirY = sy;
-                } else if (Math.abs(sx * dirY - sy * dirX) > 1e-6 * (sx * sx + sy * sy) ||
-                           sx * dirX + sy * dirY <= 0) {
-                    cr.lineTo(endX, endY);
-                    dirX = sx;
-                    dirY = sy;
-                }
-                endX = seg.x1;
-                endY = seg.y1;
-            }
-            if (runKey >= 0) {
+            (runs.reach ??= new Map()).set(reachKey, reached);
+        }
+        let runKey = -1;
+        let endX = 0, endY = 0, dirX = 0, dirY = 0;
+        let prev = -2;
+        for (const i of reached) {
+            const seg = segs[i];
+            // A gap (segments outside the strip) ends the run: their
+            // stroke draws nothing here, so the cut changes no pixel.
+            if (i !== prev + 1 && runKey >= 0) {
                 cr.lineTo(endX, endY);
                 cr.stroke();
+                runKey = -1;
             }
-            cr.$dispose();
-        } catch (e) {
-            this.core.debugLog(`repaint FAILED: ${e.message}`);
+            prev = i;
+            const { key, c } = runs.list[i];
+            const sx = seg.x1 - seg.x0;
+            const sy = seg.y1 - seg.y0;
+            if (key !== runKey) {
+                if (runKey >= 0) {
+                    cr.lineTo(endX, endY);
+                    cr.stroke();
+                }
+                runKey = key;
+                cr.setSourceRGB(c.r, c.g, c.b);
+                cr.moveTo(seg.x0, seg.y0);
+                dirX = sx;
+                dirY = sy;
+            } else if (Math.abs(sx * dirY - sy * dirX) > 1e-6 * (sx * sx + sy * sy) ||
+                       sx * dirX + sy * dirY <= 0) {
+                cr.lineTo(endX, endY);
+                dirX = sx;
+                dirY = sy;
+            }
+            endX = seg.x1;
+            endY = seg.y1;
         }
+        if (runKey >= 0) {
+            cr.lineTo(endX, endY);
+            cr.stroke();
+        }
+        cr.$dispose();
     }
 
     startBorderAnimation() {

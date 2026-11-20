@@ -839,18 +839,7 @@ export class Placement {
             // by it — no content, no border) until a title/wm-class notify
             // or close. Mirror the backstop-reveal block.
             if (this.core._pendingWarp) this.core._pendingWarp.delete(win);
-            {
-                const a = win.get_compositor_private();
-                if (a) {
-                    a.visible = true;
-                    a.set_opacity(255);
-                }
-            }
-            {
-                const effect = this.core._windowMasks && this.core._windowMasks.get(win);
-                if (effect && effect.setOpacityUniform)
-                    effect.setOpacityUniform(1);
-            }
+            this.core.windows.revealWindow(win);
             this.core.signals.scheduleBorders();
             const ws = win.get_workspace();
             const list = ws

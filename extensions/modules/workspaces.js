@@ -252,20 +252,16 @@ export class Workspaces extends PlaidSubsystem {
     }
 
     notifyCritical(title, body) {
-        try {
-            const conn = Gio.DBus.session;
-            const variant = new GLib.Variant('(susssasa{sv}i)', [
-                'org.gnome.Shell.Extensions.Plaid', 0, '',
-                title, body, [],
-                { urgency: new GLib.Variant('y', 2) }, -1,
-            ]);
-            conn.call(
-                'org.freedesktop.Notifications', '/org/freedesktop/Notifications',
-                'org.freedesktop.Notifications', 'Notify',
-                variant, null, Gio.DBusCallFlags.NONE, -1, null, null);
-        } catch (e) {
-            this.core.debugLog(`critical notification failed: ${e.message}`);
-        }
+        const conn = Gio.DBus.session;
+        const variant = new GLib.Variant('(susssasa{sv}i)', [
+            'org.gnome.Shell.Extensions.Plaid', 0, '',
+            title, body, [],
+            { urgency: new GLib.Variant('y', 2) }, -1,
+        ]);
+        conn.call(
+            'org.freedesktop.Notifications', '/org/freedesktop/Notifications',
+            'org.freedesktop.Notifications', 'Notify',
+            variant, null, Gio.DBusCallFlags.NONE, -1, null, null);
     }
 
     destroy() {

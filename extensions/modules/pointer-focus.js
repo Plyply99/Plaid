@@ -79,53 +79,48 @@ export class PointerFocus extends PlaidSubsystem {
     }
 
     resolveWindowByScan(px, py) {
-        try {
-            const candidates = [];
-            const under = [];
-            let total = 0;
-            const activeWs = global.workspace_manager.get_active_workspace();
-            for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
-                const ws = global.workspace_manager.get_workspace_by_index(i);
-                if (ws !== activeWs) continue;
-                if (ws === this.core._backgroundAppParkingWs) continue;
-                for (const win of ws.list_windows()) {
-                    total++;
-                    if (!win) continue;
-                    // Minimized windows are invisible: not a hover target, and
-                    // never a reach-through blocker (a hidden DDT / scratchpad
-                    // / Super+H window whose frame overlaps the pointer would
-                    // otherwise null the scan via the popup protection).
-                    if (win.minimized) continue;
-                    const r = win.get_frame_rect();
-                    if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height) {
-                        const pass = this.canPointerFocusWindow(win) && win !== this.core._backgroundAppWin;
-                        under.push({ win, pass });
-                        if (pass)
-                            candidates.push(win);
-                    }
+        const candidates = [];
+        const under = [];
+        let total = 0;
+        const activeWs = global.workspace_manager.get_active_workspace();
+        for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
+            const ws = global.workspace_manager.get_workspace_by_index(i);
+            if (ws !== activeWs) continue;
+            if (ws === this.core._backgroundAppParkingWs) continue;
+            for (const win of ws.list_windows()) {
+                total++;
+                if (!win) continue;
+                // Minimized windows are invisible: not a hover target, and
+                // never a reach-through blocker (a hidden DDT / scratchpad
+                // / Super+H window whose frame overlaps the pointer would
+                // otherwise null the scan via the popup protection).
+                if (win.minimized) continue;
+                const r = win.get_frame_rect();
+                if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height) {
+                    const pass = this.canPointerFocusWindow(win) && win !== this.core._backgroundAppWin;
+                    under.push({ win, pass });
+                    if (pass)
+                        candidates.push(win);
                 }
             }
-            if (this.core._settings && this.core._settings.get_boolean('debug')) {
-                const sig = candidates.map(w => w.get_id()).join(',');
-                if (sig !== this.core._pointerFocusCandSig) {
-                    this.core._pointerFocusCandSig = sig;
-                    this.core.debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
-                }
-            }
-            if (under.length === 0) return null;
-            const stacked = global.display.sort_windows_by_stacking(under.map(u => u.win));
-            const top = stacked[stacked.length - 1];
-            // A popup/menu-like window on top must never be reached through:
-            // focusing what's beneath it strips the menu's parent focus and
-            // kills the menu (Steam's fixed-size popups extending over other
-            // windows). No focus change is the safe outcome.
-            const topUnder = under.find(u => u.win === top);
-            if (topUnder && !topUnder.pass) return null;
-            return top;
-        } catch (e) {
-            this.core.debugLog(`pointer focus: scan failed: ${e.message}`);
-            return null;
         }
+        if (this.core._settings && this.core._settings.get_boolean('debug')) {
+            const sig = candidates.map(w => w.get_id()).join(',');
+            if (sig !== this.core._pointerFocusCandSig) {
+                this.core._pointerFocusCandSig = sig;
+                this.core.debugLog(`pointer focus: scan windows=${total} candidates=${candidates.map(w => w.get_wm_class_instance() || '?').join(',') || 'none'}`);
+            }
+        }
+        if (under.length === 0) return null;
+        const stacked = global.display.sort_windows_by_stacking(under.map(u => u.win));
+        const top = stacked[stacked.length - 1];
+        // A popup/menu-like window on top must never be reached through:
+        // focusing what's beneath it strips the menu's parent focus and
+        // kills the menu (Steam's fixed-size popups extending over other
+        // windows). No focus change is the safe outcome.
+        const topUnder = under.find(u => u.win === top);
+        if (topUnder && !topUnder.pass) return null;
+        return top;
     }
 
     canPointerFocusWindow(win) {

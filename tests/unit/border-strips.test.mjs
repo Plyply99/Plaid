@@ -270,7 +270,7 @@ test('queueBorderRepaint: all strips at one angle; a plain widget is not redrawn
     for (const strip of b._plaidStrips) {
       t += 7;
       strip.cr = { translate() {}, setLineWidth() {}, setLineCap() {}, setLineJoin() {}, setSourceRGB() {},
-        moveTo() {}, lineTo() {}, stroke() {} };
+        moveTo() {}, lineTo() {}, stroke() {}, $dispose() {} };
       self.borders.repaintBorder(b, strip);
       seen.push(b._plaidTheta);
     }

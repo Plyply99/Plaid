@@ -90,22 +90,17 @@ export class DropdownTerminal extends PlaidSubsystem {
     }
 
     minimizeSurvivingDropdowns() {
-        // Runs during teardown (including shell shutdown): a disposed workspace
-        // manager must never abort the rest of destroy().
-        try {
-            const command = this.core._settings
-                ? this.core._settings.get_string('dropdown-terminal-command') : '';
-            const wm = global.workspace_manager;
-            for (let i = 0; i < wm.get_n_workspaces(); i++) {
-                const ws = wm.get_workspace_by_index(i);
-                if (!ws) continue;
-                for (const win of ws.list_windows()) {
-                    if (!this.isDropdownWindow(win, command)) continue;
-                    this.hideDropdownWindow(win);
-                }
+        const command = this.core._settings
+            ? this.core._settings.get_string('dropdown-terminal-command') : '';
+        const wm = global.workspace_manager;
+        if (!wm) return;
+        for (let i = 0; i < wm.get_n_workspaces(); i++) {
+            const ws = wm.get_workspace_by_index(i);
+            if (!ws) continue;
+            for (const win of ws.list_windows()) {
+                if (!this.isDropdownWindow(win, command)) continue;
+                this.hideDropdownWindow(win);
             }
-        } catch (_e) {
-            // Workspace manager already torn down.
         }
     }
 
@@ -328,21 +323,8 @@ export class DropdownTerminal extends PlaidSubsystem {
         if (!this.core._settings || !win) return;
         win._plaidDdtRevealed = true;
         // The spawn choreography may have left the actor hidden and/or the
-        // corner mask's opacity uniform at 0. Restore both together: the mask
-        // multiplies the whole output in the shader, so actor opacity alone
-        // still paints nothing.
-        {
-            const a = win.get_compositor_private();
-            if (a) {
-                a.visible = true;
-                a.set_opacity(255);
-            }
-        }
-        {
-            const effect = this.core._windowMasks && this.core._windowMasks.get(win);
-            if (effect && effect.setOpacityUniform)
-                effect.setOpacityUniform(1);
-        }
+        // corner mask's opacity uniform at 0.
+        this.core.windows.revealWindow(win);
         // Now that the window is at the drop rect, attaching Flair (blur
         // sibling, border, mask) paints it at the correct geometry.
         this.core.borders.applyDropdownEffects(win);

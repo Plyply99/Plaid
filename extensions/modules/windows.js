@@ -60,11 +60,9 @@ export class Windows extends PlaidSubsystem {
         if (frame.width === 0 || frame.height === 0) return false;
         const centerX = frame.x + frame.width / 2;
         const centerY = frame.y + frame.height / 2;
-        // mutter-51 removed Clutter.get_default_backend (the 51.β→.rc
-        // window); the context-accessor route works on both 50 and 51.
-        const backend = (typeof Clutter.get_default_backend === 'function')
-            ? Clutter.get_default_backend()
-            : global.stage.get_context().get_backend();
+        // mutter-51 removed Clutter.get_default_backend; the context route
+        // works on both 50 and 51.
+        const backend = global.stage.get_context().get_backend();
         const seat = backend.get_default_seat();
         seat.warp_pointer(centerX, centerY);
         return true;
@@ -267,18 +265,7 @@ export class Windows extends PlaidSubsystem {
                 this.core.debugLog(`backstop reveal: ${win.get_wm_class_instance() || '?'} ws=${this.core.geometry.wsIndex(win.get_workspace())} tiled=${this.core._windowWorkspaces.has(win)} ` +
                     `frame=(${Math.round(fr.x)},${Math.round(fr.y)},${Math.round(fr.width)},${Math.round(fr.height)})`);
                 if (this.core._pendingWarp) this.core._pendingWarp.delete(win);
-                {
-                    const a = win.get_compositor_private();
-                    if (a) {
-                        a.visible = true;
-                        a.set_opacity(255);
-                    }
-                }
-                {
-                    const effect = this.core._windowMasks && this.core._windowMasks.get(win);
-                    if (effect && effect.setOpacityUniform)
-                        effect.setOpacityUniform(1);
-                }
+                this.revealWindow(win);
                 // The blur/flair skipped during the pending-warp window must
                 // attach once the reveal fires.
                 this.core.signals.scheduleBorders();
@@ -286,6 +273,21 @@ export class Windows extends PlaidSubsystem {
                 return GLib.SOURCE_REMOVE;
             });
         }
+    }
+
+    // Undo the spawn/placement hide. The actor is hidden outright, and the
+    // corner mask's opacity uniform multiplies the whole output, so both must
+    // be restored together or the window stays invisible.
+    revealWindow(win) {
+        if (!win) return;
+        const actor = win.get_compositor_private();
+        if (actor) {
+            actor.visible = true;
+            actor.set_opacity(255);
+        }
+        const effect = this.core._windowMasks && this.core._windowMasks.get(win);
+        if (effect && effect.setOpacityUniform)
+            effect.setOpacityUniform(1);
     }
 
     addWindow(win, resume = false) {
@@ -931,17 +933,8 @@ export class Windows extends PlaidSubsystem {
             return;
         }
         this.core.debugLog(`float reveal: ${win.get_wm_class_instance() || '?'}`);
-        {
-            if (this.core._pendingWarp) this.core._pendingWarp.delete(win);
-            const a = win.get_compositor_private();
-            if (a) {
-                a.visible = true;
-                a.set_opacity(255);
-            }
-            const effect = this.core._windowMasks && this.core._windowMasks.get(win);
-            if (effect && effect.setOpacityUniform)
-                effect.setOpacityUniform(1);
-        }
+        if (this.core._pendingWarp) this.core._pendingWarp.delete(win);
+        this.revealWindow(win);
     }
 
     restoreFloatNaturalRect(win) {

@@ -16,11 +16,11 @@ const UPDATE_FAILED = 'Could not install the update. Check the release page.';
 export class Updater extends PlaidSubsystem {
     constructor(core) {
         super(core);
-        this._destroyed = false;
+        this._cancellable = new Gio.Cancellable();
     }
 
     async checkForUpdates() {
-        if (this._destroyed || this.core._shuttingDown || !this.core._settings)
+        if (this._cancellable.is_cancelled() || this.core._shuttingDown || !this.core._settings)
             return;
         // A system-wide install is managed externally; never overwrite it
         // with a self-update.
@@ -32,8 +32,8 @@ export class Updater extends PlaidSubsystem {
         let updateFound = false;
         try {
             const stdout = await this._communicate(
-                ['curl', '-sL', '--max-time', '10', RELEASES_API]);
-            if (this._destroyed)
+                ['curl', '-sL', '--max-time', '10', RELEASES_API], this._cancellable);
+            if (this._cancellable.is_cancelled())
                 return;
             const json = JSON.parse(stdout || '');
             const tag = String(json.tag_name || '');
@@ -59,7 +59,9 @@ export class Updater extends PlaidSubsystem {
             updateFound = true;
             await this._install(assetUrl, version[1], version[2]);
         } catch (e) {
-            if (updateFound && !this._destroyed)
+            if (this._cancellable.is_cancelled())
+                return;
+            if (updateFound)
                 Main.notify('Plaid update failed', UPDATE_FAILED);
             else
                 this.core.debugLog(`update: check failed: ${e.message}`);
@@ -68,19 +70,19 @@ export class Updater extends PlaidSubsystem {
 
     async _install(assetUrl, major, minor) {
         const zipPath = `${GLib.get_home_dir()}/Downloads/${ASSET_NAME}`;
-        await this._run(['curl', '-sfL', '--max-time', '60', '-o', zipPath, assetUrl]);
-        if (this._destroyed)
+        await this._run(['curl', '-sfL', '--max-time', '60', '-o', zipPath, assetUrl], this._cancellable);
+        if (this._cancellable.is_cancelled())
             return;
-        await this._run(['gnome-extensions', 'install', '--force', zipPath]);
-        if (!this._destroyed)
+        await this._run(['gnome-extensions', 'install', '--force', zipPath], this._cancellable);
+        if (!this._cancellable.is_cancelled())
             Main.notify(`Plaid v${major}.${minor} available`, UPDATE_MESSAGE);
     }
 
-    _communicate(argv) {
+    _communicate(argv, cancellable) {
         return new Promise((resolve, reject) => {
             // A spawn failure rejects the promise (the executor catches it).
             const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE);
-            proc.communicate_utf8_async(null, null, (sub, res) => {
+            proc.communicate_utf8_async(cancellable, null, (sub, res) => {
                 try {
                     const [, stdout] = sub.communicate_utf8_finish(res);
                     resolve(stdout || '');
@@ -91,10 +93,10 @@ export class Updater extends PlaidSubsystem {
         });
     }
 
-    _run(argv) {
+    _run(argv, cancellable) {
         return new Promise((resolve, reject) => {
             const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
-            proc.wait_check_async(null, (sub, res) => {
+            proc.wait_check_async(cancellable, (sub, res) => {
                 try {
                     sub.wait_check_finish(res);
                     resolve();
@@ -106,7 +108,7 @@ export class Updater extends PlaidSubsystem {
     }
 
     destroy() {
-        this._destroyed = true;
+        this._cancellable.cancel();
         super.destroy();
     }
 }

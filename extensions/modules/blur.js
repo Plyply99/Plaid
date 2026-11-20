@@ -576,73 +576,68 @@ export class Blur extends PlaidSubsystem {
                 this.core.debugLog('blur defer: window mid-transition, next pass will create');
                 return;
             }
-            try {
-                // Sticky square fallback for a window that already failed once.
-                blur = win._plaidBlurSquare
-                    ? new Shell.BlurEffect()
-                    : (this.createGjsBlurEffect() || new Shell.BlurEffect());
-                blur._bindings = [];
-                blur._settleNotifyIds = [];
-                const sibling = new St.Widget({
-                    reactive: false,
-                    visible: true,
-                });
-                for (let i = 0; i < 4; i++) {
-                    sibling.add_constraint(new Clutter.BindConstraint({
-                        source: actor,
-                        coordinate: i,
-                        offset: 0,
-                    }));
-                }
-                for (const prop of ['pivot-point', 'translation-x', 'translation-y', 'scale-x', 'scale-y', 'visible', 'opacity']) {
-                    blur._bindings.push(actor.bind_property(
-                        prop, sibling, prop, GObject.BindingFlags.SYNC_CREATE
-                    ));
-                }
-                global.window_group.insert_child_below(sibling, actor);
-                sibling.add_effect_with_name(BLUR_EFFECT_NAME, blur);
-                blur._sibling = sibling;
-                blur._sourceActor = actor;
-                this.core._windowBlurs.set(win, blur);
-                blur._actorDestroyId = this.connectObject(actor, 'destroy', () => this.removeBlur(win));
-                blur._actorParentSetId = this.connectObject(actor, 'parent-set',
-                    () => this.syncBlurStacking());
-                // Suppress the blur while the actor animates: a scaled/faded actor
-                // would stretch the full-size backdrop paint into a smear. Disable
-                // the effect while scaling or fading, re-enable at rest, and re-sync
-                // the sibling rect on every re-enable so no stale offset is painted.
-                // Toggle the EFFECT, not the sibling's visible — the actor's
-                // `visible` binding would overwrite it.
-                const syncBlurState = () => {
-                    if (!blur || !blur._sibling || blur._fatalFail) return;
-                    if (this.core._windowBlurs && this.core._windowBlurs.get(win) !== blur) return;
-
-                    const moving = !win._plaidFloatAnim &&
-                        (actor.scale_x < 0.99 || actor.scale_y < 0.99 ||
-                         actor.opacity < 255);
-                    const shouldEnable = !moving;
-                    if (blur.enabled && shouldEnable) {
-                        // Keep the rect fresh once settled (the actor's position
-                        // lands a frame after scale reaches 1).
-                        this.syncBlurSiblingRect(win, blur);
-                    } else if (blur.enabled !== shouldEnable) {
-                        if (shouldEnable)
-                            this.syncBlurSiblingRect(win, blur);
-                        blur.enabled = shouldEnable;
-                    }
-                };
-                for (const sig of ['notify::scale-x', 'notify::scale-y',
-                                   'notify::opacity', 'notify::x', 'notify::y'])
-                    blur._settleNotifyIds.push(this.connectObject(actor, sig, syncBlurState));
-                syncBlurState();
-
-                const frame = win.get_frame_rect();
-                const buffer = win.get_buffer_rect();
-                this.core.debugLog(`blur sibling created frame=(${frame.x},${frame.y},${frame.width},${frame.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height})`);
-            } catch (e) {
-                this.core.debugLog(`window blur attach failed: ${e.message}`);
-                return;
+            // Sticky square fallback for a window that already failed once.
+            blur = win._plaidBlurSquare
+                ? new Shell.BlurEffect()
+                : (this.createGjsBlurEffect() || new Shell.BlurEffect());
+            blur._bindings = [];
+            blur._settleNotifyIds = [];
+            const sibling = new St.Widget({
+                reactive: false,
+                visible: true,
+            });
+            for (let i = 0; i < 4; i++) {
+                sibling.add_constraint(new Clutter.BindConstraint({
+                    source: actor,
+                    coordinate: i,
+                    offset: 0,
+                }));
             }
+            for (const prop of ['pivot-point', 'translation-x', 'translation-y', 'scale-x', 'scale-y', 'visible', 'opacity']) {
+                blur._bindings.push(actor.bind_property(
+                    prop, sibling, prop, GObject.BindingFlags.SYNC_CREATE
+                ));
+            }
+            global.window_group.insert_child_below(sibling, actor);
+            sibling.add_effect_with_name(BLUR_EFFECT_NAME, blur);
+            blur._sibling = sibling;
+            blur._sourceActor = actor;
+            this.core._windowBlurs.set(win, blur);
+            blur._actorDestroyId = this.connectObject(actor, 'destroy', () => this.removeBlur(win));
+            blur._actorParentSetId = this.connectObject(actor, 'parent-set',
+                () => this.syncBlurStacking());
+            // Suppress the blur while the actor animates: a scaled/faded actor
+            // would stretch the full-size backdrop paint into a smear. Disable
+            // the effect while scaling or fading, re-enable at rest, and re-sync
+            // the sibling rect on every re-enable so no stale offset is painted.
+            // Toggle the EFFECT, not the sibling's visible — the actor's
+            // `visible` binding would overwrite it.
+            const syncBlurState = () => {
+                if (!blur || !blur._sibling || blur._fatalFail) return;
+                if (this.core._windowBlurs && this.core._windowBlurs.get(win) !== blur) return;
+
+                const moving = !win._plaidFloatAnim &&
+                    (actor.scale_x < 0.99 || actor.scale_y < 0.99 ||
+                     actor.opacity < 255);
+                const shouldEnable = !moving;
+                if (blur.enabled && shouldEnable) {
+                    // Keep the rect fresh once settled (the actor's position
+                    // lands a frame after scale reaches 1).
+                    this.syncBlurSiblingRect(win, blur);
+                } else if (blur.enabled !== shouldEnable) {
+                    if (shouldEnable)
+                        this.syncBlurSiblingRect(win, blur);
+                    blur.enabled = shouldEnable;
+                }
+            };
+            for (const sig of ['notify::scale-x', 'notify::scale-y',
+                               'notify::opacity', 'notify::x', 'notify::y'])
+                blur._settleNotifyIds.push(this.connectObject(actor, sig, syncBlurState));
+            syncBlurState();
+
+            const frame = win.get_frame_rect();
+            const buffer = win.get_buffer_rect();
+            this.core.debugLog(`blur sibling created frame=(${frame.x},${frame.y},${frame.width},${frame.height}) buffer=(${buffer.x},${buffer.y},${buffer.width},${buffer.height})`);
         }
 
         if (blur._sibling)

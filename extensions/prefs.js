@@ -214,13 +214,9 @@ export default class TilingWMPreferences extends ExtensionPreferences {
 
             if (settings.get_string('layout') === layout) {
                 let accent = { red: 0.2, green: 0.5, blue: 0.9, alpha: 1 };
-                try {
-                    const ctx = area.get_style_context();
-                    const [ok, color] = ctx.lookup_color('accent_color');
-                    if (ok) accent = color;
-                } catch (e) {
-                    // The theme may not expose an accent color; keep the default.
-                }
+                const ctx = area.get_style_context();
+                const [ok, color] = ctx.lookup_color('accent_color');
+                if (ok) accent = color;
                 cr.setSourceRGBA(accent.red, accent.green, accent.blue, accent.alpha);
                 cr.setLineWidth(2);
                 cr.rectangle(1, 1, width - 2, height - 2);
@@ -594,17 +590,18 @@ export default class TilingWMPreferences extends ExtensionPreferences {
             initial.parse((settings.get_strv(key) || [])[0] || fallback);
 
             dialog.choose_rgba(row.get_root(), initial, null, (_source, result) => {
+                let rgba;
                 try {
-                    const rgba = dialog.choose_rgba_finish(result);
-                    const hex = `#${Math.round(rgba.red * 255).toString(16).padStart(2, '0')}` +
-                        `${Math.round(rgba.green * 255).toString(16).padStart(2, '0')}` +
-                        `${Math.round(rgba.blue * 255).toString(16).padStart(2, '0')}`;
-                    settings.set_strv(key, [hex]);
-                    label.label = hex;
-                    colorDot.queue_draw();
-                } catch (e) {
-                // GTK color/schema lookup is optional.
-            }
+                    rgba = dialog.choose_rgba_finish(result);
+                } catch (_e) {
+                    return; // GTK throws DialogError.DISMISSED when cancelled
+                }
+                const hex = `#${Math.round(rgba.red * 255).toString(16).padStart(2, '0')}` +
+                    `${Math.round(rgba.green * 255).toString(16).padStart(2, '0')}` +
+                    `${Math.round(rgba.blue * 255).toString(16).padStart(2, '0')}`;
+                settings.set_strv(key, [hex]);
+                label.label = hex;
+                colorDot.queue_draw();
             });
         });
 

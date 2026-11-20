@@ -375,14 +375,9 @@ export class Masks extends PlaidSubsystem {
         if (!effect) {
             effect = this.createMaskEffect();
             if (!effect) return;
-            try {
-                target.add_effect_with_name(MASK_EFFECT_NAME, effect);
-                this.core._windowMasks.set(win, effect);
-                this.core.debugLog(`corner mask attached radius=${radius}`);
-            } catch (e) {
-                this.core.debugLog(`corner mask attach failed: ${e.message}`);
-                return;
-            }
+            target.add_effect_with_name(MASK_EFFECT_NAME, effect);
+            this.core._windowMasks.set(win, effect);
+            this.core.debugLog(`corner mask attached radius=${radius}`);
             effect.enabled = true;
             effect._metaWin = win;
             effect._watchActor = target;
