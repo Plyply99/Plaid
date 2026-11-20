@@ -29,6 +29,18 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Background App commands run directly.** The command is parsed as a program
   and its arguments instead of going through a shell, so shell operators (`~`,
   `|`, `&&`, redirects) are no longer interpreted.
+- **Fullscreen tiles keep their slot.** Leaving fullscreen returns the window to
+  its place even if other windows opened or closed while it was fullscreen.
+- **GNOME-tiled or maximized frames no longer become a false minimum.**
+  Super+Left/Right or an edge tile can't bend the layout until the window no
+  longer fits.
+- **Wayland minimum sizes apply immediately.** Apps that report a minimum are no
+  longer tiled below it for the first few seconds after they open.
+- **A cancelled drag no longer re-splits.** Pressing Escape during a move
+  restores the window and leaves the layout alone.
+- **Rapid fullscreen toggles no longer float the window.** A window caught
+  mid-transition is no longer retried or auto-floated; each toggle starts a
+  fresh landing cycle.
 
 ## v51.30 — 2026-11-16
 
