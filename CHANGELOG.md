@@ -12,6 +12,24 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
+## Unreleased
+
+- **Second displays tile when workspaces stay on the primary display.** Each
+  non-primary display becomes one fixed group with its own saved layout instead
+  of leaving its windows floating. Turning GNOME's setting off returns to
+  per-workspace layouts; both arrangements are remembered.
+- **Popup feedback follows the pointer.** Workspace-switch, layout and tiling
+  popups appear on the display under the pointer instead of jumping between
+  displays as focus changes.
+- **The one-time workspaces prompt is gone.** Both workspace modes tile every
+  display, so there is nothing to accept; GNOME's workspace setting stays
+  entirely yours. The layout shortcut also no longer reports an untiled display.
+- **Removed the duplicate Toggle Maximize shortcut.** GNOME's Toggle Maximized
+  remains the canonical binding for floating windows.
+- **Background App commands run directly.** The command is parsed as a program
+  and its arguments instead of going through a shell, so shell operators (`~`,
+  `|`, `&&`, redirects) are no longer interpreted.
+
 ## v51.30 — 2026-11-16
 
 - **Every monitor tiles its own windows.** Each display gets its own layout, split
