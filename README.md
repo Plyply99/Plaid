@@ -176,6 +176,7 @@ for ideas, and the issue tracker for bugs.
 
 | Release | Downloads |
 |---|---|
+| [v51.31](https://github.com/Plyply99/Plaid/releases/tag/v51.31) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.31/total?label=) |
 | [v51.30](https://github.com/Plyply99/Plaid/releases/tag/v51.30) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.30/total?label=) |
 | [v51.27](https://github.com/Plyply99/Plaid/releases/tag/v51.27) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.27/total?label=) |
 | [v51.23](https://github.com/Plyply99/Plaid/releases/tag/v51.23) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.23/total?label=) |
@@ -185,5 +186,4 @@ for ideas, and the issue tracker for bugs.
 | [v51.19](https://github.com/Plyply99/Plaid/releases/tag/v51.19) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.19/total?label=) |
 | [v51.18](https://github.com/Plyply99/Plaid/releases/tag/v51.18) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.18/total?label=) |
 | [v51.17](https://github.com/Plyply99/Plaid/releases/tag/v51.17) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.17/total?label=) |
-| [v51.16](https://github.com/Plyply99/Plaid/releases/tag/v51.16) | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/v51.16/total?label=) |
 | **Total** | ![](https://img.shields.io/github/downloads/Plyply99/Plaid/total?label=) |
