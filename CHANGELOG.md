@@ -44,6 +44,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Secondary-display focus works in fixed mode.** Keyboard focus and swap, and
   pointer hover, can reach a window on a secondary display without clicking it
   first.
+- **Focus styling follows fixed secondary windows.** Borders and corners update
+  when a window on a fixed secondary display gains or loses focus, even if the
+  primary is on another workspace.
 
 ## v51.30 — 2026-11-16
 

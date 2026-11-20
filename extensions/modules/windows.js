@@ -652,22 +652,26 @@ export class Windows extends PlaidSubsystem {
         }
     }
 
-    // All tiled windows visible on a workspace, including fixed-group windows
-    // on secondary displays (which stay visible across workspaces). Use the
-    // monitor groups, never the per-workspace order: a fixed window lives in
-    // the order of the workspace where it was opened.
-    getVisibleTiledWindows(ws = global.workspace_manager.get_active_workspace()) {
+    // Every managed window visible on a workspace, including fixed-group
+    // windows on secondary displays (which stay visible across workspaces).
+    // Use the monitor groups, never the per-workspace order: a fixed window
+    // lives in the order of the workspace where it was opened.
+    getVisibleWindows(ws = global.workspace_manager.get_active_workspace()) {
         const seen = new Set();
         const out = [];
         for (const mon of this.core.monitors.tiledMonitors()) {
             for (const win of this.core.monitors.getWindowsForGroup(ws, mon)) {
                 if (seen.has(win)) continue;
                 seen.add(win);
-                if (win.minimized || this.isFloating(win)) continue;
+                if (win.minimized) continue;
                 out.push(win);
             }
         }
         return out;
+    }
+
+    getVisibleTiledWindows(ws = global.workspace_manager.get_active_workspace()) {
+        return this.getVisibleWindows(ws).filter(w => !this.isFloating(w));
     }
 
     getWindowsForWorkspace(workspace) {

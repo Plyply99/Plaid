@@ -680,8 +680,11 @@ export class Borders extends PlaidSubsystem {
         const ws = global.workspace_manager.get_active_workspace();
         if (!ws) return;
 
-        const windows = this.core.windows.getWindowsForWorkspace(ws);
-        for (const win of windows) {
+        // Fixed-group secondary windows stay visible across workspaces; the
+        // active-workspace walk alone left their focus border stale.
+        const visible = this.core.windows.getVisibleWindows(ws);
+        for (const win of visible) {
+            if (this.core.windows.isFloating(win)) continue;
             // Recorded again only once this pass lays the window out
             // (notePass): one stripped or skipped here is not.
             this.forgetPass(win);
@@ -752,7 +755,7 @@ export class Borders extends PlaidSubsystem {
 
         // Floating windows are not in _windowWSIndices (they skip _addWindow),
         // so the tiled loop above misses them. Apply Flair directly.
-        for (const win of ws.list_windows()) {
+        for (const win of visible) {
             if (win.get_window_type() !== Meta.WindowType.NORMAL) continue;
             if (!this.core.windows.isFloating(win)) continue;
             this.forgetPass(win);

@@ -615,13 +615,17 @@ test('doUpdateBorders: a window the pass strips or skips is not recorded as laid
   let fs = false;
   const frame = { x: 0, y: 0, width: 400, height: 300 };
   const mk = () => ({ is_fullscreen: () => fs, get_compositor_private: () => ({}), get_frame_rect: () => ({ ...frame }),
-    get_buffer_rect: () => ({ ...frame }), get_window_type: () => 0, get_wm_class_instance: () => 'gjs' });
+    get_buffer_rect: () => ({ ...frame }), get_window_type: () => 0, get_monitor: () => 0,
+    get_wm_class_instance: () => 'gjs' });
   const tiled = mk(), fl = mk();
-  self.windows.getWindowsForWorkspace = () => [tiled];
+  self.windows.getWindowsForWorkspace = () => [tiled, fl];
   self.windows.isFloating = (w) => w === fl;
   const ws = { list_windows: () => [tiled, fl] };
   const old = globalThis.global;
-  globalThis.global = { ...old, display: { focus_window: null }, workspace_manager: { get_active_workspace: () => ws } };
+  globalThis.global = { ...old,
+    display: { focus_window: null, get_n_monitors: () => 1, get_primary_monitor: () => 0,
+      get_monitor_geometry: () => ({ x: 0, y: 0, width: 1920, height: 1080 }) },
+    workspace_manager: { get_active_workspace: () => ws } };
   try {
     self.borders.doUpdateBorders();
     assert.ok(tiled._plaidPassGeom && fl._plaidPassGeom, 'both laid out');

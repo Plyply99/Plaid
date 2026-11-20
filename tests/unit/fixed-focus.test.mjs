@@ -35,14 +35,16 @@ function withFixedMonitors(fn) {
   }
 }
 
-function fixedSelf(ws1, ws2) {
-  const self = makeSelf({}, { _mutterSettings: { get_boolean: () => true } });
+function fixedSelf(ws1, ws2, settings = {}) {
+  const self = makeSelf(settings, { _mutterSettings: { get_boolean: () => true } });
   self.monitors.connectorForMonitor = (m) => (m === 0 ? 'HDMI-1' : 'DP-1');
 
   const primary = fakeWin({ id: 2, monitor: 0, frame: { x: 100, y: 100, width: 400, height: 300 } });
   const dp = fakeWin({ id: 1, monitor: 1, frame: { x: 2000, y: 0, width: 800, height: 600 } });
   primary.get_workspace = () => ws2;
   dp.get_workspace = () => ws1;
+  primary.get_compositor_private = () => ({});
+  dp.get_compositor_private = () => ({});
 
   self._workspaceOrders.set(ws1, [dp]);
   self._workspaceOrders.set(ws2, [primary]);
@@ -71,6 +73,39 @@ test('getVisibleTiledWindows: a sticky fixed window whose live workspace differs
     dp.get_workspace = () => ws2;
     const ids = self.windows.getVisibleTiledWindows(ws2).map(w => w.get_id());
     assert.ok(ids.includes(dp.get_id()));
+  });
+});
+
+test('getVisibleWindows: includes a fixed secondary float from another workspace', () => {
+  withFixedMonitors((ws1, ws2) => {
+    const { self, dp } = fixedSelf(ws1, ws2);
+    const fl = fakeWin({ id: 3, monitor: 1, frame: { x: 2000, y: 700, width: 600, height: 300 } });
+    fl.get_workspace = () => ws1;
+    self._windowWorkspaces.set(fl, ws1);
+    self._windowMonitors.set(fl, 'DP-1');
+    self._toggleFloatWindows.add(fl);
+
+    const visible = self.windows.getVisibleWindows(ws2).map(w => w.get_id());
+    const tiled = self.windows.getVisibleTiledWindows(ws2).map(w => w.get_id());
+    assert.ok(visible.includes(fl.get_id()));
+    assert.ok(!tiled.includes(fl.get_id()));
+  });
+});
+
+test('doUpdateBorders: a fixed secondary window on another workspace is styled', () => {
+  withFixedMonitors((ws1, ws2) => {
+    const { self, primary, dp } = fixedSelf(ws1, ws2,
+      { 'borders-enabled': true, 'rounded-corners': false, 'window-blur': false });
+    globalThis.global.display.focus_window = dp;
+    const seen = [];
+    self.borders.ensureWindowBorder = (win) => { seen.push(win); return true; };
+    self.borders.syncBorderAnimation = () => {};
+    self.masks.removeAllMasks = () => {};
+
+    self.borders.doUpdateBorders();
+
+    assert.ok(seen.includes(dp), 'fixed secondary window styled');
+    assert.ok(seen.includes(primary), 'active-workspace window styled');
   });
 });
 

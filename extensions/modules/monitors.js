@@ -9,6 +9,7 @@
 // used only while a connector is unresolved and is NEVER persisted.
 
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 
 import { PlaidSubsystem } from './subsystem.js';
 
@@ -228,6 +229,8 @@ export class Monitors extends PlaidSubsystem {
                 for (const win of managed.keys()) {
                     if (seen.has(win) || win.minimized) continue;
                     if (win === this.core._backgroundAppWin) continue;
+                    if (win.get_window_type() !== Meta.WindowType.NORMAL) continue;
+                    if (win.is_skip_taskbar()) continue;
                     if (this.windowMonitor(win) !== connector) continue;
                     seen.add(win);
                     out.push(win);
