@@ -12,7 +12,7 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
-## Unreleased
+## v51.31 — 2026-11-20
 
 - **Second displays tile when workspaces stay on the primary display.** Each
   non-primary display becomes one fixed group with its own saved layout instead
