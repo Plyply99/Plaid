@@ -44,7 +44,7 @@ test('schema declares every PLAID_KEYBIND_KEYS entry', () => {
 });
 
 test('every literal settings key read from this._settings exists in the schema', () => {
-  const used = [...allJs.matchAll(/this\._settings\.get_(?:int|double|boolean|string|strv)\('([^']+)'\)/g)]
+  const used = [...allJs.matchAll(/this(?:\.core)?\._settings\.get_(?:int|double|boolean|string|strv)\('([^']+)'\)/g)]
     .map((m) => m[1]);
   const missing = [...new Set(used)].filter((k) => !schemaKeys.has(k));
   assert.deepEqual(missing, [], `settings keys read but not declared: ${missing.join(', ')}`);
