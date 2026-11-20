@@ -79,6 +79,7 @@ export class Grab extends PlaidSubsystem {
         const [startX, startY] = global.get_pointer();
         this.core._grabStartX = startX;
         this.core._grabStartY = startY;
+        this.core._grabStartFrame = { x: frame.x, y: frame.y, width: frame.width, height: frame.height };
         this.core._grabGrace = this.computeGrabGraceThreshold();
 
         if (this.isResizeGrab(grabOp)) {
@@ -149,16 +150,11 @@ export class Grab extends PlaidSubsystem {
             if (ws) {
                 if (this.isMoveGrab(grabOp)) {
                     // Click-vs-drag guard: a titlebar click on a decorated
-                    // window starts a move grab with no real movement — only
-                    // reposition when the pointer actually travelled.
-                    {
-                        const [ex, ey] = global.get_pointer();
-                        const dx = ex - this.core._grabStartX;
-                        const dy = ey - this.core._grabStartY;
-                        const grace = this.core._grabGrace ?? 10;
-                        if (Math.hypot(dx, dy) >= grace)
-                            this.core.windows.repositionWindow(metaWindow, ws);
-                    }
+                    // window starts a move grab with no real movement. Judge
+                    // the WINDOW, not the pointer: Escape restores the frame
+                    // while the pointer is still away from the press point.
+                    if (this.grabMoved(metaWindow))
+                        this.core.windows.repositionWindow(metaWindow, ws);
                 }
                 const toMon = metaWindow.get_monitor();
                 if (this.core._grabFromMon >= 0 && toMon !== this.core._grabFromMon) {
@@ -195,11 +191,23 @@ export class Grab extends PlaidSubsystem {
         this.core._grabWindow = null;
         this.core._grabbedWindow = null;
         this.core._grabFromMon = -1;
+        this.core._grabStartFrame = null;
         this.core._grabInitialStackRatios = null;
         // Sync, not start: no 30fps tick when nothing animates.
         this.core.borders.syncBorderAnimation();
         // The passes the resize loop stood in for (noteGeometry).
         this.core.borders.updateBorders();
+    }
+
+    // Click-vs-drag guard based on the window's movement, not the pointer's.
+    // A cancelled drag (Escape) restores the frame while the pointer stays
+    // away from the press point; that must not count as a drop.
+    grabMoved(win) {
+        const start = this.core._grabStartFrame;
+        if (!start || !win) return false;
+        const f = win.get_frame_rect();
+        const grace = this.core._grabGrace ?? 10;
+        return Math.abs(f.x - start.x) >= grace || Math.abs(f.y - start.y) >= grace;
     }
 
     isResizeGrab(grabOp) {

@@ -228,7 +228,7 @@ test('_getWindowMinSize: ignores transient client hints while a window is settli
     _minSizeOverrides: new Map(),
     _observedMinSizes: new Map(),
   });
-  const w = fakeWin({ instance: 'emacs', minSize: [1936, 1185] });
+  const w = fakeWin({ instance: 'emacs', minSize: [1936, 1185], clientType: 1 });
   w._plaidSettleUntil = Date.now() + 6000;
   assert.deepEqual(self._getWindowMinSize(w), { w: 0, h: 0 });
 
@@ -257,7 +257,7 @@ test('_getWindowMinSize: uses the temporary settle floor while settling', () => 
     _minSizeOverrides: new Map(),
     _observedMinSizes: new Map(),
   });
-  const w = fakeWin({ instance: 'org.gnome.TextEditor', minSize: [0, 0] });
+  const w = fakeWin({ instance: 'org.gnome.TextEditor', minSize: [0, 0], clientType: 1 });
   w._plaidSettleUntil = Date.now() + 6000;
   w._plaidSettleMin = { w: 360, h: 0 };
   assert.deepEqual(self._getWindowMinSize(w), { w: 360, h: 0 });
@@ -277,7 +277,7 @@ test('_clampTreeToMinSizes: a settling client cannot walk the split ratio (regre
     _observedMinSizes: new Map(),
   });
   const top = fakeWin({ minSize: [0, 0] });
-  const bottom = fakeWin({ instance: 'emacs', minSize: [1936, 1185] });
+  const bottom = fakeWin({ instance: 'emacs', minSize: [1936, 1185], clientType: 1 });
   bottom._plaidSettleUntil = Date.now() + 6000;
   const tree = split('v', 0.5, leaf(top), leaf(bottom));
   for (let i = 0; i < 5; i++) {
@@ -285,4 +285,38 @@ test('_clampTreeToMinSizes: a settling client cannot walk the split ratio (regre
     self._clampTreeToMinSizes(tree, 3830, 2105, 8);
   }
   assert.equal(tree.ratio, 0.5);
+});
+
+test('_getWindowMinSize: a Wayland client uses its mapped hint during settle', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map(),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'app', minHint: [true, 400, 300], clientType: 0 });
+  w._plaidSettleUntil = Date.now() + 5000;
+  assert.deepEqual(self._getWindowMinSize(w), { w: 400, h: 300 });
+});
+
+test('_getWindowMinSize: an X11 client holds transient hints until settle ends', () => {
+  const self = makeSelf({}, {
+    _minSizeOverrides: new Map(),
+    _observedMinSizes: new Map(),
+  });
+  const w = fakeWin({ instance: 'emacs', minHint: [true, 400, 300], clientType: 1 });
+  w._plaidSettleUntil = Date.now() + 5000;
+  assert.deepEqual(self._getWindowMinSize(w), { w: 0, h: 0 });
+});
+
+test('settleEnded: retiles only when the window is off its slot', () => {
+  const self = makeSelf();
+  const ws = {};
+  const win = fakeWin();
+  win.get_workspace = () => ws;
+  let retiled = 0;
+  self.layouts.retileWorkspace = () => retiled++;
+
+  self.placement.settleEnded(win, true);
+  assert.equal(retiled, 0);
+  self.placement.settleEnded(win, false);
+  assert.equal(retiled, 1);
 });

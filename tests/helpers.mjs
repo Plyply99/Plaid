@@ -306,6 +306,7 @@ export function fakeWin(opts = {}) {
     is_skip_taskbar: () => opts.skipTaskbar ?? false,
     is_fullscreen: () => opts.fullscreen ?? false,
     is_maximized: () => opts.maximized ?? false,
+    get_maximize_flags: () => opts.maximizeFlags ?? (opts.maximized ? 1 : 0),
     minimized: opts.minimized ?? false,
     minimize() { this.minimized = true; },
     unminimize() { this.minimized = false; },

@@ -94,6 +94,12 @@ export class Windows extends PlaidSubsystem {
 
     isFloating(win) {
         if (this.isDesktopWindow(win)) return false;
+        return this.floatsWhenWindowed(win) || win.is_fullscreen();
+    }
+
+    // Floating by toggle, rule, process or type: what the window is when it
+    // is not fullscreen. A fullscreen tile keeps its dwindle leaf.
+    floatsWhenWindowed(win) {
         if (this.core._toggleFloatWindows && this.core._toggleFloatWindows.has(win)) return true;
         // Auto-floated because no slot could meet its real size minimum —
         // excluded from tiling until released (see _releaseMinLimitedWindows).
@@ -108,12 +114,27 @@ export class Windows extends PlaidSubsystem {
         // The process cmdline is available immediately — and the verdict is
         // cached per PID (process-lifetime stable).
         if (this.isFloatProcessWindow(win)) return true;
-        if (win.is_fullscreen()) return true;
         if (win.get_window_type() !== Meta.WindowType.NORMAL) return true;
         if (win.is_skip_taskbar()) return true;
         if (win.get_transient_for()) return true;
         if (this.isFixedSizeWindow(win)) return true;
         return false;
+    }
+
+    // A fullscreen tile reserves its leaf: on its own workspace, on a tiled
+    // monitor, while registered, and not floating by rule. Elsewhere the
+    // leaf would hold a hole for good.
+    isFullscreenTile(win, ws = null, mon = win ? win.get_monitor() : -1) {
+        if (!win || !win.is_fullscreen() || win.minimized) return false;
+        // Fixed groups are workspace-independent, so a fullscreen window on
+        // another workspace still owns its leaf there.
+        const fixed = this.core.monitors && this.core.monitors.fixedModeFor(mon);
+        if (!fixed && ws && win.get_workspace() !== ws) return false;
+        if (!this.core.monitors || !this.core.monitors.monitorTiled(mon))
+            return false;
+        if (!this.core._windowWorkspaces || !this.core._windowWorkspaces.has(win))
+            return false;
+        return !this.floatsWhenWindowed(win);
     }
 
     // float-windows entries that match this window's process command line.
@@ -544,8 +565,21 @@ export class Windows extends PlaidSubsystem {
             // ("2 blur glitch areas" when revealing the
             // scratchpad). A float's minimized state never changes the tiled
             // layout — skip the retile. _scratchpadRemove still retiles
-            // explicitly, so the intentional path is unaffected.
-            if (this.isFloating(win)) return;
+            // explicitly, so the intentional path is unaffected. A
+            // fullscreen tile does retile: its kept leaf would leave a hole.
+            if (this.floatsWhenWindowed(win)) return;
+            const ws = win.get_workspace();
+            if (ws) this.core.layouts.retileWorkspace(ws);
+        }) });
+        sigIds.push({ emitter: win, id: this.connectObject(win, 'notify::fullscreen', () => {
+            if (!this.core._settings) return;
+            // A rapid toggle must not accumulate landing retries and float
+            // the window: each transition starts a fresh landing cycle.
+            this.core.placement.clearLandingRetries(win);
+            // Leaving fullscreen: Mutter restores the frame saved on entry,
+            // which is stale if the layout changed. Retile so the window
+            // takes its kept leaf (or a fresh slot if it was floating).
+            if (win.is_fullscreen() || this.floatsWhenWindowed(win)) return;
             const ws = win.get_workspace();
             if (ws) this.core.layouts.retileWorkspace(ws);
         }) });
@@ -901,8 +935,10 @@ export class Windows extends PlaidSubsystem {
             }
             return;
         }
-        if (!this.isFloating(win)) return;
         const ws = win.get_workspace();
+        // A fullscreen tile keeps its leaf: video players retitle constantly.
+        if (this.isFullscreenTile(win, ws)) return;
+        if (!this.isFloating(win)) return;
         if (ws) {
             const tree = this.core.bsp.bspGetTree(ws);
             if (tree && this.core.bsp.bspCollectWindows(tree).includes(win)) {

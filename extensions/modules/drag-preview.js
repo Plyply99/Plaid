@@ -30,16 +30,14 @@ export class DragPreview {
         if (!metaWindow || !this.core._settings) return;
         const ws = metaWindow.get_workspace();
         if (!ws) return;
-        // Click-vs-drag gate: keep the overlay hidden until the pointer
-        // actually travelled — a titlebar click must not show a drag preview.
-        const [px, py] = global.get_pointer();
-        const dx = px - this.core._grabStartX;
-        const dy = py - this.core._grabStartY;
-        const grace = this.core._grabGrace ?? 10;
-        if (Math.hypot(dx, dy) < grace) {
+        // Click-vs-drag gate: keep the overlay hidden until the window
+        // actually moved — a titlebar click, or a cancelled drag, must not
+        // show a drop preview.
+        if (!this.core.grab.grabMoved(metaWindow)) {
             this.hideDropPreview();
             return;
         }
+        const [px, py] = global.get_pointer();
         const mon = this.core.monitors.monitorAt(px, py);
         if (mon < 0 || !this.core.monitors.monitorTiled(mon)) {
             this.hideDropPreview();

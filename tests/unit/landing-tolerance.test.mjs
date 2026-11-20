@@ -68,6 +68,72 @@ test('recordObservedMin: an explicit min-size override is never learned', () => 
   assert.equal(self._observedMinSizes.has(win), false);
 });
 
+test('recordObservedMin: a frame mutter maximized or side-tiled is not learned', () => {
+  const self = makeSelf({}, { _observedMinSizes: new Map() });
+  for (const flags of [1, 2, 3]) {
+    const win = fakeWin({ maximizeFlags: flags });
+    win.get_workspace = () => null;
+    self.placement.recordObservedMin(win, { width: 1280, height: 1408 }, { w: 1280, h: 862 });
+    assert.equal(self._observedMinSizes.has(win), false, `flags ${flags}`);
+  }
+  const plain = fakeWin({ maximizeFlags: 0 });
+  plain.get_workspace = () => null;
+  self.placement.recordObservedMin(plain, { width: 1280, height: 1408 }, { w: 1280, h: 862 });
+  assert.deepEqual(self._observedMinSizes.get(plain), { w: 0, h: 1408 });
+});
+
+test('landing: a stable larger frame set by mutter is accepted without bending', () => {
+  const { self, win, s } = landing({ width: 1200 });
+  win.get_maximize_flags = () => 2;
+  let recorded = 0;
+  let bent = 0;
+  let retried = 0;
+  self.placement.recordObservedMin = () => recorded++;
+  self.placement.adjustPinnedTree = () => bent++;
+  self.placement.retryLanding = () => retried++;
+
+  assert.equal(self.placement.verifyAnimationLanding(s, 'tiled'), true);
+  assert.equal(recorded, 0);
+  assert.equal(bent, 0);
+  assert.equal(retried, 0);
+});
+
+test('landing: a fullscreen window is accepted without a retry or float', () => {
+  const { self, win, s } = landing({ width: 3840, height: 2160 });
+  win.is_fullscreen = () => true;
+  let retried = 0;
+  self.placement.retryLanding = () => retried++;
+
+  assert.equal(self.placement.verifyAnimationLanding(s, 'tiled'), true);
+  assert.equal(retried, 0);
+  assert.equal(self._minLimitedWindows.has(win), false);
+  assert.equal(self._landingRetries.has(win), false);
+});
+
+test('retryLanding: a fullscreen window is never auto-floated', () => {
+  const { self, win } = landing({ width: 3840, height: 2160 });
+  win.is_fullscreen = () => true;
+  self._landingRetries.set(win, 4);
+
+  self.placement.retryLanding(win);
+
+  assert.equal(self._minLimitedWindows.has(win), false);
+  assert.equal(self._landingRetries.has(win), false);
+});
+
+test('clearLandingRetries: clears retries, give-ups and mismatch frames', () => {
+  const { self, win } = landing();
+  self._landingRetries.set(win, 2);
+  self._landingGivenUp.add(win);
+  self._mismatchFrames.set(win, { x: 0, y: 0, w: 100, h: 100 });
+
+  self.placement.clearLandingRetries(win);
+
+  assert.equal(self._landingRetries.has(win), false);
+  assert.equal(self._landingGivenUp.has(win), false);
+  assert.equal(self._mismatchFrames.has(win), false);
+});
+
 test('landing: a stable larger frame during settle sets a temporary floor instead of retrying', () => {
   const { self, win, s } = landing({ width: 1200 });
   win._plaidSettleUntil = Date.now() + 5000;

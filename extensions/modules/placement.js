@@ -3,7 +3,6 @@
 
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
-import Meta from 'gi://Meta';
 import St from 'gi://St';
 
 // --- Master-Stack Helpers ---
@@ -115,7 +114,7 @@ export class Placement {
                     `target=(${Math.round(s.targetX)},${Math.round(s.targetY)},${Math.round(s.targetW)},${Math.round(s.targetH)})`);
             }
             let isX11 = false;
-            { isX11 = s.win.get_client_type() === Meta.WindowClientType.X11; }
+            { isX11 = this.core.bsp.isX11Client(s.win); }
             const hold = holdForSettle && isX11;
             {
                 const actor = s.win.get_compositor_private();
@@ -190,7 +189,8 @@ export class Placement {
                 }
                 if (!w._plaidSettleUntil || Date.now() > w._plaidSettleUntil) {
                     w._plaidSettlePollId = 0;
-                    this.core.placement.finalizeSettleMin(w);
+                    if (!this.core.placement.finalizeSettleMin(w))
+                        this.core.placement.settleEnded(w, heldSlotOk());
                     return GLib.SOURCE_REMOVE;
                 }
                 { this.noteSettleFrame(w); }
@@ -469,6 +469,13 @@ export class Placement {
             return false;
         }
         if (this.core._landingGivenUp && this.core._landingGivenUp.has(win)) return false;
+        // A fullscreen or Mutter-sized window is not refusing its slot: the
+        // compositor owns the frame. Do not retry or float it, and clear the
+        // retry state a rapid toggle sequence may have accumulated.
+        if (win.is_fullscreen() || this.mutterSized(win)) {
+            this.clearLandingRetries(win);
+            return true;
+        }
         const f = win.get_frame_rect();
         // The deferred new-window placement must land PRECISELY (pure
         // mode): the 16px tolerance silently accepted off-landings like
@@ -506,7 +513,7 @@ export class Placement {
                 if (settling && stable && refusesShrink &&
                     this.applySettleFloor(win, { w: s.targetW, h: s.targetH }, f))
                     return true;
-                if (!settling && stable && refusesShrink) {
+                if (!settling && stable && refusesShrink && !this.mutterSized(win)) {
                     // The client has stopped changing at a size larger than
                     // its slot: it is honouring a real minimum. Record it and
                     // bend the split, then accept this frame instead of
@@ -548,10 +555,15 @@ export class Placement {
         }
     }
 
-    landingAccepted(win) {
+    clearLandingRetries(win) {
+        if (!win) return;
         if (this.core._landingRetries) this.core._landingRetries.delete(win);
         if (this.core._landingGivenUp) this.core._landingGivenUp.delete(win);
         if (this.core._mismatchFrames) this.core._mismatchFrames.delete(win);
+    }
+
+    landingAccepted(win) {
+        this.clearLandingRetries(win);
         if (this.core._pendingWarp && this.core._pendingWarp.has(win)) {
             this.core._pendingWarp.delete(win);
             this.core.windows.moveCursorToWindow(win);
@@ -574,12 +586,20 @@ export class Placement {
         }
     }
 
+    // A maximized or side-tiled frame is Mutter's size, not the client's:
+    // learning or bending to it would keep the window from fitting a slot
+    // again (Super+Left/Right and edge drops set the flags).
+    mutterSized(win) {
+        return !!(win && win.get_maximize_flags && win.get_maximize_flags() !== 0);
+    }
+
     recordObservedMin(win, frame, target) {
         // The window is stable at a size larger than its slot: it refused to
         // shrink. Remember that floor so the next partition allocates a slot it
         // will actually take (apps such as ghostty report no min width, so
         // get_min_size() can't tell us).
         if (!this.core._observedMinSizes || !win) return;
+        if (this.mutterSized(win)) return;
         // An explicit override is the authority; never learn a floor that
         // would silently beat it (and linger after the override is removed).
         if (this.core.bsp.hasMinSizeOverride(win)) return;
@@ -616,6 +636,7 @@ export class Placement {
         // exceed the slot become floors. The floor is never learned here: a
         // transient remembered frame (XWayland Emacs) must not persist;
         // finalizeSettleMin() promotes or reverts it when settle ends.
+        if (this.mutterSized(win)) return false;
         const tw = f.width > target.w + 16 ? Math.round(f.width) : 0;
         const th = f.height > target.h + 16 ? Math.round(f.height) : 0;
         if (!tw && !th) return false;
@@ -645,6 +666,7 @@ export class Placement {
         // real refusal; a frame that keeps moving is still restoring and is
         // left to the settle-end retile.
         if (!this.core._settings || !win || this.core._grabOp) return false;
+        if (this.mutterSized(win)) return false;
         if (!win._plaidSettleUntil || win._plaidSettleUntil <= Date.now()) return false;
         if (this.core._animWindows && this.core._animWindows.has(win)) return false;
         if (win._plaidSettleMin) return true;
@@ -769,6 +791,14 @@ export class Placement {
         return true;
     }
 
+    // Settle closed with no temporary floor: the hints count from here, so a
+    // window that is off its slot gets one retile to take them into account.
+    settleEnded(win, inSlot) {
+        if (inSlot || !this.core._settings || !win) return;
+        const ws = win.get_workspace();
+        if (ws) this.core.layouts.retileWorkspace(ws);
+    }
+
     releaseMinLimitedWindow(win) {
         if (!this.core._minLimitedWindows || !win) return;
         this.core._minLimitedWindows.delete(win);
@@ -796,6 +826,10 @@ export class Placement {
         if (!this.core._landingRetries || !this.core._landingGivenUp || !this.core._settings || !win) return;
         if (!win.get_compositor_private()) {
             this.core.debugLog(`anim: landing retry skipped (window gone) id=${win.get_id()}`);
+            return;
+        }
+        if (win.is_fullscreen() || this.mutterSized(win)) {
+            this.clearLandingRetries(win);
             return;
         }
         // A freshly placed client can still be restoring its own geometry.
@@ -857,7 +891,7 @@ export class Placement {
             if (this.core._landingGivenUp && this.core._landingGivenUp.has(win)) return GLib.SOURCE_REMOVE;
             // Window-liveness: _removeWindow prunes the given-up set on
             // close, so that guard no longer covers a window closed within
-            // this 200ms window — touching a finalized Meta.Window here
+            // this 200ms window — touching a finalized window here
             // throws inside the source callback.
             if (!win.get_compositor_private()) return GLib.SOURCE_REMOVE;
             const ws = win.get_workspace();

@@ -599,7 +599,8 @@ export class Layouts {
         if (tree) {
             const treeWins = this.core.bsp.bspCollectWindows(tree);
             for (const tw of treeWins) {
-                if (!tiledWindows.includes(tw)) {
+                if (!tiledWindows.includes(tw) &&
+                    !this.core.windows.isFullscreenTile(tw, workspace, mon)) {
                     tree = this.core.bsp.bspRemove(tree, tw);
                 }
             }

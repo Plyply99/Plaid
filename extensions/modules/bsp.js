@@ -3,6 +3,8 @@
 // Instance methods live on this subsystem class.
 // `this` (settings, _bspTrees, _dwindleLeafSigs, …) and call sites are unchanged.
 
+import Meta from 'gi://Meta';
+
 
 
 
@@ -355,6 +357,11 @@ export class Bsp {
         };
     }
 
+    isX11Client(win) {
+        return !!(win && win.get_client_type &&
+            win.get_client_type() === Meta.WindowClientType.X11);
+    }
+
     getWindowMinSize(win) {
         const entry = this.minSizeOverride(win);
         let w = 0;
@@ -369,11 +376,11 @@ export class Bsp {
             // placement and reports a matching minimum for a few seconds. Using
             // that as a partition floor walked the dwindle split by one title
             // bar per retile (1048 -> 1008 -> 969 -> 929 -> 889) and persisted
-            // the bent ratio. Ignore transient hints until the settle window
-            // closes; a temporary frame-based floor keeps the layout from
-            // overlapping the neighbour in the meantime. An explicit
+            // the bent ratio. Hold transient hints only for X11 clients: a
+            // Wayland client maps with its real minimum, so ignoring it tiles
+            // the window below that minimum until the next retile. An explicit
             // min-size override still wins (checked above).
-            if (win._plaidSettleUntil && win._plaidSettleUntil > Date.now()) {
+            if (win._plaidSettleUntil && win._plaidSettleUntil > Date.now() && this.isX11Client(win)) {
                 const temp = win._plaidSettleMin;
                 if (temp) return { w: Math.max(0, temp.w), h: Math.max(0, temp.h) };
                 return { w: 0, h: 0 };
@@ -476,6 +483,8 @@ export class Bsp {
         if (!node) return false;
         if (node.type === 'leaf') {
             if (!parent || !node.window) return false;
+            // A kept fullscreen leaf's frame is the monitor's, not its slot's.
+            if (node.window.is_fullscreen()) return false;
             const f = node.window.get_frame_rect();
             if (f.width === 0 || f.height === 0) return false;
             // parentAxis is the PARENT split's usable span (its w/h minus the

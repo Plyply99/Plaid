@@ -175,6 +175,7 @@ export class PlaidCore {
         this._grabWindow = null;
         this._grabStartX = 0;
         this._grabStartY = 0;
+        this._grabStartFrame = null;
         this._grabWidthSign = 0;
         this._grabHeightSign = 0;
         this._grabResizeNodeW = null;
