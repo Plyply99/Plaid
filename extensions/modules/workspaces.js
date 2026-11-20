@@ -63,7 +63,8 @@ export class Workspaces extends PlaidSubsystem {
         if (ws === this.core._backgroundAppParkingWs) return;
         const layout = this.core.windows.getWorkspaceLayout(ws);
         this.showPopup(`Workspace ${this.core.geometry.bgAppRealToDisplay(this.core.geometry.wsIndex(ws)) + 1}`,
-            `Layout: ${LAYOUT_NAMES[layout] || layout}`);
+            `Layout: ${LAYOUT_NAMES[layout] || layout}`, 3000, null,
+            global.display.get_current_monitor());
     }
 
     showPopup(title, subtitle = null, duration = 3000, onActivate = null, mon = -1) {

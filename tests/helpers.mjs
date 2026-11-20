@@ -202,6 +202,7 @@ function resetCoreState(core, settings) {
   core._floatHooks = new Map();
   core._windowMonitors = new Map();
   core._groupObjs = new Map();
+  core._fixedGroupObjs = new Map();
   core._monitorConnCache = null;
   core._monitorConnPartial = false;
   core._monitorsSettling = false;

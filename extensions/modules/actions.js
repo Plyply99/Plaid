@@ -285,11 +285,13 @@ export class Actions extends PlaidSubsystem {
             });
             this.core.bgApp.checkDynamicWorkspaces();
             if (this.core._settings.get_boolean('workspace-popup'))
-                this.core.workspaces.showPopup('Tiling Enabled');
+                this.core.workspaces.showPopup('Tiling Enabled', null, 3000, null,
+                    global.display.get_current_monitor());
         } else {
             this.core.windows.restoreSavedPositions();
             if (this.core._settings.get_boolean('workspace-popup'))
-                this.core.workspaces.showPopup('Tiling Disabled');
+                this.core.workspaces.showPopup('Tiling Disabled', null, 3000, null,
+                    global.display.get_current_monitor());
         }
     }
 
@@ -355,7 +357,8 @@ export class Actions extends PlaidSubsystem {
             this.core._workspaceLayouts.set(
                 this.core.monitors.groupKeyFor(this.core.geometry.wsIndex(ws), mon), next);
             this.core.layouts.retileWorkspace(ws);
-            this.core.workspaces.showPopup(`Layout: ${LAYOUT_NAMES[next] || next}`);
+            this.core.workspaces.showPopup(`Layout: ${LAYOUT_NAMES[next] || next}`,
+                null, 3000, null, mon);
             this.core.persistence.scheduleSaveLayouts();
         }
     }

@@ -37,42 +37,40 @@ export class Layouts {
             return;
         }
         if (this.core._grabOp) return;
-        const tiledWindows = this.core.windows.getWindowsForWorkspace(workspace)
-            .filter(w => !this.core.windows.isFloating(w));
-        if (tiledWindows.length === 0) {
-            return;
-        }
-        // Work-area guard: at login/monitor reconfig mutter can return a
-        // degenerate rect (a (5,4,1,1) garbage work area drove a
-        // false 1x1-slot retile that floated Firefox). Bail — the
-        // monitors-changed handler re-retiles once monitors settle, and the
-        // settle/re-assert machinery covers the gap.
+        const activeWs = global.workspace_manager.get_active_workspace();
         const monList = this.core.monitors.tiledMonitors();
-        let areaReady = false;
+        const groups = [];
         for (const mon of monList) {
-            if (this.core.geometry.isValidWorkArea(workspace.get_work_area_for_monitor(mon))) {
-                areaReady = true;
-                break;
-            }
+            // Fixed groups are monitor-wide: retile them from the active
+            // workspace's pass only, so they are not laid out once per
+            // workspace in the same cycle.
+            if (this.core.monitors.fixedModeFor(mon) && workspace !== activeWs)
+                continue;
+            const wins = this.core.monitors.getWindowsForGroup(workspace, mon)
+                .filter(w => !this.core.windows.isFloating(w));
+            if (wins.length === 0) continue;
+            // Work-area guard: at login/monitor reconfig mutter can return a
+            // degenerate rect (a (5,4,1,1) garbage work area drove a
+            // false 1x1-slot retile that floated Firefox).
+            if (!this.core.geometry.isValidWorkArea(workspace.get_work_area_for_monitor(mon)))
+                continue;
+            groups.push({ mon, wins });
         }
-        if (!areaReady) {
-            this.core.debugLog(`retile: skipped ws=${this.core.geometry.wsIndex(workspace)} (work area not ready)`);
+        if (groups.length === 0) {
             return;
         }
-        this.core.debugLog(`retile: ws=${this.core.geometry.wsIndex(workspace)} tiled=[${tiledWindows.map(w => w.get_wm_class_instance() || '?').join(',')}] ` +
-            `monitors=[${monList.join(',')}] animTime=${this.core.placement.getAnimationTime().toFixed(2)} animating=${this.core._animating}`);
+        const allWins = groups.flatMap(g => g.wins);
+        this.core.debugLog(`retile: ws=${this.core.geometry.wsIndex(workspace)} ` +
+            `tiled=[${allWins.map(w => w.get_wm_class_instance() || '?').join(',')}] ` +
+            `groups=[${groups.map(g => `${this.core.monitors.connectorOrFallback(g.mon)}:${g.wins.length}`).join(',')}] ` +
+            `animTime=${this.core.placement.getAnimationTime().toFixed(2)} animating=${this.core._animating}`);
 
         if (this.core.placement.getAnimationTime() > 0 && !this.core._grabOp) {
-            this.core.placement.animRetile(workspace, tiledWindows);
+            this.core.placement.animRetile(workspace, allWins);
             return;
         }
-        // NOTE: the instant (non-animated) retile branch that once lived
-        // here was DEAD CODE — _getAnimationTime() floors at 0.1 by design
-        // (never gate placement on St.Settings.enable_animations), so the
-        // animated path above is the only one that runs. The dead branch
-        // (direct retile + the _verifyRetileLandings check) was deleted; the
-        // animated path's completion (dec()) covers the _newWindowSet cleanup,
-        // the borders refresh, and the debounced layout save.
+        // NOTE: the instant (non-animated) retile branch is DEAD CODE —
+        // getAnimationTime() floors at 0.1 by design.
     }
 
     getMasterRatio(ws, mon) {

@@ -161,15 +161,8 @@ export class Monitors extends PlaidSubsystem {
     // their windows are not independently tiled.
     tiledMonitors() {
         const n = this.nMonitors();
-        if (n === 0) return [];
-        const primaryOnly = !!(this.core._mutterSettings &&
-            this.core._mutterSettings.get_boolean('workspaces-only-on-primary'));
-        const primary = this.primaryMonitorIndex();
         const out = [];
-        for (let i = 0; i < n; i++) {
-            if (primaryOnly && i !== primary) continue;
-            out.push(i);
-        }
+        for (let i = 0; i < n; i++) out.push(i);
         return out;
     }
 
@@ -224,6 +217,24 @@ export class Monitors extends PlaidSubsystem {
 
     getWindowsForGroup(ws, mon) {
         const connector = this.connectorOrFallback(mon);
+        if (this.fixedModeFor(mon)) {
+            // Fixed groups span workspaces: Mutter keeps these windows visible
+            // across workspace switches.
+            const seen = new Set();
+            const out = [];
+            const wm = global.workspace_manager;
+            if (!wm) return out;
+            for (let i = 0; i < wm.get_n_workspaces(); i++) {
+                const w = wm.get_workspace_by_index(i);
+                if (!w) continue;
+                for (const win of this.core.windows.getWindowsForWorkspace(w)) {
+                    if (seen.has(win)) continue;
+                    seen.add(win);
+                    if (this.windowMonitor(win) === connector) out.push(win);
+                }
+            }
+            return out;
+        }
         return this.core.windows.getWindowsForWorkspace(ws)
             .filter(w => this.windowMonitor(w) === connector);
     }
@@ -250,6 +261,7 @@ export class Monitors extends PlaidSubsystem {
     }
 
     groupObj(ws, mon) {
+        if (this.fixedModeFor(mon)) return this.fixedGroupObj(mon);
         if (!ws) return null;
         if (this.isKeyedPrimary(mon)) return ws;
         return this.groupObjFor(ws, this.connectorOrFallback(mon));
@@ -269,10 +281,44 @@ export class Monitors extends PlaidSubsystem {
         return connector === keyed;
     }
 
+    // Non-primary monitors use one workspace-independent group while GNOME
+    // keeps workspaces on the primary display. Mutter shows their windows on
+    // every workspace, so a per-workspace arrangement has no meaning there.
+    fixedModeFor(mon) {
+        if (!this.core._mutterSettings) return false;
+        if (!this.core._mutterSettings.get_boolean('workspaces-only-on-primary'))
+            return false;
+        if (this.nMonitors() <= 1) return false;
+        return mon !== this.primaryMonitorIndex();
+    }
+
+    fixedKey(mon) {
+        return `m@${this.connectorOrFallback(mon)}`;
+    }
+
+    fixedGroupObj(mon) {
+        const connector = this.connectorOrFallback(mon);
+        if (!this.core._fixedGroupObjs) return null;
+        let group = this.core._fixedGroupObjs.get(connector);
+        if (!group) {
+            group = {
+                plaidGroup: true,
+                fixed: true,
+                workspace: null,
+                monitor: mon,
+                connector,
+                key: `m@${connector}`,
+            };
+            this.core._fixedGroupObjs.set(connector, group);
+        }
+        return group;
+    }
+
     // The group key for a workspace on a monitor: the keyed primary keeps the
     // bare index (the pre-multi-monitor keys), every other monitor appends its
     // connector.
     groupKeyFor(wsIndex, mon) {
+        if (this.fixedModeFor(mon)) return this.fixedKey(mon);
         const idx = parseInt(wsIndex, 10);
         if (this.isKeyedPrimary(mon)) return idx;
         return groupKey(idx, this.connectorOrFallback(mon));
@@ -284,8 +330,13 @@ export class Monitors extends PlaidSubsystem {
         if (!map || !oldConn || !newConn || oldConn === newConn) return;
         const moved = new Map();
         for (const [key, value] of map) {
-            if (typeof key === 'string' && !key.endsWith(`@${newConn}`))
+            // Fixed-mode keys ("m@CONN") are monitor-scoped, not workspace
+            // scoped, and must never take part in a primary rekey.
+            if (typeof key === 'string' && key.startsWith('m@') ) {
                 moved.set(key, value);
+            } else if (typeof key === 'string' && !key.endsWith(`@${newConn}`)) {
+                moved.set(key, value);
+            }
         }
         for (const [key, value] of map) {
             if (typeof key === 'number')

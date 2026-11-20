@@ -450,7 +450,7 @@ export class Grab extends PlaidSubsystem {
         const group = this.core.monitors.groupObj(ws, mon);
         const conn = (mon === undefined || mon === null)
             ? null : this.core.monitors.connectorOrFallback(mon);
-        const groupTiled = () => this.core.windows.getWindowsForWorkspace(ws)
+        const groupTiled = () => this.core.monitors.getWindowsForGroup(ws, mon)
             .filter(w => !this.core.windows.isFloating(w) &&
                 (!conn || this.core.monitors.windowMonitor(w) === conn));
         if (groupTiled().length === 1)

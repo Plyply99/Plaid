@@ -140,10 +140,46 @@ export class Persistence {
             this.core._settings.set_strv('workspace-dwindle-trees', bareDwindle);
         }
 
+        const fixedLayouts = new Map();
+        for (const [key, value] of this.core._persistedLayoutByIndex || [])
+            if (typeof key === 'string' && key.startsWith('m@')) fixedLayouts.set(key.substring(2), value);
+        for (const [key, value] of this.core._workspaceLayouts || [])
+            if (typeof key === 'string' && key.startsWith('m@')) fixedLayouts.set(key.substring(2), value);
+
+        const fixedMaster = new Map();
+        for (const [key, value] of this.core._persistedMasterByIndex || [])
+            if (typeof key === 'string' && key.startsWith('m@')) fixedMaster.set(key.substring(2), String(value));
+        for (const [key, value] of this.core._masterRatios || [])
+            if (typeof key === 'string' && key.startsWith('m@')) fixedMaster.set(key.substring(2), String(value));
+
+        const fixedStack = new Map();
+        const addFixedStack = (key, map) => {
+            const parts = [];
+            for (const [k, v] of map || []) parts.push(`${k}:${v}`);
+            if (parts.length) fixedStack.set(key.substring(2), parts.join(','));
+        };
+        for (const [key, map] of this.core._persistedStackByIndex || [])
+            if (typeof key === 'string' && key.startsWith('m@')) addFixedStack(key, map);
+        for (const [key, map] of this.core._stackRatios || [])
+            if (typeof key === 'string' && key.startsWith('m@')) addFixedStack(key, map);
+
+        const fixedDwindle = new Map();
+        for (const [key, shape] of dwindleRaw)
+            if (typeof key === 'string' && key.startsWith('m@')) fixedDwindle.set(key.substring(2), shape);
+        for (const [connector, group] of this.core._fixedGroupObjs || []) {
+            const tree = this.core._bspTrees.get(group);
+            if (!tree || tree.type !== 'split') continue;
+            fixedDwindle.set(connector, this.core.bsp.dwindleShapeToString(tree));
+        }
+
         this.saveMonitorEntries('monitor-workspace-layouts', layoutEntries);
         this.saveMonitorEntries('monitor-workspace-master-ratios', masterEntries);
         this.saveMonitorEntries('monitor-workspace-stack-ratios', stackEntries);
         this.saveMonitorEntries('monitor-workspace-dwindle-trees', monitorDwindle);
+        this.saveFixedEntries('monitor-fixed-layouts', fixedLayouts);
+        this.saveFixedEntries('monitor-fixed-master-ratios', fixedMaster);
+        this.saveFixedEntries('monitor-fixed-stack-ratios', fixedStack);
+        this.saveFixedEntries('monitor-fixed-dwindle-trees', fixedDwindle);
 
         const keyedPrimary = this.core._keyedPrimary || this.core.monitors.primaryConnector();
         this.core._settings.set_string('monitor-primary-connector',
@@ -159,6 +195,8 @@ export class Persistence {
             const sep = rest.indexOf(':');
             raw.set(key, rest.substring(sep + 1));
         }
+        for (const [connector, shape] of fixedDwindle)
+            raw.set(`m@${connector}`, shape);
         this.core._persistedDwindleRaw = raw;
 
         this.core.debugLog(`persisted layouts: ${bareLayouts.length} ws, ${bareMaster.length} master, ` +
@@ -184,6 +222,25 @@ export class Persistence {
             const at = key.indexOf('@');
             if (at <= 0) continue;
             const encoded = encodeMonitorEntry(key.substring(at + 1), value);
+            if (encoded) out.push(encoded);
+        }
+        this.core._settings.set_strv(settingKey, out);
+    }
+
+    // Fixed-mode entries are CONNECTOR:VALUE (no workspace index). Preserve
+    // entries for monitors that are not currently connected.
+    saveFixedEntries(settingKey, entries) {
+        const connected = new Set(this.core.monitors.connectors().filter(Boolean));
+        const merged = new Map();
+        for (const raw of this.core._settings.get_strv(settingKey) || []) {
+            const decoded = decodeMonitorEntry(raw);
+            if (!decoded || connected.has(decoded.connector)) continue;
+            merged.set(decoded.connector, decoded.value);
+        }
+        for (const [connector, value] of entries) merged.set(connector, value);
+        const out = [];
+        for (const [connector, value] of merged) {
+            const encoded = encodeMonitorEntry(connector, value);
             if (encoded) out.push(encoded);
         }
         this.core._settings.set_strv(settingKey, out);
@@ -248,6 +305,26 @@ export class Persistence {
                 if (decoded) fn(decoded.connector, decoded.value);
             }
         };
+        each('monitor-fixed-layouts', (connector, value) => {
+            if (!validLayouts.includes(value)) return;
+            this.core._persistedLayoutByIndex.set(`m@${connector}`, value);
+        });
+        each('monitor-fixed-master-ratios', (connector, value) => {
+            const ratio = parseFloat(value);
+            if (!Number.isFinite(ratio) || ratio < 0.05 || ratio > 0.95) return;
+            this.core._persistedMasterByIndex.set(`m@${connector}`, ratio);
+        });
+        each('monitor-fixed-stack-ratios', (connector, value) => {
+            const map = new Map();
+            for (const part of value.split(',')) {
+                const [kStr, vStr] = part.split(':');
+                const k = parseInt(kStr, 10);
+                const v = parseFloat(vStr);
+                if (k >= 0 && Number.isFinite(v) && v > 0) map.set(k, v);
+            }
+            if (map.size > 0)
+                this.core._persistedStackByIndex.set(`m@${connector}`, map);
+        });
         each('monitor-workspace-layouts', (connector, rest) => {
             const sep = rest.indexOf(':');
             if (sep <= 0) return;
@@ -301,6 +378,16 @@ export class Persistence {
             if (shape) {
                 map.set(idx, shape);
                 raw.set(idx, shapeStr);
+            }
+        }
+        for (const entry of (this.core._settings.get_strv('monitor-fixed-dwindle-trees') || [])) {
+            const decoded = decodeMonitorEntry(entry);
+            if (!decoded) continue;
+            const shape = this.core.bsp.dwindleShapeFromString(decoded.value);
+            if (shape) {
+                const key = `m@${decoded.connector}`;
+                map.set(key, shape);
+                raw.set(key, decoded.value);
             }
         }
         for (const entry of (this.core._settings.get_strv('monitor-workspace-dwindle-trees') || [])) {

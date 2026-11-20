@@ -142,12 +142,69 @@ test('Monitors: a keyed primary rekeys which monitor owns the bare index', () =>
   });
 });
 
-test('Monitors: tiledMonitors honours workspaces-only-on-primary', () => {
+test('Monitors: every display tiles, in either workspace mode', () => {
   withMonitors(0, () => {
     const all = new Monitors({ _monitorConnCache: null, _mutterSettings: { get_boolean: () => false } });
     assert.deepEqual(all.tiledMonitors(), [0, 1, 2]);
     const primaryOnly = new Monitors({ _monitorConnCache: null, _mutterSettings: { get_boolean: () => true } });
-    assert.deepEqual(primaryOnly.tiledMonitors(), [0]);
+    assert.deepEqual(primaryOnly.tiledMonitors(), [0, 1, 2]);
+  });
+});
+
+test('Monitors: non-primary displays use workspace-independent groups', () => {
+  withMonitors(0, () => {
+    const m = new Monitors({
+      _monitorConnCache: null,
+      _fixedGroupObjs: new Map(),
+      _groupObjs: new Map(),
+      _mutterSettings: { get_boolean: () => true },
+      geometry: { wsIndex: () => 2 },
+    });
+    assert.equal(m.fixedModeFor(0), false, 'primary stays per workspace');
+    assert.equal(m.fixedModeFor(1), true);
+    assert.equal(m.groupKeyFor(2, 1), 'm@DP-1');
+    const ws = {};
+    const group = m.groupObj(ws, 1);
+    assert.equal(group.fixed, true);
+    assert.equal(group.key, 'm@DP-1');
+    assert.equal(m.groupObj(ws, 1), group, 'one group per connector');
+
+    m.core._mutterSettings = { get_boolean: () => false };
+    assert.equal(m.fixedModeFor(1), false);
+    assert.equal(m.groupKeyFor(2, 1), '2@DP-1');
+  });
+});
+
+test('Monitors: a fixed group collects its monitor windows across workspaces', () => {
+  withMonitors(0, () => {
+    const ws1 = {};
+    const ws2 = {};
+    const a = fakeWin({ id: 1, monitor: 1 });
+    const b = fakeWin({ id: 2, monitor: 1 });
+    const c = fakeWin({ id: 3, monitor: 0 });
+    const core = {
+      _monitorConnCache: null,
+      _windowMonitors: new Map(),
+      _mutterSettings: { get_boolean: () => true },
+      windows: {
+        getWindowsForWorkspace: (w) => w === ws1 ? [a, c] : [b],
+      },
+    };
+    const oldWm = globalThis.global.workspace_manager;
+    globalThis.global.workspace_manager = {
+      get_n_workspaces: () => 2,
+      get_workspace_by_index: (i) => (i === 0 ? ws1 : ws2),
+    };
+    try {
+      const m = new Monitors(core);
+      m.setWindowMonitor(a, 1);
+      m.setWindowMonitor(b, 1);
+      m.setWindowMonitor(c, 0);
+      assert.deepEqual(m.getWindowsForGroup(ws1, 1).map(w => w.get_id()), [1, 2]);
+      assert.deepEqual(m.getWindowsForGroup(ws1, 0).map(w => w.get_id()), [3]);
+    } finally {
+      globalThis.global.workspace_manager = oldWm;
+    }
   });
 });
 

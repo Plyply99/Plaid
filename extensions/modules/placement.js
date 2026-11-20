@@ -335,19 +335,19 @@ export class Placement {
     checkWorkspaceLandings(ws) {
         if (!this.core._settings || this.core._shuttingDown || !this.core._settings.get_boolean('enabled')) return;
         if (this.core._grabOp) return;
-        const tiled = this.core.windows.getWindowsForWorkspace(ws).filter(w => !this.core.windows.isFloating(w));
-        if (tiled.length === 0) return;
         const gap = this.core._settings.get_int('inside-gap');
+        const activeWs = global.workspace_manager.get_active_workspace();
         for (const mon of this.core.monitors.tiledMonitors()) {
-            this.checkGroupLandings(ws, mon, tiled, gap);
+            if (this.core.monitors.fixedModeFor(mon) && ws !== activeWs) continue;
+            this.checkGroupLandings(ws, mon, gap);
         }
     }
 
-    checkGroupLandings(ws, mon, tiled, gap) {
+    checkGroupLandings(ws, mon, gap) {
         const layout = this.core.windows.getWorkspaceLayout(ws, mon);
         if (layout === 'floating') return;
-        const conn = this.core.monitors.connectorOrFallback(mon);
-        const groupWins = tiled.filter(w => this.core.monitors.windowMonitor(w) === conn);
+        const groupWins = this.core.monitors.getWindowsForGroup(ws, mon)
+            .filter(w => !this.core.windows.isFloating(w));
         if (groupWins.length === 0) return;
         const workArea = ws.get_work_area_for_monitor(mon);
         if (!workArea || workArea.width === 0) return;
@@ -923,12 +923,17 @@ export class Placement {
         this.core._animTargets = new Map();
 
         const layoutGroups = this.core.monitors.tiledMonitors();
+        const activeWs = global.workspace_manager.get_active_workspace();
+        const allGroupWins = new Set();
         for (const mon of layoutGroups) {
-            const conn = this.core.monitors.connectorOrFallback(mon);
-            const groupWins = tiledWindows.filter(w => this.core.monitors.windowMonitor(w) === conn);
+            if (this.core.monitors.fixedModeFor(mon) && workspace !== activeWs)
+                continue;
+            const groupWins = this.core.monitors.getWindowsForGroup(workspace, mon)
+                .filter(w => !this.core.windows.isFloating(w));
             if (groupWins.length === 0) continue;
             if (!this.core.geometry.isValidWorkArea(workspace.get_work_area_for_monitor(mon)))
                 continue;
+            for (const w of groupWins) allGroupWins.add(w);
             const layout = this.core.windows.getWorkspaceLayout(workspace, mon);
             if (layout === 'floating') {
                 // GNOME owns floating placement; the fade-in choreography just
@@ -952,7 +957,7 @@ export class Placement {
             this.core.debugLog('anim: no targets (bail)');
             this.core._animTargets = null;
             this.core._animWindows = null;
-            for (const win of tiledWindows) this.core._newWindowSet.delete(win);
+            for (const win of allGroupWins) this.core._newWindowSet.delete(win);
             this.core.signals.scheduleBorders();
             return;
         }
@@ -984,7 +989,7 @@ export class Placement {
                 this.core._animating = false;
                 this.core._animWindows = null;
                 this.core.debugLog(`anim: done ws=${this.core.geometry.wsIndex(workspace)} queued=${this.core._queuedAnimWorkspaces.size}`);
-                for (const w of tiledWindows) this.core._newWindowSet.delete(w);
+                for (const w of allGroupWins) this.core._newWindowSet.delete(w);
                 this.core._animStates = null;
                 this.core.persistence.scheduleSaveLayouts();
                 this.core.signals.scheduleBorders();

@@ -256,7 +256,7 @@ export class Bsp {
             // runs before the retile's own prune, so a ghost leaf left from a
             // just-closed window would otherwise shape the split (and put the
             // new window somewhere unrelated to the pointer).
-            const live = this.core.windows.getWindowsForWorkspace(ws)
+            const live = this.core.monitors.getWindowsForGroup(ws, mon)
                 .filter(w => !this.core.windows.isFloating(w));
             for (const tw of this.bspCollectWindows(tree)) {
                 if (!live.includes(tw)) tree = this.bspRemove(tree, tw);

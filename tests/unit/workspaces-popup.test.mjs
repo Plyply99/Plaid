@@ -59,3 +59,20 @@ test('workspaces: an explicit popup monitor wins over focus', () => {
     display.get_monitor_geometry = old.geometry;
   }
 });
+
+test('workspaces: the workspace popup targets the pointer monitor', () => {
+  const self = makeSelf({ layout: 'dwindle' });
+  self.geometry.wsIndex = () => 1;
+  self.geometry.bgAppRealToDisplay = (i) => i;
+  const display = globalThis.global.display;
+  const old = display.get_current_monitor;
+  display.get_current_monitor = () => 1;
+  const calls = [];
+  self.workspaces.showPopup = (...args) => calls.push(args);
+  try {
+    self.workspaces.showWorkspacePopup({});
+  } finally {
+    display.get_current_monitor = old;
+  }
+  assert.equal(calls[0][4], 1, 'monitor argument is the pointer monitor');
+});

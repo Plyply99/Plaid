@@ -398,9 +398,12 @@ export class Windows extends PlaidSubsystem {
     // window's monitor can already point elsewhere (or -1), and a leaf left
     // behind would shape the next window's insertion split.
     forgetWindowTree(ws, win) {
-        if (!ws || !win) return;
+        if (!win) return;
         const groups = [ws, ...(this.core._groupObjs?.get(ws)?.values() ?? [])];
+        for (const group of this.core._fixedGroupObjs?.values() ?? [])
+            groups.push(group);
         for (const group of groups) {
+            if (!group) continue;
             const tree = this.core.bsp.bspGetTree(group);
             if (tree && this.core.bsp.bspCollectWindows(tree).includes(win))
                 this.core._bspTrees.set(group, this.core.bsp.bspRemove(tree, win));

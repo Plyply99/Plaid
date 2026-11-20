@@ -254,6 +254,7 @@ export class PlaidCore {
         this._floatHooks = new Map();
         this._windowMonitors = new Map();
         this._groupObjs = new Map();
+        this._fixedGroupObjs = new Map();
         this._monitorConnCache = null;
         this._monitorConnPartial = false;
         this._monitorsSettling = false;
@@ -437,6 +438,7 @@ export class PlaidCore {
             this._windowMonitors = s.windowMonitors;
         }
         if (s.groupObjs) this._groupObjs = s.groupObjs;
+        if (s.fixedGroupObjs) this._fixedGroupObjs = s.fixedGroupObjs;
         if (s.keyedPrimary !== undefined) this._keyedPrimary = s.keyedPrimary;
         this._monitorConnCache = null;
         this._lastFocusedPerWorkspace = s.lastFocusedPerWorkspace;
@@ -501,6 +503,7 @@ export class PlaidCore {
                 windowWSIndices: this._windowWSIndices,
                 windowMonitors: this._windowMonitors,
                 groupObjs: this._groupObjs,
+                fixedGroupObjs: this._fixedGroupObjs,
                 keyedPrimary: this._keyedPrimary,
                 lastFocusedPerWorkspace: this._lastFocusedPerWorkspace,
                 lastRealFocusedWindow: this._lastRealFocusedWindow,
@@ -583,6 +586,7 @@ export class PlaidCore {
         this._scratchpadVisible = false;
         this._windowMonitors = null;
         this._groupObjs = null;
+        this._fixedGroupObjs = null;
         this._monitorConnCache = null;
         this._monitorConnPartial = false;
         this._monitorsSettling = false;

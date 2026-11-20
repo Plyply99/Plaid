@@ -234,6 +234,33 @@
       <description>Set after the one-time prompt about GNOME's "workspaces on the primary display only" setting, whether the user enabled it, declined, or it was already off. Plaid never asks again once this is true</description>
     </key>
 
+    <!-- Fixed-mode rules: used for non-primary monitors while GNOME keeps
+         workspaces on the primary display only. One arrangement per connector,
+         independent of workspaces. -->
+    <key name="monitor-fixed-layouts" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered layouts for workspace-independent monitors</summary>
+      <description>Entries of the form "CONNECTOR:LAYOUT" for non-primary monitors while workspaces stay on the primary display</description>
+    </key>
+
+    <key name="monitor-fixed-master-ratios" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered master ratios for workspace-independent monitors</summary>
+      <description>Entries of the form "CONNECTOR:RATIO" for non-primary monitors while workspaces stay on the primary display</description>
+    </key>
+
+    <key name="monitor-fixed-stack-ratios" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Remembered stack ratios for workspace-independent monitors</summary>
+      <description>Entries of the form "CONNECTOR:SLOT:WEIGHT,SLOT:WEIGHT" for non-primary monitors while workspaces stay on the primary display</description>
+    </key>
+
+    <key name="monitor-fixed-dwindle-trees" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Persisted dwindle arrangements for workspace-independent monitors</summary>
+      <description>Entries of the form "CONNECTOR:SHAPE" for non-primary monitors while workspaces stay on the primary display</description>
+    </key>
+
     <key name="monitor-workspace-layouts" type="as">
       <default><![CDATA[[]]]></default>
       <summary>Remembered layouts per (workspace, monitor) group</summary>

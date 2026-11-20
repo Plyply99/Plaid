@@ -97,3 +97,29 @@ test('persistence: bare keys are left alone while the keyed primary is absent', 
     assert.equal(self._settings.get_string('monitor-primary-connector'), 'HDMI-9');
   });
 });
+
+test('persistence: loads and saves fixed-mode rules per connector', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({
+      'monitor-fixed-layouts': ['DP-1:dwindle', 'HDMI-9:floating'],
+      'monitor-fixed-master-ratios': ['DP-1:0.6'],
+      'monitor-fixed-stack-ratios': ['DP-1:0:1.0,1:0.5'],
+      'monitor-fixed-dwindle-trees': ['DP-1:h0.5000(l,l)'],
+    });
+
+    self.persistence.loadPersistedLayoutRules();
+    assert.equal(self._persistedLayoutByIndex.get('m@DP-1'), 'dwindle');
+    assert.equal(self._persistedMasterByIndex.get('m@DP-1'), 0.6);
+    assert.deepEqual([...self._persistedStackByIndex.get('m@DP-1')], [[0, 1], [1, 0.5]]);
+    assert.equal(self._persistedDwindleRaw.get('m@DP-1'), 'h0.5000(l,l)');
+
+    self._workspaceLayouts.set('m@DP-1', 'master-stack');
+    self.geometry.wsIndex = () => 2;
+    self.persistence.savePersistedLayouts();
+
+    const layouts = self._settings.get_strv('monitor-fixed-layouts');
+    assert.ok(layouts.includes('DP-1:master-stack'));
+    assert.ok(layouts.includes('HDMI-9:floating'), 'disconnected connector preserved');
+    assert.ok(self._settings.get_strv('monitor-fixed-master-ratios').includes('DP-1:0.6'));
+  });
+});
