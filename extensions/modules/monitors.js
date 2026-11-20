@@ -218,9 +218,22 @@ export class Monitors extends PlaidSubsystem {
         const connector = this.connectorOrFallback(mon);
         if (this.fixedModeFor(mon)) {
             // Fixed groups span workspaces: Mutter keeps these windows visible
-            // across workspace switches.
+            // across workspace switches. Prefer the managed set — the
+            // per-workspace order can disagree with the live workspace of a
+            // sticky secondary window, which made it invisible to focus.
             const seen = new Set();
             const out = [];
+            const managed = this.core._windowWorkspaces;
+            if (managed && managed.size > 0) {
+                for (const win of managed.keys()) {
+                    if (seen.has(win) || win.minimized) continue;
+                    if (win === this.core._backgroundAppWin) continue;
+                    if (this.windowMonitor(win) !== connector) continue;
+                    seen.add(win);
+                    out.push(win);
+                }
+                return out;
+            }
             const wm = global.workspace_manager;
             if (!wm) return out;
             for (let i = 0; i < wm.get_n_workspaces(); i++) {

@@ -41,6 +41,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Rapid fullscreen toggles no longer float the window.** A window caught
   mid-transition is no longer retried or auto-floated; each toggle starts a
   fresh landing cycle.
+- **Secondary-display focus works in fixed mode.** Keyboard focus and swap, and
+  pointer hover, can reach a window on a secondary display without clicking it
+  first.
 
 ## v51.30 — 2026-11-16
 

@@ -82,14 +82,26 @@ export class PointerFocus extends PlaidSubsystem {
         const candidates = [];
         const under = [];
         let total = 0;
-        const activeWs = global.workspace_manager.get_active_workspace();
-        for (let i = 0; i < global.workspace_manager.get_n_workspaces(); i++) {
-            const ws = global.workspace_manager.get_workspace_by_index(i);
-            if (ws !== activeWs) continue;
-            if (ws === this.core._backgroundAppParkingWs) continue;
+        const wm = global.workspace_manager;
+        const activeWs = wm.get_active_workspace();
+        // Fixed-group monitors show their windows on every workspace. Include
+        // them here, or a visible secondary window can never be a hover target.
+        const fixedConns = new Set();
+        for (const mon of this.core.monitors.tiledMonitors()) {
+            if (this.core.monitors.fixedModeFor(mon))
+                fixedConns.add(this.core.monitors.connectorOrFallback(mon));
+        }
+        const seen = new Set();
+        for (let i = 0; i < wm.get_n_workspaces(); i++) {
+            const ws = wm.get_workspace_by_index(i);
+            if (!ws || ws === this.core._backgroundAppParkingWs) continue;
             for (const win of ws.list_windows()) {
+                if (!win || seen.has(win)) continue;
+                if (ws !== activeWs &&
+                    !fixedConns.has(this.core.monitors.windowMonitor(win)))
+                    continue;
+                seen.add(win);
                 total++;
-                if (!win) continue;
                 // Minimized windows are invisible: not a hover target, and
                 // never a reach-through blocker (a hidden DDT / scratchpad
                 // / Super+H window whose frame overlaps the pointer would

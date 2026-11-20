@@ -35,11 +35,12 @@ export class Actions extends PlaidSubsystem {
     moveFocus(direction) {
         const focused = this.getActiveWindow();
         if (!focused) return;
-        const ws = focused.get_workspace();
+        const ws = global.workspace_manager.get_active_workspace();
         if (!ws) return;
 
-        const windows = this.core.windows.getWindowsForWorkspace(ws)
-            .filter(w => !this.core.windows.isFloating(w));
+        // Fixed-group windows on secondary displays are visible here even
+        // though their Meta workspace can differ from the active one.
+        const windows = this.core.windows.getVisibleTiledWindows(ws);
         if (windows.length <= 1) return;
 
         const bestWindow = this.core.bsp.findDirectionalTarget(focused, direction, windows);
@@ -57,20 +58,22 @@ export class Actions extends PlaidSubsystem {
             this.moveFloating(focused, direction);
             return;
         }
-        const ws = focused.get_workspace();
-        if (!ws) return;
         const mon = focused.get_monitor();
         if (!this.core.monitors.monitorTiled(mon)) {
             this.moveFloating(focused, direction);
             return;
         }
+        const focusedWs = focused.get_workspace();
+        const activeWs = global.workspace_manager.get_active_workspace();
+        const ws = activeWs || focusedWs;
+        if (!ws) return;
         if (this.core.windows.getWorkspaceLayout(ws, mon) === 'floating') {
             this.moveFloating(focused, direction);
             return;
         }
 
-        const windows = this.core.windows.getWindowsForWorkspace(ws)
-            .filter(w => !this.core.windows.isFloating(w));
+        // Include fixed-group windows from other workspaces.
+        const windows = this.core.windows.getVisibleTiledWindows(ws);
         if (windows.length <= 1) return;
 
         const bestWindow = this.core.bsp.findDirectionalTarget(focused, direction, windows);
