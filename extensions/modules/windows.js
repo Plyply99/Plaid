@@ -674,6 +674,36 @@ export class Windows extends PlaidSubsystem {
         return this.getVisibleWindows(ws).filter(w => !this.isFloating(w));
     }
 
+    // Flair is not limited to focus candidates: Steam-style popups are
+    // skip-taskbar/transient floats and still need borders, masks and blur.
+    // Include normal windows on the active workspace plus every workspace of a
+    // fixed-mode monitor, regardless of taskbar/transient state.
+    getVisibleFlairWindows(ws = global.workspace_manager.get_active_workspace()) {
+        const wm = global.workspace_manager;
+        const seen = new Set();
+        const out = [];
+        const fixedConns = new Set();
+        for (const mon of this.core.monitors.tiledMonitors()) {
+            if (this.core.monitors.fixedModeFor(mon))
+                fixedConns.add(this.core.monitors.connectorOrFallback(mon));
+        }
+        for (let i = 0; i < wm.get_n_workspaces(); i++) {
+            const w = wm.get_workspace_by_index(i);
+            if (!w || w === this.core._backgroundAppParkingWs) continue;
+            for (const win of w.list_windows()) {
+                if (!win || seen.has(win)) continue;
+                if (w !== ws &&
+                    !fixedConns.has(this.core.monitors.windowMonitor(win)))
+                    continue;
+                if (win.minimized) continue;
+                if (win.get_window_type() !== Meta.WindowType.NORMAL) continue;
+                seen.add(win);
+                out.push(win);
+            }
+        }
+        return out;
+    }
+
     getWindowsForWorkspace(workspace) {
         const order = this.getWorkspaceOrder(workspace);
         const targetIndex = this.core.geometry.wsIndex(workspace);

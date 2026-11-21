@@ -335,7 +335,7 @@ test('doUpdateBorders: rounded corners at radius 0 draws the border through the 
   const win = fakeWin({ clientType: 0, actor: {} });
   const maskRadii = [];
   let widgets = 0;
-  self.windows.getVisibleWindows = () => [win];
+  self.windows.getVisibleFlairWindows = () => [win];
   self.masks.ensureWindowMask = (_win, _actor, radius) => maskRadii.push(radius);
   self.borders.ensureWindowBorder = () => widgets++;
   self.borders.syncBorderAnimation = () => {};

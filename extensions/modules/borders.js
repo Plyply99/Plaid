@@ -681,8 +681,9 @@ export class Borders extends PlaidSubsystem {
         if (!ws) return;
 
         // Fixed-group secondary windows stay visible across workspaces; the
-        // active-workspace walk alone left their focus border stale.
-        const visible = this.core.windows.getVisibleWindows(ws);
+        // active-workspace walk alone left their focus border stale. Flair
+        // also needs skip-taskbar/transient popups, which focus excludes.
+        const visible = this.core.windows.getVisibleFlairWindows(ws);
         for (const win of visible) {
             if (this.core.windows.isFloating(win)) continue;
             // Recorded again only once this pass lays the window out

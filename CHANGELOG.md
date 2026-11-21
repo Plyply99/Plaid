@@ -17,6 +17,9 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **A square border stays inside the window frame.** With Rounded Corners on
   and radius 0, the border now uses the same inside-mask path as every other
   radius instead of switching to a widget border drawn outside the frame.
+- **Steam popups keep their Flair again.** Skip-taskbar and transient floating
+  windows are picked up by the border, mask and blur pass without becoming
+  keyboard or hover targets.
 
 ## v51.31 — 2026-11-20
 

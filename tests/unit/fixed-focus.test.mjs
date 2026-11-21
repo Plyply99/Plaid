@@ -97,6 +97,8 @@ test('doUpdateBorders: a fixed secondary window on another workspace is styled',
     const { self, primary, dp } = fixedSelf(ws1, ws2,
       { 'borders-enabled': true, 'rounded-corners': false, 'window-blur': false });
     globalThis.global.display.focus_window = dp;
+    ws1.list_windows = () => [dp];
+    ws2.list_windows = () => [primary];
     const seen = [];
     self.borders.ensureWindowBorder = (win) => { seen.push(win); return true; };
     self.borders.syncBorderAnimation = () => {};
@@ -106,6 +108,39 @@ test('doUpdateBorders: a fixed secondary window on another workspace is styled',
 
     assert.ok(seen.includes(dp), 'fixed secondary window styled');
     assert.ok(seen.includes(primary), 'active-workspace window styled');
+  });
+});
+
+test('getVisibleFlairWindows: includes skip-taskbar popups that focus excludes', () => {
+  withFixedMonitors((ws1, ws2) => {
+    const { self, primary } = fixedSelf(ws1, ws2);
+    const popup = fakeWin({ id: 4, monitor: 0, skipTaskbar: true, transientFor: {} });
+    popup.get_workspace = () => ws2;
+    self._windowWorkspaces.set(popup, ws2);
+    self._windowMonitors.set(popup, 'HDMI-1');
+    self._workspaceOrders.set(ws2, [primary, popup]);
+    ws1.list_windows = () => [];
+    ws2.list_windows = () => [primary, popup];
+
+    const flair = self.windows.getVisibleFlairWindows(ws2).map(w => w.get_id());
+    const focus = self.windows.getVisibleTiledWindows(ws2).map(w => w.get_id());
+    assert.ok(flair.includes(popup.get_id()));
+    assert.ok(!focus.includes(popup.get_id()));
+  });
+});
+
+test('getVisibleFlairWindows: includes a fixed secondary popup from another workspace', () => {
+  withFixedMonitors((ws1, ws2) => {
+    const { self, dp } = fixedSelf(ws1, ws2);
+    const popup = fakeWin({ id: 5, monitor: 1, skipTaskbar: true, transientFor: {} });
+    popup.get_workspace = () => ws1;
+    self._windowWorkspaces.set(popup, ws1);
+    self._windowMonitors.set(popup, 'DP-1');
+    ws1.list_windows = () => [dp, popup];
+    ws2.list_windows = () => [];
+
+    const flair = self.windows.getVisibleFlairWindows(ws2).map(w => w.get_id());
+    assert.ok(flair.includes(popup.get_id()));
   });
 });
 

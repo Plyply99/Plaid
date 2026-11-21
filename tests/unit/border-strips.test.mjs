@@ -619,6 +619,7 @@ test('doUpdateBorders: a window the pass strips or skips is not recorded as laid
     get_wm_class_instance: () => 'gjs' });
   const tiled = mk(), fl = mk();
   self.windows.getWindowsForWorkspace = () => [tiled, fl];
+  self.windows.getVisibleFlairWindows = () => [tiled, fl];
   self.windows.isFloating = (w) => w === fl;
   const ws = { list_windows: () => [tiled, fl] };
   const old = globalThis.global;
