@@ -12,7 +12,7 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
-## Unreleased
+## v51.32 — 2026-11-23
 
 - **A square border stays inside the window frame.** With Rounded Corners on
   and radius 0, the border now uses the same inside-mask path as every other
