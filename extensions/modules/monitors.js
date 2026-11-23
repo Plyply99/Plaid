@@ -62,6 +62,75 @@ export function decodeMonitorEntry(entry) {
 }
 
 export class Monitors extends PlaidSubsystem {
+    constructor(core) {
+        super(core);
+        // Windows whose display disappeared, grouped by their source
+        // workspace and parked on a temporary primary workspace.
+        this._evacuated = new Map();
+        this._evacTargets = new Map();
+        this._createdEvacTargets = new Set();
+    }
+
+    _sourceWorkspace(win) {
+        return win._plaidHomeWs || this.core._windowWorkspaces.get(win) || win.get_workspace();
+    }
+
+    // One unused primary workspace per (display, source workspace) group.
+    // Prefer an existing empty one; append only when none is free.
+    _pickEvacuationWorkspace(key, used) {
+        const cached = this._evacTargets.get(key);
+        if (cached && this.core.geometry.wsIndex(cached) >= 1 && !used.has(cached))
+            return cached;
+        if (cached) this._evacTargets.delete(key);
+        const wm = global.workspace_manager;
+        if (!wm) return null;
+        const active = wm.get_active_workspace();
+        let fallback = null;
+        for (let i = 1; i < wm.get_n_workspaces(); i++) {
+            const ws = wm.get_workspace_by_index(i);
+            if (!ws || ws === this.core._backgroundAppParkingWs || used.has(ws)) continue;
+            if (ws.list_windows().length > 0) continue;
+            if (ws === active) {
+                if (!fallback) fallback = ws;
+                continue;
+            }
+            used.add(ws);
+            this._evacTargets.set(key, ws);
+            return ws;
+        }
+        if (fallback) {
+            used.add(fallback);
+            this._evacTargets.set(key, fallback);
+            return fallback;
+        }
+        const created = wm.append_new_workspace(false, this.core.currentTime());
+        if (!created) return null;
+        this._createdEvacTargets.add(created);
+        used.add(created);
+        this._evacTargets.set(key, created);
+        return created;
+    }
+
+    _cleanupEvacuation(connected) {
+        const wm = global.workspace_manager;
+        if (!wm) return;
+        for (const key of [...this._evacTargets.keys()]) {
+            if (connected.has(key.split('|')[0]))
+                this._evacTargets.delete(key);
+        }
+        const active = wm.get_active_workspace();
+        for (const target of [...this._createdEvacTargets]) {
+            if (!target || target === active || target.list_windows().length > 0) continue;
+            const idx = this.core.geometry.wsIndex(target);
+            if (idx < 1 || wm.get_workspace_by_index(idx) !== target) {
+                this._createdEvacTargets.delete(target);
+                continue;
+            }
+            wm.remove_workspace(target, this.core.currentTime());
+            this._createdEvacTargets.delete(target);
+        }
+    }
+
     manager() {
         return global.backend ? global.backend.get_monitor_manager() : null;
     }
@@ -471,43 +540,95 @@ export class Monitors extends PlaidSubsystem {
         const map = this.core._windowMonitors;
         const connected = new Set(this.connectors().filter(Boolean));
         if (map) {
+            // Drop evacuated records for windows that closed meanwhile.
+            for (const win of [...this._evacuated.keys()]) {
+                if (!win.get_compositor_private() || !this.core._windowWorkspaces.has(win))
+                    this._evacuated.delete(win);
+            }
+
+            // Group detached windows by (old connector, source workspace).
+            const groups = new Map();
             for (const win of [...map.keys()]) {
                 if (!win.get_compositor_private()) continue;
                 const prev = map.get(win);
-                const detached = !!(prev && !connected.has(prev));
-                if (detached) {
-                    // Its monitor is gone. Put it on the workspace it came
-                    // from, not the primary's current workspace, so only that
-                    // workspace reflows. Fixed group trees stay as the return
-                    // snapshot.
-                    const home = win._plaidHomeWs || this.core._windowWorkspaces.get(win);
-                    const homeIdx = home ? this.core.geometry.wsIndex(home) : -1;
-                    if (home && homeIdx >= 1 && home !== win.get_workspace())
-                        win.change_workspace(home);
+                if (!prev || connected.has(prev)) continue;
+                const source = this._sourceWorkspace(win);
+                const sourceIdx = source ? this.core.geometry.wsIndex(source) : -1;
+                const key = `${prev}|${sourceIdx}`;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push({ win, prev, source });
+            }
+
+            // Allocate one unused workspace per group, in source order.
+            const sorted = [...groups.entries()].sort((a, b) => {
+                const ai = parseInt(a[0].split('|')[1], 10);
+                const bi = parseInt(b[0].split('|')[1], 10);
+                if (ai !== bi) return ai - bi;
+                return a[0] < b[0] ? -1 : 1;
+            });
+            const used = new Set();
+            for (const [key, list] of sorted) {
+                const target = this._pickEvacuationWorkspace(key, used);
+                if (!target) continue;
+                for (const d of list) {
+                    this._evacuated.set(d.win, {
+                        connector: d.prev,
+                        sourceWs: d.source,
+                        targetWs: target,
+                    });
+                    if (d.win.get_workspace() !== target)
+                        d.win.change_workspace(target);
                 }
+            }
+
+            for (const win of [...map.keys()]) {
+                if (!win.get_compositor_private()) continue;
+                const prev = map.get(win);
+                const entry = this._evacuated.get(win);
+                const detached = !!(prev && !connected.has(prev));
                 const mon = win.get_monitor();
                 if (!Number.isInteger(mon) || mon < 0) continue;
                 const next = this.connectorOrFallback(mon);
-                if (prev === next) continue;
+                if (prev === next) {
+                    if (entry && connected.has(entry.connector))
+                        this._evacuated.delete(win);
+                    continue;
+                }
                 map.set(win, next);
                 const prevMon = this.monitorForConnector(prev);
                 const ws = win.get_workspace();
                 if (!ws || prevMon === mon) continue;
                 if (detached) {
+                    const validTarget = entry && entry.targetWs &&
+                        this.core.geometry.wsIndex(entry.targetWs) >= 1;
+                    const target = validTarget ? entry.targetWs : ws;
+                    if (win.get_workspace() !== target)
+                        win.change_workspace(target);
+                    const tws = win.get_workspace();
                     if (this.monitorTiled(mon) &&
-                        this.core.windows.getWorkspaceLayout(ws, mon) === 'dwindle') {
-                        const group = this.groupObj(ws, mon);
+                        this.core.windows.getWorkspaceLayout(tws, mon) === 'dwindle') {
+                        const group = this.groupObj(tws, mon);
                         const tree = this.core.bsp.bspGetTree(group);
                         if (!tree || !this.core.bsp.bspCollectWindows(tree).includes(win))
-                            this.core.bsp.bspInsertForWorkspace(ws, win, mon);
+                            this.core.bsp.bspInsertForWorkspace(tws, win, mon);
                         if (this.core._dwindleLeafSigs)
                             this.core._dwindleLeafSigs.delete(group);
                     }
-                    this.core.layouts.retileWorkspace(ws);
+                    this.core.layouts.retileWorkspace(tws);
                 } else if (prevMon >= 0) {
                     this.regroupWindow(win, ws, prevMon, mon);
+                    if (entry && connected.has(entry.connector)) {
+                        const source = entry.sourceWs;
+                        if (source && this.core.geometry.wsIndex(source) >= 1 &&
+                            win.get_workspace() !== source) {
+                            win.change_workspace(source);
+                            this.core.layouts.retileWorkspace(source);
+                        }
+                        this._evacuated.delete(win);
+                    }
                 }
             }
+            this._cleanupEvacuation(connected);
         }
         const livePrimary = this.connectorForMonitor(this.primaryMonitorIndex());
         if (livePrimary) {

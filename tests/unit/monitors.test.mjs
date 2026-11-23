@@ -643,3 +643,125 @@ test('Monitors: the settled pass regroups windows and retiles', () => {
     assert.equal(retiles, 1);
   });
 });
+
+
+test('Monitors: evacuation targets are distinct unused workspaces', () => {
+  const occupied = () => ({ list_windows: () => [{}] });
+  const ws1 = occupied();
+  const ws2 = occupied();
+  const ws3 = occupied();
+  const list = [ws1, ws2, ws3];
+  const wm = {
+    get_n_workspaces: () => list.length,
+    get_workspace_by_index: (i) => list[i] ?? null,
+    get_active_workspace: () => ws1,
+    append_new_workspace: () => {
+      const ws = { list_windows: () => [] };
+      list.push(ws);
+      return ws;
+    },
+  };
+  const old = globalThis.global.workspace_manager;
+  const oldTime = globalThis.global.get_current_time;
+  globalThis.global.workspace_manager = wm;
+  globalThis.global.get_current_time = () => 1;
+  try {
+    const self = makeSelf();
+    const used = new Set();
+    const a = self.monitors._pickEvacuationWorkspace('DP-1|1', used);
+    const b = self.monitors._pickEvacuationWorkspace('DP-1|2', used);
+    assert.notEqual(a, b);
+    assert.equal(a, list[3]);
+    assert.equal(b, list[4]);
+    assert.equal(self.monitors._createdEvacTargets.has(a), true);
+    assert.equal(self.monitors._createdEvacTargets.has(b), true);
+  } finally {
+    globalThis.global.workspace_manager = old;
+    globalThis.global.get_current_time = oldTime;
+  }
+});
+
+test('Monitors: disjoint source workspaces evacuate to separate unused workspaces and restore', () => {
+  const makeWs = (windows = []) => ({ windows, list_windows() { return this.windows; } });
+  const ws1 = makeWs([{}]);
+  const ws2 = makeWs([{}]);
+  const ws3 = makeWs([{}]);
+  const ws4 = makeWs([]);
+  const list = [ws1, ws2, ws3, ws4];
+  const removed = [];
+  const wm = {
+    get_n_workspaces: () => list.length,
+    get_workspace_by_index: (i) => list[i] ?? null,
+    get_active_workspace: () => ws1,
+    append_new_workspace: () => {
+      const ws = makeWs([]);
+      list.push(ws);
+      return ws;
+    },
+    remove_workspace: (ws) => {
+      removed.push(ws);
+      const i = list.indexOf(ws);
+      if (i >= 0) list.splice(i, 1);
+    },
+  };
+  const old = globalThis.global.workspace_manager;
+  const oldTime = globalThis.global.get_current_time;
+  globalThis.global.workspace_manager = wm;
+  globalThis.global.get_current_time = () => 1;
+  try {
+    const self = makeSelf();
+    self.monitors.connectors = () => ['eDP-1', 'HDMI-1'];
+    self.monitors.regroupWindow = () => {};
+    self.layouts.retileWorkspace = () => {};
+    self.layouts.retileAll = () => {};
+    self.borders.updateBorders = () => {};
+    self.signals.addTimeout = () => 1;
+    self.windows.getWorkspaceLayout = () => 'floating';
+
+    const w1 = fakeWin({ id: 1, monitor: 0 });
+    const w2 = fakeWin({ id: 2, monitor: 0 });
+    for (const [win, source] of [[w1, ws2], [w2, ws3]]) {
+      win.get_compositor_private = () => ({});
+      win._plaidHomeWs = source;
+      win._currentWs = ws1;
+      win.get_workspace = () => win._currentWs;
+      win.change_workspace = (target) => {
+        const cur = win._currentWs;
+        if (cur && cur.windows) {
+          const i = cur.windows.indexOf(win);
+          if (i >= 0) cur.windows.splice(i, 1);
+        }
+        target.windows.push(win);
+        win._currentWs = target;
+      };
+      self._windowWorkspaces.set(win, source);
+      self._windowMonitors.set(win, 'DP-1');
+      win._currentWs.windows.push(win);
+    }
+
+    self.monitors.processMonitorsChanged();
+
+    assert.equal(w1.get_workspace(), ws4);
+    assert.equal(w2.get_workspace().list_windows().length, 1);
+    assert.notEqual(w1.get_workspace(), w2.get_workspace());
+    assert.equal(self.monitors._createdEvacTargets.has(w2.get_workspace()), true);
+    assert.equal(ws2.list_windows().length, 1, 'source WS2 unchanged');
+    assert.equal(ws3.list_windows().length, 1, 'source WS3 unchanged');
+    assert.equal(ws1.list_windows().length, 1, 'active WS1 unchanged');
+
+    const temps = [w1.get_workspace(), w2.get_workspace()];
+    self.monitors.connectors = () => ['eDP-1', 'DP-1', 'HDMI-1'];
+    w1.get_monitor = () => 1;
+    w2.get_monitor = () => 1;
+    self.monitors.processMonitorsChanged();
+
+    assert.equal(w1.get_workspace(), ws2);
+    assert.equal(w2.get_workspace(), ws3);
+    assert.ok(removed.includes(temps[1]), 'created WS5 removed');
+    assert.ok(!removed.includes(temps[0]), 'pre-existing empty WS4 kept');
+    assert.equal(self.monitors._evacuated.size, 0);
+  } finally {
+    globalThis.global.workspace_manager = old;
+    globalThis.global.get_current_time = oldTime;
+  }
+});
