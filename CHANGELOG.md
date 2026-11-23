@@ -23,6 +23,10 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Monitor hotplug no longer shuffles the primary layout.** Window monitor
   events are ignored until the monitor burst settles, so trees aren't rebuilt
   from transient monitor indices.
+- **Windows from a disconnected display go back to their own workspace.** They
+  stay tiled there instead of landing on the workspace you are viewing, so the
+  rest of the primary arrangement is untouched; when the display returns they
+  regroup onto it.
 - **Fixed-mode arrangements stay out of per-workspace rules.** No more
   malformed `CONNECTOR:NaN` entries, and leftover empty tree slots are pruned.
 

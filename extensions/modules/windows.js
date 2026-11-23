@@ -347,6 +347,7 @@ export class Windows extends PlaidSubsystem {
             this.markPendingWindowInvisible(win, win.get_compositor_private());
         }
         const ws = win.get_workspace();
+        if (!win._plaidHomeWs && ws) win._plaidHomeWs = ws;
         this.core._windowWorkspaces.set(win, ws);
         this.core._windowWSIndices.set(win, this.core.geometry.wsIndex(ws));
         this.core.monitors.setWindowMonitor(win, win.get_monitor());

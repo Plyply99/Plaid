@@ -296,6 +296,7 @@ test('Monitors: entering a monitor moves the window between group trees', () => 
     globalThis.global.get_pointer = () => [0, 0];
     let retiles = 0;
     self.layouts.retileWorkspace = () => retiles++;
+    self.signals.addTimeout = (_delay, cb) => { cb(); return 1; };
 
     const primary = self.monitors.groupObj(ws, 0);
     const secondary = self.monitors.groupObj(ws, 1);
@@ -324,6 +325,7 @@ test('Monitors: entering a monitor while settling does not regroup', () => {
     let retiles = 0;
     self.monitors.regroupWindow = () => regrouped++;
     self.layouts.retileWorkspace = () => retiles++;
+    self.signals.addTimeout = (_delay, cb) => { cb(); return 1; };
 
     self.monitors.onWindowEnteredMonitor(win, 1);
     assert.equal(regrouped, 0);
@@ -331,6 +333,7 @@ test('Monitors: entering a monitor while settling does not regroup', () => {
     assert.equal(self.monitors.windowMonitor(win), 'eDP-1');
 
     self._monitorsSettling = false;
+    win.get_monitor = () => 1;
     self.monitors.onWindowEnteredMonitor(win, 1);
     assert.equal(regrouped, 1);
     assert.equal(retiles, 1);

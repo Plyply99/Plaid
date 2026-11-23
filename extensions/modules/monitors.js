@@ -198,26 +198,39 @@ export class Monitors extends PlaidSubsystem {
 
     onWindowEnteredMonitor(win, mon) {
         if (!win || !this.core._windowMonitors) return;
-        // A hotplug emits this with transient monitor indices before the
-        // settled pass. Regrouping here rebuilt trees from a half-applied
-        // layout and shuffled windows that never moved. The settled pass
-        // re-reads every window's final monitor and regroups then.
+        // A hotplug emits this with transient monitor indices and can arrive
+        // BEFORE monitors-changed sets the settling flag. Defer the regroup
+        // so the settled pass wins; a normal Move to Monitor still applies a
+        // moment later.
         if (this.core._monitorsSettling || this.core._monitorConnPartial) return;
         if (!this.core._windowWorkspaces.has(win)) {
             this.setWindowMonitor(win, mon);
             return;
         }
-        const prevConn = this.core._windowMonitors.get(win);
-        this.setWindowMonitor(win, mon);
-        // A drag keeps its group until grab end; grab.js regroups then.
-        if (this.core._grabOp) return;
-        if (prevConn === undefined) return;
-        const prevMon = this.monitorForConnector(prevConn);
-        if (prevMon === mon) return;
-        const ws = win.get_workspace();
-        if (!ws) return;
-        this.regroupWindow(win, ws, prevMon, mon);
-        this.core.layouts.retileWorkspace(ws);
+        if (win._plaidMonitorRegroupId) return;
+        win._plaidMonitorRegroupId = this.core.signals.addTimeout(100, () => {
+            win._plaidMonitorRegroupId = 0;
+            if (!this.core._settings || this.core._shuttingDown) return;
+            if (this.core._monitorsSettling || this.core._monitorConnPartial) return;
+            if (!this.core._windowWorkspaces.has(win)) return;
+            // A drag keeps its group until grab end; grab.js regroups then.
+            if (this.core._grabOp) return;
+            const prevConn = this.core._windowMonitors.get(win);
+            if (prevConn === undefined) return;
+            const cur = win.get_monitor();
+            const next = this.connectorOrFallback(cur);
+            if (prevConn === next) return;
+            const prevMon = this.monitorForConnector(prevConn);
+            this.core._windowMonitors.set(win, next);
+            const ws = win.get_workspace();
+            if (!ws) return;
+            if (prevMon >= 0)
+                this.regroupWindow(win, ws, prevMon, cur);
+            else if (this.monitorTiled(cur) &&
+                this.core.windows.getWorkspaceLayout(ws, cur) === 'dwindle')
+                this.core.bsp.bspInsertForWorkspace(ws, win, cur);
+            this.core.layouts.retileWorkspace(ws);
+        });
     }
 
     getWindowsForGroup(ws, mon) {
@@ -456,19 +469,44 @@ export class Monitors extends PlaidSubsystem {
         this.core._monitorSettleRetries = 0;
         let rekeyed = false;
         const map = this.core._windowMonitors;
+        const connected = new Set(this.connectors().filter(Boolean));
         if (map) {
             for (const win of [...map.keys()]) {
                 if (!win.get_compositor_private()) continue;
+                const prev = map.get(win);
+                const detached = !!(prev && !connected.has(prev));
+                if (detached) {
+                    // Its monitor is gone. Put it on the workspace it came
+                    // from, not the primary's current workspace, so only that
+                    // workspace reflows. Fixed group trees stay as the return
+                    // snapshot.
+                    const home = win._plaidHomeWs || this.core._windowWorkspaces.get(win);
+                    const homeIdx = home ? this.core.geometry.wsIndex(home) : -1;
+                    if (home && homeIdx >= 1 && home !== win.get_workspace())
+                        win.change_workspace(home);
+                }
                 const mon = win.get_monitor();
                 if (!Number.isInteger(mon) || mon < 0) continue;
-                const prev = map.get(win);
                 const next = this.connectorOrFallback(mon);
                 if (prev === next) continue;
                 map.set(win, next);
                 const prevMon = this.monitorForConnector(prev);
                 const ws = win.get_workspace();
-                if (ws && prevMon !== mon)
+                if (!ws || prevMon === mon) continue;
+                if (detached) {
+                    if (this.monitorTiled(mon) &&
+                        this.core.windows.getWorkspaceLayout(ws, mon) === 'dwindle') {
+                        const group = this.groupObj(ws, mon);
+                        const tree = this.core.bsp.bspGetTree(group);
+                        if (!tree || !this.core.bsp.bspCollectWindows(tree).includes(win))
+                            this.core.bsp.bspInsertForWorkspace(ws, win, mon);
+                        if (this.core._dwindleLeafSigs)
+                            this.core._dwindleLeafSigs.delete(group);
+                    }
+                    this.core.layouts.retileWorkspace(ws);
+                } else if (prevMon >= 0) {
                     this.regroupWindow(win, ws, prevMon, mon);
+                }
             }
         }
         const livePrimary = this.connectorForMonitor(this.primaryMonitorIndex());
