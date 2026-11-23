@@ -312,6 +312,31 @@ test('Monitors: entering a monitor moves the window between group trees', () => 
   });
 });
 
+test('Monitors: entering a monitor while settling does not regroup', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({}, { _monitorsSettling: true });
+    const ws = {};
+    const win = fakeWin({ id: 1, monitor: 0 });
+    win.get_workspace = () => ws;
+    self._windowWorkspaces.set(win, ws);
+    self._windowMonitors.set(win, 'eDP-1');
+    let regrouped = 0;
+    let retiles = 0;
+    self.monitors.regroupWindow = () => regrouped++;
+    self.layouts.retileWorkspace = () => retiles++;
+
+    self.monitors.onWindowEnteredMonitor(win, 1);
+    assert.equal(regrouped, 0);
+    assert.equal(retiles, 0);
+    assert.equal(self.monitors.windowMonitor(win), 'eDP-1');
+
+    self._monitorsSettling = false;
+    self.monitors.onWindowEnteredMonitor(win, 1);
+    assert.equal(regrouped, 1);
+    assert.equal(retiles, 1);
+  });
+});
+
 test('bsp: inserting a window prunes a closed window from the tree first', () => {
   withMonitors(0, () => {
     const self = makeSelf({ 'inside-gap': 8 });

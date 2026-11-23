@@ -82,18 +82,21 @@ export class Persistence {
         }
 
         // Connector groups: live state first, then saved rules for slots that
-        // are not currently open.
+        // are not currently open. Fixed groups use m@CONN keys and must go to
+        // monitor-fixed-*, never the per-workspace NaN entries.
+        const isWorkspaceRuleKey = (key) =>
+            typeof key === 'string' && /^\d+@[^@]+$/.test(key);
         const layoutEntries = new Map();
         for (const [key, layout] of this.core._persistedLayoutByIndex || [])
-            if (typeof key === 'string') layoutEntries.set(key, `${parseInt(key, 10)}:${layout}`);
+            if (isWorkspaceRuleKey(key)) layoutEntries.set(key, `${parseInt(key, 10)}:${layout}`);
         for (const [key, layout] of this.core._workspaceLayouts || [])
-            if (typeof key === 'string') layoutEntries.set(key, `${parseInt(key, 10)}:${layout}`);
+            if (isWorkspaceRuleKey(key)) layoutEntries.set(key, `${parseInt(key, 10)}:${layout}`);
 
         const masterEntries = new Map();
         for (const [key, ratio] of this.core._persistedMasterByIndex || [])
-            if (typeof key === 'string') masterEntries.set(key, `${parseInt(key, 10)}:${ratio}`);
+            if (isWorkspaceRuleKey(key)) masterEntries.set(key, `${parseInt(key, 10)}:${ratio}`);
         for (const [key, ratio] of this.core._masterRatios || [])
-            if (typeof key === 'string') masterEntries.set(key, `${parseInt(key, 10)}:${ratio}`);
+            if (isWorkspaceRuleKey(key)) masterEntries.set(key, `${parseInt(key, 10)}:${ratio}`);
 
         const stackEntries = new Map();
         const addStack = (key, map) => {
@@ -102,9 +105,9 @@ export class Persistence {
             if (parts.length) stackEntries.set(key, `${parseInt(key, 10)}:${parts.join(',')}`);
         };
         for (const [key, map] of this.core._persistedStackByIndex || [])
-            if (typeof key === 'string') addStack(key, map);
+            if (isWorkspaceRuleKey(key)) addStack(key, map);
         for (const [key, map] of this.core._stackRatios || [])
-            if (typeof key === 'string') addStack(key, map);
+            if (isWorkspaceRuleKey(key)) addStack(key, map);
 
         for (const [ws, byConnector] of this.core._groupObjs || []) {
             const wsIndex = this.core.geometry.wsIndex(ws);
@@ -132,7 +135,7 @@ export class Persistence {
             if (!node || node.type !== 'split') continue;
             if (typeof key === 'number')
                 bareDwindle.push(`${key}:${shape}`);
-            else
+            else if (/^\d+@[^@]+$/.test(key))
                 monitorDwindle.set(key, `${parseInt(key, 10)}:${shape}`);
         }
         if (primaryConnected) {
@@ -216,7 +219,10 @@ export class Persistence {
             if (!Number.isInteger(idx)) continue;
             merged.set(`${idx}@${decoded.connector}`, decoded.value);
         }
-        for (const [key, value] of entries) merged.set(key, value);
+        for (const [key, value] of entries) {
+            if (!/^\d+@[^@]+$/.test(key)) continue;
+            merged.set(key, value);
+        }
         const out = [];
         for (const [key, value] of merged) {
             const at = key.indexOf('@');

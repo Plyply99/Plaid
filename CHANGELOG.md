@@ -20,6 +20,11 @@ Releases older than v50.43 predate this changelog; see the git history and the
 - **Steam popups keep their Flair again.** Skip-taskbar and transient floating
   windows are picked up by the border, mask and blur pass without becoming
   keyboard or hover targets.
+- **Monitor hotplug no longer shuffles the primary layout.** Window monitor
+  events are ignored until the monitor burst settles, so trees aren't rebuilt
+  from transient monitor indices.
+- **Fixed-mode arrangements stay out of per-workspace rules.** No more
+  malformed `CONNECTOR:NaN` entries, and leftover empty tree slots are pruned.
 
 ## v51.31 — 2026-11-20
 

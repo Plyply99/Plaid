@@ -103,3 +103,18 @@ test('_bspReplaceLeaf replaces a target leaf with a split holding the new window
   assert.equal(replaced.first.window, a);
   assert.equal(replaced.second.window, b);
 });
+
+test('bsp: pruneEmpty collapses leftover empty siblings', () => {
+  const self = makeSelf({ 'dwindle-ratio': 0.5 });
+  const a = W('a');
+  const b = W('b');
+
+  assert.deepEqual(self.bsp.pruneEmpty(split('h', 0.5, empty(), leaf(a))), leaf(a));
+  assert.deepEqual(self.bsp.pruneEmpty(split('v', 0.5, leaf(a), empty())), leaf(a));
+  assert.equal(self.bsp.pruneEmpty(split('h', 0.5, empty(), empty())).type, 'empty');
+
+  const nested = split('h', 0.5, empty(), split('v', 0.5, empty(), leaf(a)));
+  assert.deepEqual(self.bsp.pruneEmpty(nested), leaf(a));
+  const lone = leaf(b);
+  assert.equal(self.bsp.pruneEmpty(lone), lone);
+});

@@ -198,6 +198,11 @@ export class Monitors extends PlaidSubsystem {
 
     onWindowEnteredMonitor(win, mon) {
         if (!win || !this.core._windowMonitors) return;
+        // A hotplug emits this with transient monitor indices before the
+        // settled pass. Regrouping here rebuilt trees from a half-applied
+        // layout and shuffled windows that never moved. The settled pass
+        // re-reads every window's final monitor and regroups then.
+        if (this.core._monitorsSettling || this.core._monitorConnPartial) return;
         if (!this.core._windowWorkspaces.has(win)) {
             this.setWindowMonitor(win, mon);
             return;

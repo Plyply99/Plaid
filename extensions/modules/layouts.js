@@ -611,6 +611,7 @@ export class Layouts {
                     currentWins = this.core.bsp.bspCollectWindows(tree);
                 }
             }
+            tree = this.core.bsp.pruneEmpty(tree);
             this.core._bspTrees.set(group, tree);
         } else {
             tree = null;

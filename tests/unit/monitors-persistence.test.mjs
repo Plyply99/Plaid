@@ -123,3 +123,33 @@ test('persistence: loads and saves fixed-mode rules per connector', () => {
     assert.ok(self._settings.get_strv('monitor-fixed-master-ratios').includes('DP-1:0.6'));
   });
 });
+
+
+test('persistence: fixed-mode keys never leak into per-workspace rules', () => {
+  withMonitors(0, () => {
+    const self = makeSelf({ 'monitor-primary-connector': 'eDP-1' });
+    self._workspaceLayouts = new Map([['m@DP-1', 'dwindle']]);
+    self._persistedLayoutByIndex = new Map([['m@DP-1', 'dwindle']]);
+    self._persistedDwindleRaw = new Map([['m@DP-1', 'h0.5000(l,l)']]);
+
+    self.persistence.savePersistedLayouts();
+
+    const layouts = self._settings.get_strv('monitor-workspace-layouts');
+    const trees = self._settings.get_strv('monitor-workspace-dwindle-trees');
+    assert.deepEqual(layouts, []);
+    assert.ok(!trees.some(e => e.includes('NaN')));
+    assert.ok(self._settings.get_strv('monitor-fixed-layouts').includes('DP-1:dwindle'));
+    assert.ok(self._settings.get_strv('monitor-fixed-dwindle-trees').includes('DP-1:h0.5000(l,l)'));
+  });
+});
+
+test('persistence: saveMonitorEntries ignores non-workspace keys', () => {
+  withMonitors(0, () => {
+    const self = makeSelf();
+    self.persistence.saveMonitorEntries('monitor-workspace-layouts', new Map([
+      ['m@DP-1', 'NaN:dwindle'],
+      ['1@DP-1', '1:dwindle'],
+    ]));
+    assert.deepEqual(self._settings.get_strv('monitor-workspace-layouts'), ['DP-1:1:dwindle']);
+  });
+});

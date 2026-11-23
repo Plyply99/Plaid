@@ -107,6 +107,20 @@ export class Bsp {
         return node;
     }
 
+    // Empty siblings are leftovers from a prune/insert race. They collapse the
+    // layout slot and make later inserts land in the wrong place; drop them
+    // whenever the tree is rebuilt.
+    pruneEmpty(node) {
+        if (!node || node.type !== 'split') return node;
+        node.first = this.pruneEmpty(node.first);
+        node.second = this.pruneEmpty(node.second);
+        if (node.first.type === 'empty' && node.second.type === 'empty')
+            return { type: 'empty' };
+        if (node.first.type === 'empty') return node.second;
+        if (node.second.type === 'empty') return node.first;
+        return node;
+    }
+
     bspCollectWindows(node) {
         if (!node) return [];
         if (node.type === 'empty') return [];
@@ -263,6 +277,7 @@ export class Bsp {
             for (const tw of this.bspCollectWindows(tree)) {
                 if (!live.includes(tw)) tree = this.bspRemove(tree, tw);
             }
+            tree = this.pruneEmpty(tree);
             if (tree.type === 'empty') tree = null;
             if (tree && this.bspCollectWindows(tree).includes(win)) return;
         }
