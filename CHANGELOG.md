@@ -27,6 +27,8 @@ Releases older than v50.43 predate this changelog; see the git history and the
   workspace gets its own empty workspace on the remaining display, so existing
   workspaces keep their layouts. When the display returns, the windows go back
   to their original workspaces and the temporary workspaces are removed.
+- **Display changes explain where windows went.** A short popup reports when a
+  display's windows move to unused workspaces and when they return.
 - **Fixed-mode arrangements stay out of per-workspace rules.** No more
   malformed `CONNECTOR:NaN` entries, and leftover empty tree slots are pruned.
 

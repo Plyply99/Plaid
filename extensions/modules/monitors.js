@@ -131,6 +131,48 @@ export class Monitors extends PlaidSubsystem {
         }
     }
 
+    _formatWorkspaces(indices) {
+        const sorted = [...new Set(indices)].filter(i => i >= 1).sort((a, b) => a - b);
+        if (sorted.length === 0) return 'an unused workspace';
+        if (sorted.length === 1) return `Workspace ${sorted[0]}`;
+        const consecutive = sorted.every((v, i) => i === 0 || v === sorted[i - 1] + 1);
+        return consecutive
+            ? `Workspaces ${sorted[0]}–${sorted[sorted.length - 1]}`
+            : `Workspaces ${sorted.join(', ')}`;
+    }
+
+    _showMonitorChangeNotice(lost, movedCount, targetIndexes, returned, returnedCount) {
+        if (!this.core._settings || !this.core.workspaces) return;
+        let title = null;
+        let subtitle = null;
+        if (movedCount > 0) {
+            if (lost.size === 1) {
+                const conn = [...lost][0];
+                title = isFallbackConnector(conn) ? 'Display disconnected' : `${conn} disconnected`;
+            } else {
+                title = `${lost.size} displays disconnected`;
+            }
+            const plural = movedCount === 1 ? 'window' : 'windows';
+            subtitle = `${movedCount} ${plural} moved to ${this._formatWorkspaces(targetIndexes)}`;
+        } else if (returnedCount > 0) {
+            if (returned.size === 1) {
+                const conn = [...returned][0];
+                title = isFallbackConnector(conn) ? 'Display connected' : `${conn} connected`;
+            } else {
+                title = `${returned.size} displays connected`;
+            }
+            const plural = returnedCount === 1 ? 'window' : 'windows';
+            subtitle = `${returnedCount} ${plural} returned to their workspaces`;
+        }
+        if (!title || !subtitle) return;
+        this.core.signals.addTimeout(250, () => {
+            if (!this.core._settings) return GLib.SOURCE_REMOVE;
+            this.core.workspaces.showPopup(title, subtitle, 3000, null,
+                global.display.get_current_monitor());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     manager() {
         return global.backend ? global.backend.get_monitor_manager() : null;
     }
@@ -539,6 +581,12 @@ export class Monitors extends PlaidSubsystem {
         let rekeyed = false;
         const map = this.core._windowMonitors;
         const connected = new Set(this.connectors().filter(Boolean));
+        const knownEvacuated = new Set(this._evacuated.keys());
+        const lostConnectors = new Set();
+        const targetIndexes = new Set();
+        const returnedConnectors = new Set();
+        let movedCount = 0;
+        let returnedCount = 0;
         if (map) {
             // Drop evacuated records for windows that closed meanwhile.
             for (const win of [...this._evacuated.keys()]) {
@@ -578,6 +626,12 @@ export class Monitors extends PlaidSubsystem {
                     });
                     if (d.win.get_workspace() !== target)
                         d.win.change_workspace(target);
+                    if (!knownEvacuated.has(d.win)) {
+                        movedCount++;
+                        lostConnectors.add(d.prev);
+                        const idx = this.core.geometry.wsIndex(target) + 1;
+                        if (idx >= 1) targetIndexes.add(idx);
+                    }
                 }
             }
 
@@ -590,8 +644,11 @@ export class Monitors extends PlaidSubsystem {
                 if (!Number.isInteger(mon) || mon < 0) continue;
                 const next = this.connectorOrFallback(mon);
                 if (prev === next) {
-                    if (entry && connected.has(entry.connector))
+                    if (entry && connected.has(entry.connector)) {
                         this._evacuated.delete(win);
+                        returnedCount++;
+                        returnedConnectors.add(entry.connector);
+                    }
                     continue;
                 }
                 map.set(win, next);
@@ -625,10 +682,14 @@ export class Monitors extends PlaidSubsystem {
                             this.core.layouts.retileWorkspace(source);
                         }
                         this._evacuated.delete(win);
+                        returnedCount++;
+                        returnedConnectors.add(entry.connector);
                     }
                 }
             }
             this._cleanupEvacuation(connected);
+            this._showMonitorChangeNotice(lostConnectors, movedCount, targetIndexes,
+                returnedConnectors, returnedCount);
         }
         const livePrimary = this.connectorForMonitor(this.primaryMonitorIndex());
         if (livePrimary) {

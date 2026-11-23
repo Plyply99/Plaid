@@ -715,7 +715,9 @@ test('Monitors: disjoint source workspaces evacuate to separate unused workspace
     self.layouts.retileWorkspace = () => {};
     self.layouts.retileAll = () => {};
     self.borders.updateBorders = () => {};
-    self.signals.addTimeout = () => 1;
+    const popups = [];
+    self.workspaces.showPopup = (...args) => popups.push(args);
+    self.signals.addTimeout = (_delay, cb) => { cb(); return 1; };
     self.windows.getWorkspaceLayout = () => 'floating';
 
     const w1 = fakeWin({ id: 1, monitor: 0 });
@@ -748,6 +750,9 @@ test('Monitors: disjoint source workspaces evacuate to separate unused workspace
     assert.equal(ws2.list_windows().length, 1, 'source WS2 unchanged');
     assert.equal(ws3.list_windows().length, 1, 'source WS3 unchanged');
     assert.equal(ws1.list_windows().length, 1, 'active WS1 unchanged');
+    assert.equal(popups.length, 1);
+    assert.equal(popups[0][0], 'DP-1 disconnected');
+    assert.match(popups[0][1], /2 windows moved to Workspaces 4–5/);
 
     const temps = [w1.get_workspace(), w2.get_workspace()];
     self.monitors.connectors = () => ['eDP-1', 'DP-1', 'HDMI-1'];
@@ -760,8 +765,22 @@ test('Monitors: disjoint source workspaces evacuate to separate unused workspace
     assert.ok(removed.includes(temps[1]), 'created WS5 removed');
     assert.ok(!removed.includes(temps[0]), 'pre-existing empty WS4 kept');
     assert.equal(self.monitors._evacuated.size, 0);
+    self.monitors.processMonitorsChanged();
+    assert.equal(popups.length, 2, 'no duplicate popup on a later settle pass');
+    assert.equal(popups[1][0], 'DP-1 connected');
+    assert.match(popups[1][1], /2 windows returned to their workspaces/);
   } finally {
     globalThis.global.workspace_manager = old;
     globalThis.global.get_current_time = oldTime;
   }
+});
+
+
+test('Monitors: formats evacuation target workspace lists', () => {
+  const self = makeSelf();
+  assert.equal(self.monitors._formatWorkspaces([]), 'an unused workspace');
+  assert.equal(self.monitors._formatWorkspaces([4]), 'Workspace 4');
+  assert.equal(self.monitors._formatWorkspaces([4, 5, 6]), 'Workspaces 4–6');
+  assert.equal(self.monitors._formatWorkspaces([4, 6]), 'Workspaces 4, 6');
+  assert.equal(self.monitors._formatWorkspaces([6, 4, 5, 4]), 'Workspaces 4–6');
 });
