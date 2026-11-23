@@ -642,6 +642,11 @@ export class Layouts {
             }
         }
 
+        if (tree) {
+            // A saved shape can still carry empty slots from an older build.
+            tree = this.core.bsp.pruneEmpty(tree);
+            this.core._bspTrees.set(group, tree);
+        }
         this.core.bsp.treeMinSizes(tree, gap);
         this.core.bsp.clampTreeToMinSizes(tree, areaW, areaH, gap);
         this.core.bsp.bspLayout(tree, areaX, areaY, areaW, areaH, gap);
