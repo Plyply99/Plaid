@@ -208,3 +208,26 @@ test('launchBackgroundApp: a new launch clears the failure-notified flag', () =>
 
   assert.equal(core._backgroundAppFailureNotified, false);
 });
+
+test('parkBackgroundAppOnWorkspace: strips Flair before the clone is built', () => {
+  resetSessionState();
+  const parking = { list_windows: () => [] };
+  const bg = fakeWin();
+  const calls = [];
+  const core = makeSelf({}, {
+    _backgroundAppWin: bg,
+    _backgroundAppParkingWs: parking,
+  });
+  core.masks.removeMask = (w) => calls.push(['mask', w]);
+  core.blur.removeBlur = (w) => calls.push(['blur', w]);
+  core.borders.removeBorder = (w) => calls.push(['border', w]);
+  core.geometry.wsIndex = () => 0;
+
+  bg.get_workspace = () => parking;
+  bg.maximized_horz = true;
+  bg.maximized_vert = true;
+
+  core.bgApp.parkBackgroundAppOnWorkspace(bg);
+
+  assert.deepEqual(calls, [['mask', bg], ['blur', bg], ['border', bg]]);
+});

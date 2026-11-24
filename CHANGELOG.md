@@ -12,6 +12,12 @@ Releases older than v50.43 predate this changelog; see the git history and the
 
 ---
 
+## Unreleased
+
+- **The Background App stays plain.** It no longer picks up a rounded border,
+  mask or blur before it is parked, so the desktop background keeps clean
+  square edges instead of showing Flair.
+
 ## v51.32 — 2026-11-23
 
 - **A square border stays inside the window frame.** With Rounded Corners on

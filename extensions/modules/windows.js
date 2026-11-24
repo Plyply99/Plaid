@@ -693,6 +693,11 @@ export class Windows extends PlaidSubsystem {
             if (!w || w === this.core._backgroundAppParkingWs) continue;
             for (const win of w.list_windows()) {
                 if (!win || seen.has(win)) continue;
+                // The background app is a plain desktop surface. It is still on
+                // a real workspace for the few seconds between claim and park,
+                // and the clone paints its source actor — Flair attached there
+                // would show as rounded borders/blur in the background.
+                if (win === this.core._backgroundAppWin) continue;
                 if (w !== ws &&
                     !fixedConns.has(this.core.monitors.windowMonitor(win)))
                     continue;

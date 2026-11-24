@@ -144,6 +144,33 @@ test('getVisibleFlairWindows: includes a fixed secondary popup from another work
   });
 });
 
+test('getVisibleFlairWindows: never includes the background app', () => {
+  withFixedMonitors((ws1, ws2) => {
+    const { self, primary, dp } = fixedSelf(ws1, ws2);
+    const bg = fakeWin({ id: 9, monitor: 0 });
+    bg.get_workspace = () => ws2;
+    self._windowMonitors.set(bg, 'HDMI-1');
+    self._backgroundAppWin = bg;
+    ws1.list_windows = () => [dp];
+    ws2.list_windows = () => [primary, bg];
+
+    let flair = self.windows.getVisibleFlairWindows(ws2).map(w => w.get_id());
+    assert.ok(!flair.includes(bg.get_id()), 'active-workspace bg-app excluded');
+    assert.ok(flair.includes(primary.get_id()));
+
+    // The fixed secondary walk spans every workspace; the guard must hold there.
+    const bgFixed = fakeWin({ id: 10, monitor: 1 });
+    bgFixed.get_workspace = () => ws1;
+    self._windowMonitors.set(bgFixed, 'DP-1');
+    self._backgroundAppWin = bgFixed;
+    ws1.list_windows = () => [dp, bgFixed];
+
+    flair = self.windows.getVisibleFlairWindows(ws2).map(w => w.get_id());
+    assert.ok(!flair.includes(bgFixed.get_id()), 'fixed-secondary bg-app excluded');
+    assert.ok(flair.includes(dp.get_id()));
+  });
+});
+
 test('moveFocus: reaches a fixed secondary window across workspaces', () => {
   withFixedMonitors((ws1, ws2) => {
     const { self, primary, dp } = fixedSelf(ws1, ws2);

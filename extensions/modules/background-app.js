@@ -555,15 +555,25 @@ export class BackgroundApp extends PlaidSubsystem {
         return null;
     }
 
+    stripBackgroundAppFlair(win) {
+        // The bg-app must stay a plain desktop surface. Flair can attach while
+        // the window is still on a real workspace (claim → deferred park), and
+        // the clone would then paint its mask/border/blur in the background.
+        if (!win) return;
+        this.core.masks.removeMask(win);
+        this.core.blur.removeBlur(win);
+        this.core.borders.removeBorder(win);
+    }
+
     adoptFoundWindow(win) {
         if (this.core._windowWorkspaces.has(win)) {
             this.core.debugLog('background app: de-registering window from tiler');
             this.core.windows.removeWindow(win);
         }
-        this.core.masks.removeMask(win);
-        this.core.blur.removeBlur(win);
-        this.core.borders.removeBorder(win);
+        // Set the identity before stripping: a queued Flair pass then already
+        // sees the window as the bg-app and skips it.
         this.core._backgroundAppWin = win;
+        this.stripBackgroundAppFlair(win);
         sessionState.bgAppWindow = win;
         this.core._backgroundAppSpawnRetries = 0;
         const unmanaged = this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
@@ -841,10 +851,10 @@ export class BackgroundApp extends PlaidSubsystem {
             this.core.debugLog('background app: de-registering window from tiler');
             this.core.windows.removeWindow(win);
         }
-        this.core.masks.removeMask(win);
-        this.core.blur.removeBlur(win);
-        this.core.borders.removeBorder(win);
+        // Set the identity before stripping: a queued Flair pass then already
+        // sees the window as the bg-app and skips it.
         this.core._backgroundAppWin = win;
+        this.stripBackgroundAppFlair(win);
         sessionState.bgAppWindow = win;
         const unmanaged = this.core._backgroundAppUnmanagedId = this.connectObject(win, 'unmanaged', () => {
             this.releaseUnmanagedHook(unmanaged);
@@ -983,6 +993,10 @@ export class BackgroundApp extends PlaidSubsystem {
         // ghostty renders continuously; clients that render only on frame
         // callbacks may freeze here (native-Wayland research continues).
         if (!win) return;
+        // Strip before the early "already parked" return too: this heals a
+        // mask/blur attached during the claim → park gap on an existing
+        // session, and guarantees the clone is built from a clean actor.
+        this.stripBackgroundAppFlair(win);
         const ws = win.get_workspace() || global.workspace_manager.get_active_workspace();
         if (!ws) return;
         const monitor = global.display.get_primary_monitor();
